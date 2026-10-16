@@ -2799,7 +2799,8 @@ private:
 
 // ------------------------------------------------------------------ textures
 
-constexpr int kMaxTexture = 1024;
+/// Source's own limit; anything power-of-two up to this is left alone (0.12.1: was 1024)
+constexpr int kMaxTexture = 4096;
 
 bool isPow2(int v) { return v > 0 && (v & (v - 1)) == 0; }
 
@@ -2810,7 +2811,7 @@ int nearestPow2(double v) {
 
 bool needsResize(QSize s) { return s.width() > kMaxTexture || s.height() > kMaxTexture || !isPow2(s.width()) || !isPow2(s.height()); }
 
-/// Fit within 1024 keeping the aspect, then each side to the nearest power of two.
+/// Fit within 4096 keeping the aspect, then each side to the nearest power of two.
 QSize resizeTarget(QSize s) {
     double k = std::min(1.0, double(kMaxTexture) / std::max(s.width(), s.height()));
     return QSize(nearestPow2(s.width() * k), nearestPow2(s.height() * k));
@@ -3410,7 +3411,7 @@ public:
             if (!f.isEmpty() && !e.key.contains(f) && !QFileInfo(e.rel).completeBaseName().toLower().contains(f)) continue;
             const bool over = !QString::fromUtf8(bonk_mat_override(e.key.toUtf8().constData())).isEmpty();
             QString tip = QStringLiteral("%1\n%2 × %3 · assets/Textures/%4").arg(e.key).arg(e.size.width()).arg(e.size.height()).arg(e.rel);
-            if (needsResize(e.size)) tip += QStringLiteral("\nNot a power of two (or over 1024): Source needs it resized");
+            if (needsResize(e.size)) tip += QStringLiteral("\nNot a power of two (or over 4096): Source needs it resized");
             tip += e.converted ? QStringLiteral("\nConverted to VTF") : QStringLiteral("\nNot converted to VTF yet");
             if (e.props) tip += QStringLiteral("\nHas material properties");
             if (over) tip += QStringLiteral("\nThis model overrides its properties");
@@ -5728,7 +5729,7 @@ public:
         }
     }
 
-    /// Offer to resize images that are over 1024 or not powers of two.
+    /// Offer to resize images that are over 4096 or not powers of two.
     void offerResize(const QStringList &rels) {
         QString list;
         for (const QString &r : rels) {
@@ -5739,7 +5740,7 @@ public:
         bool yes = !qEnvironmentVariableIsEmpty("BONK_ASSUME_YES");
         if (!yes) {
             QMessageBox box(QMessageBox::Question, QStringLiteral("Resize for Source?"),
-                            QStringLiteral("Source textures need power-of-two sizes, and Bonk keeps them at 1024 or smaller:"
+                            QStringLiteral("Source textures need power-of-two sizes (up to 4096):"
                                            "<ul>%1</ul>The originals are moved to <b>assets/Original Textures</b>.").arg(list),
                             QMessageBox::NoButton, this);
             QPushButton *rb = box.addButton(QStringLiteral("Resize"), QMessageBox::AcceptRole);

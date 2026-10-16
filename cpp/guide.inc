@@ -273,8 +273,9 @@ QList<GuidePage> guidePages(bool hammer) {
                                                              "updates every model in the project that uses it.</p>")},
                   {QStringLiteral("Color textures"), QStringLiteral("<p>The Color tile makes a solid color as a texture (a tiny 16×16 PNG in "
                                                                     "colors/, named by its hex code; rename it if you like).</p>")},
-                  {QStringLiteral("Resize offer"), QStringLiteral("<p>Source needs power-of-two sizes. Images over 1024 or not a power of two are "
-                                                                  "offered a resize; the originals go to assets/Original Textures.</p>")},
+                  {QStringLiteral("Resize offer"), QStringLiteral("<p>Source needs power-of-two sizes (64, 128 … 2048, 4096; width and height can differ). "
+                                                                  "Images that aren't are offered a resize to the nearest one; the originals go to "
+                                                                  "assets/Original Textures. Power-of-two images are never touched, whatever their size.</p>")},
                   {QStringLiteral("Converting to VTF"), QStringLiteral("<p>Convert All writes VTFs into the addon folder. Compiling converts whatever "
                                                                        "the model uses, so you rarely need to. A banner warns when an image changed "
                                                                        "after its VTF was made.</p>")}};

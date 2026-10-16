@@ -2,6 +2,11 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.12.1
+
+- **No more 1024 cap on textures.** A power-of-two image of any size up to Source's 4096 limit
+  (e.g. 1024×2048) is left alone; only sizes that aren't powers of two are offered a resize.
+
 ## 0.12.0 — "Feel"
 
 ### Hold keys
