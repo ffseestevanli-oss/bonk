@@ -56,6 +56,39 @@ pub struct Brush {
 }
 
 impl Brush {
+    /// Mirror in place about the plane `axis = c` (textures follow, like texture lock).
+    pub fn mirror(&mut self, axis: usize, c: f32) {
+        let refl = |p: V3| {
+            let mut q = p;
+            q.set(axis, 2.0 * c - p.get(axis));
+            q
+        };
+        for v in self.verts.iter_mut() {
+            *v = refl(*v);
+        }
+        let mut k = v3(1.0, 1.0, 1.0);
+        k.set(axis, -1.0);
+        let mut anchor = V3::default();
+        anchor.set(axis, c);
+        for f in self.faces.iter_mut() {
+            f.idx.reverse(); // a mirror flips winding; keep faces pointing out
+            let mut n = f.normal;
+            n.set(axis, -n.get(axis));
+            f.normal = n;
+            f.dist = n.dot(self.verts[f.idx[0]]);
+            f.tex = f.tex.scaled_with(k, anchor);
+        }
+        if self.entity.is_some() {
+            // facing turns like a mirror image would
+            self.rot[2] = match axis {
+                0 => 180.0 - self.rot[2],
+                1 => -self.rot[2],
+                _ => self.rot[2],
+            };
+            self.rot[2] = self.rot[2].rem_euclid(360.0);
+        }
+    }
+
     pub fn new_box(id: u32, lo: V3, hi: V3, color: [f32; 3]) -> Brush {
         let h = box_hull(lo, hi);
         Brush { id, verts: h.verts, faces: h.faces, color, rot: [0.0; 3], layer: 1, entity: None, group: None }

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <g fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round">
+    <!-- a rail with arrows both ways and a padlock -->
+    <path d="M6 44 L58 44 M14 37 L6 44 L14 51 M50 37 L58 44 L50 51"/>
+    <rect x="22" y="18" width="20" height="16" rx="2" fill="#ffffff" fill-opacity="0.2"/>
+    <path d="M26 18 L26 13 A6 6 0 0 1 38 13 L38 18"/>
+  </g>
+</svg>

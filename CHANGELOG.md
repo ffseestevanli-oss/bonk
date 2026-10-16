@@ -2,6 +2,60 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.12.0 — "Feel"
+
+### Hold keys
+- **G is grab** (it replaces M): hold G and move the mouse to move the selection from anywhere in
+  a 2D view, or along the floor in the 3D view. G also moves the Block tool's box before you
+  create it.
+- **Axis lock:** G and Shift moves stay on the axis you move along most, which keeps things lined
+  up. Alt while holding frees it (or locks it, if the lock is off). On by default.
+- **What's held, on screen:** the bottom-left of the view says what the held key does, with a
+  colored bar along the bottom; the cursor wears a badge (G, copy, R, S) and a paintbrush in
+  Face Select & Paint. Dropping a brush sends out a ripple of squares.
+- **Middle-button panning pins the cursor** like the other hold actions.
+
+### New keys
+- **H** hides the selection for now; H with nothing selected shows it all again.
+- **, and .** mirror the selection horizontally and vertically, as the view under the mouse sees
+  it (textures follow).
+- **Mouse 4 / mouse 5** (the side buttons) switch to the Selection tool / Face Select & Paint,
+  with the tool's icon flashing by the cursor.
+- **Arrow keys move the origin** in the Origin tool.
+- **3D view without flying:** D, G, H, R, the mirror keys and the arrows (nudging, "up" is away
+  from you) work there. WASD / QE fly only in mouselook (Z). S sizing and Shift copying stay in
+  the 2D views.
+
+### Selecting
+- **The selection box selects when you let go,** ready for G / S / R (Ctrl+drag adds). Settings →
+  Editing → "Selection box waits for Enter" brings the old way back.
+- **Selection Options** at the bottom of the tool panel: Ignore Groups (Ctrl+W), Box: Touching /
+  Inside, and Axis Lock.
+- A group you click in the Layers pane stays highlighted, and the status bar says when a group
+  can't be selected (hidden, ghosted or locked layer).
+
+### Look & feel
+- **The list layout is the tool panel's default** (everyone is moved to it once; right-click the
+  panel for Icons or Compact List).
+- **Collision Look:** View → Collision Look → Ghosted (orange glass) or Solid (each piece opaque in
+  its own color), also by the ghost slider in the Layers pane. Remembered between sessions.
+- **3D field of view:** View → 3D field of view, 75° by default, up to 120° (or more after View →
+  Unlock Field of View).
+- **"Project saved!"**: every view blinks a dark tint and the 3D view says so.
+- The Alt+wheel grid size shows as an outlined label without the dark box behind it.
+- **Set Layer Name…** in the Layers right-click menu (also on a Visual / Collision heading with one
+  layer under it) and **F2** (Edit → Set Layer Name).
+- New Project's name field suggests "Name of your project, e.g. My Model, My Pack".
+
+### Textures
+- Textures imported from a Source game, folder or `.gma` are never offered a resize (they already
+  work in Source). Importing many images asks once, at the end. Settings → Tools & keys can turn
+  the resize question off; compiling still converts what it needs without asking.
+
+### Compiling
+- The compile log leaves out Proton / Wine / driver chatter (`Proton:`, `fixme:`, `ntsync`,
+  `WARNING: radv`…), and only studiomdl's real `ERROR` lines are shown in red.
+
 ## 0.11.3
 
 - **Collision models compile as convex pieces again** instead of one shrink-wrap. Each corner of

@@ -229,6 +229,55 @@ pub extern "C" fn bonk_hold_view() -> c_int {
     with_ed(|ed| ed.hold_view().map(|v| v as c_int).unwrap_or(-1))
 }
 
+/// The hold-key hint: returns its text (empty when nothing is held);
+/// out = [view 0-3, kind] (kinds: see Editor::hold_hint).
+#[no_mangle]
+pub extern "C" fn bonk_hold_hint(out: *mut c_int) -> *const c_char {
+    let h = with_ed(|ed| ed.hold_hint());
+    let (v, k, t) = h.map(|(v, k, t)| (v as c_int, k, t)).unwrap_or((-1, 0, String::new()));
+    if !out.is_null() {
+        unsafe { std::ptr::copy_nonoverlapping([v, k].as_ptr(), out, 2) };
+    }
+    ret_str(t)
+}
+
+/// out = [ignore groups, box touches, axis lock, solid collision]
+#[no_mangle]
+pub extern "C" fn bonk_selection_options(out: *mut c_int) {
+    let v = with_ed(|ed| [ed.ignore_groups as c_int, ed.sel_touch as c_int, ed.axis_lock as c_int, ed.collision_solid as c_int]);
+    if !out.is_null() {
+        unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, 4) };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bonk_set_axis_lock(on: c_int) {
+    with_ed(|ed| ed.axis_lock = on != 0);
+}
+
+#[no_mangle]
+pub extern "C" fn bonk_set_collision_solid(on: c_int) {
+    with_ed(|ed| ed.collision_solid = on != 0);
+}
+
+/// The selection box waits for Enter (1, the old way) or selects on release (0).
+#[no_mangle]
+pub extern "C" fn bonk_set_sel_box_wait(on: c_int) {
+    with_ed(|ed| ed.sel_box_wait = on != 0);
+}
+
+/// 3D field of view in degrees (10-170; the host keeps it at 120 unless unlocked).
+#[no_mangle]
+pub extern "C" fn bonk_set_fov(deg: f32) {
+    with_ed(|ed| ed.fov = deg.clamp(10.0, 170.0));
+}
+
+/// The "dropped" ripple is animating (the host keeps repainting while it is).
+#[no_mangle]
+pub extern "C" fn bonk_animating() -> c_int {
+    with_ed(|ed| ed.ripple.is_some() as c_int)
+}
+
 // ------------------------------------------------------------------ groups
 
 #[no_mangle]
@@ -272,12 +321,17 @@ pub extern "C" fn bonk_group_op(op: c_int, id: c_int) -> u32 {
         }
         let members: Vec<u32> = ed.doc.group_members(g).into_iter().filter(|&m| ed.doc.brush(m).is_some_and(|b| ed.pickable(b))).collect();
         match op {
-            0 => ed.doc.selection = members,
+            0 => {
+                if members.is_empty() {
+                    ed.message = Some("Can't select that group: its brushes are hidden, ghosted or on a locked layer".into());
+                }
+                ed.doc.selection = members;
+            }
             1 => {
                 ed.doc.checkpoint();
                 let all = ed.doc.group_members(g);
                 ed.doc.selection = ed.doc.duplicate(&all);
-                ed.message = Some("Duplicated in place: hold M (or Alt+drag) to move the copy".into());
+                ed.message = Some("Duplicated in place: hold G (or Alt+drag) to move the copy".into());
             }
             2 => {
                 ed.doc.ungroup(g);

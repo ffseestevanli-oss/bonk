@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <g stroke="#000000" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round">
+    <!-- paintbrush: handle, ferrule, bristles -->
+    <path d="M58 6 L36 30 L42 36 L60 10 Z" fill="#c98a4a"/>
+    <path d="M34 28 L44 38 L40 42 L30 32 Z" fill="#cfd4dc"/>
+    <path d="M30 32 L40 42 C34 50 24 56 10 58 C14 46 20 38 30 32 Z" fill="#ff7eb6"/>
+  </g>
+</svg>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <g fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round">
+    <!-- a selection box catching a brush it only overlaps -->
+    <rect x="8" y="8" width="34" height="34" stroke-dasharray="5 5"/>
+    <rect x="30" y="30" width="24" height="24" fill="#ffffff" fill-opacity="0.25"/>
+  </g>
+</svg>

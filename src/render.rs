@@ -510,7 +510,7 @@ impl Renderer {
             for br in ed.doc.brushes.iter().filter(|br| ed.drawable(br) && is_sel(br.id) == pass) {
                 let base = if br.entity.is_some() {
                     ENTITY_COLOR
-                } else if ed.doc.is_collision(br) {
+                } else if ed.doc.is_collision(br) && !ed.collision_solid {
                     COLLISION_COL
                 } else {
                     br.color
@@ -570,6 +570,25 @@ impl Renderer {
             thick2(&mut f.tris, (oh, ov), (oh, ov + arm), w, rgb(AXIS_COL[va], a));
             circle2(&mut f.overlay, oh, ov, 4.0 * px, rgb(con, a));
             let _ = da;
+        }
+
+        // "Dropped here": squares growing out of the dropped bounds and fading away
+        if let Some(((lo, hi), t0)) = ed.ripple {
+            let t = ((ed.time - t0) / crate::editor::RIPPLE_SECS).clamp(0.0, 1.0);
+            let rc = if light { [0.1, 0.35, 0.75] } else { [0.55, 0.85, 1.0] };
+            for k in 0..3 {
+                let tk = (t * 1.6 - k as f32 * 0.3).clamp(0.0, 1.0);
+                if tk <= 0.0 || tk >= 1.0 {
+                    continue;
+                }
+                let grow = tk * 28.0 * px;
+                let a = (1.0 - tk) * 0.9;
+                let (h0, v0, h1, v1) = (lo.get(ha) - grow, lo.get(va) - grow, hi.get(ha) + grow, hi.get(va) + grow);
+                let w = 1.5 * px;
+                for (p, q) in [((h0, v0), (h1, v0)), ((h1, v0), (h1, v1)), ((h1, v1), (h0, v1)), ((h0, v1), (h0, v0))] {
+                    thick2(&mut f.tris, p, q, w, rgb(rc, a));
+                }
+            }
         }
 
         // Selection box: the box, and what it would catch, in yellow
@@ -830,9 +849,13 @@ impl Renderer {
                 continue;
             }
             let collision = ed.doc.is_collision(br);
+            // View → Collision Look: Solid draws each collision brush opaque in its own color
+            let solid = collision && ed.collision_solid;
             for (fi, fc) in br.faces.iter().enumerate() {
-                let nodraw = fc.material == geom::NODRAW;
-                let mut col = if collision {
+                let nodraw = fc.material == geom::NODRAW && !solid;
+                let mut col = if solid {
+                    br.color
+                } else if collision {
                     COLLISION_COL
                 } else if nodraw {
                     NODRAW_COL
@@ -873,7 +896,7 @@ impl Renderer {
                         continue;
                     }
                 }
-                let (buf, alpha) = if collision && !editing_col { (&mut glass, 0.35) } else { (&mut lit, 1.0) };
+                let (buf, alpha) = if collision && !editing_col && !solid { (&mut glass, 0.35) } else { (&mut lit, 1.0) };
                 for k in 1..fc.idx.len().saturating_sub(1) {
                     for vi in [fc.idx[0], fc.idx[k], fc.idx[k + 1]] {
                         let n = buf.len();
@@ -889,14 +912,14 @@ impl Renderer {
                     }
                 }
             }
-            let base = if collision { COLLISION_COL } else { br.color };
+            let base = if collision && !solid { COLLISION_COL } else { br.color };
             let ec = if sel { rgb(SELECTED, 1.0) } else { rgb(dark(base), 1.0) };
             // View → Show Edges in 3D off: only selected brushes (and collision
             // while you edit it) keep their outlines
             let outline = ed.show_edges_3d || sel || (collision && editing_col);
             for (a, b) in br.edges().into_iter().map(|(i, j)| (br.verts[i], br.verts[j])).filter(|_| outline) {
-                let target = if sel || collision { &mut f.overlay } else { &mut f.edges };
-                line3(target, a, b, if collision && !sel { rgb(COLLISION_COL, 0.9) } else { ec });
+                let target = if sel || (collision && !solid) { &mut f.overlay } else { &mut f.edges };
+                line3(target, a, b, if collision && !sel && !solid { rgb(COLLISION_COL, 0.9) } else { ec });
             }
         }
         if let Some((lo, hi)) = ed.block_box {

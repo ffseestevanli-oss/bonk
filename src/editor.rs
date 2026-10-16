@@ -95,6 +95,8 @@ impl Camera {
 }
 
 pub const FOV_DEG: f32 = 75.0;
+/// How long the "dropped here" ripple lasts
+pub const RIPPLE_SECS: f32 = 0.55;
 const LOOK_SENS: f32 = 0.18; // degrees per pixel
 const FLY_SPEED: f32 = 600.0; // units per second
 const TURN_SPEED: f32 = 100.0; // degrees per second (arrow keys)
@@ -269,9 +271,12 @@ pub mod key {
     pub const Z: i32 = 0x5a;
     pub const W: i32 = 0x57;
     pub const F: i32 = 0x46;
+    pub const G: i32 = 0x47;
+    pub const H: i32 = 0x48;
+    pub const COMMA: i32 = 0x2C;
+    pub const PERIOD: i32 = 0x2E;
     pub const A: i32 = 0x41;
     pub const S: i32 = 0x53;
-    pub const M: i32 = 0x4D;
     pub const D: i32 = 0x44;
     pub const Q: i32 = 0x51;
     pub const E: i32 = 0x45;
@@ -337,6 +342,17 @@ pub mod cmd {
     pub const TOGGLE_EDGES_3D: i32 = 30;
     /// Bisect mode: Split & Delete removing the larger side
     pub const BISECT_MODE_DELETE_LARGER: i32 = 31;
+    /// H: hide the selection; with nothing selected, show what was hidden
+    pub const HIDE_TOGGLE: i32 = 32;
+    /// Mirror the selection along the hovered view's horizontal / vertical axis
+    pub const MIRROR_H: i32 = 33;
+    pub const MIRROR_V: i32 = 34;
+    /// Selection options: lock G / Shift moves to one axis
+    pub const TOGGLE_AXIS_LOCK: i32 = 35;
+    /// Selection options: the selection box takes what it touches / only what's inside
+    pub const TOGGLE_BOX_TOUCH: i32 = 36;
+    /// View → Collision Look: ghosted ↔ solid
+    pub const TOGGLE_COLLISION_SOLID: i32 = 37;
 }
 
 #[derive(Default)]
@@ -410,6 +426,21 @@ pub struct Editor {
     pub sel_box: Option<(V3, V3)>,
     /// The selection box takes brushes it touches (not just ones fully inside)
     pub sel_touch: bool,
+    /// The selection box waits for Enter (the old way) instead of selecting on release
+    pub sel_box_wait: bool,
+    /// G / Shift moves stay on one axis (the one you move along most); Alt flips it for a hold
+    pub axis_lock: bool,
+    axis_flip: bool,
+    /// Brushes hidden with H (this session only, never saved)
+    pub hidden: Vec<u32>,
+    /// Collision brushes drawn solid, each in its own color, instead of orange glass
+    pub collision_solid: bool,
+    /// 3D view field of view, degrees
+    pub fov: f32,
+    /// "Dropped here" ripple: (bounds, start time)
+    pub ripple: Option<((V3, V3), f32)>,
+    /// A hold (G / R) started in the 3D view: nothing to pin the cursor to
+    hold_in_3d: bool,
     /// How visible ghosted (non-collision) brushes are while editing collision, 0..1
     pub ghost_opacity: f32,
     /// Nodraw faces get their striped fill in the 2D views too
@@ -483,6 +514,14 @@ impl Editor {
             ignore_groups: false,
             sel_box: None,
             sel_touch: true,
+            sel_box_wait: false,
+            axis_lock: true,
+            axis_flip: false,
+            hidden: Vec::new(),
+            collision_solid: false,
+            fov: FOV_DEG,
+            ripple: None,
+            hold_in_3d: false,
             ghost_opacity: 0.25,
             nodraw_2d: false,
             show_edges_3d: true,
@@ -712,12 +751,12 @@ impl Editor {
 
     /// Drawn in the views: layer visible, and mannequins shown.
     pub fn drawable(&self, b: &Brush) -> bool {
-        self.doc.layer_visible(b) && (b.entity.is_none() || self.show_entities)
+        self.doc.layer_visible(b) && (b.entity.is_none() || self.show_entities) && !self.hidden.contains(&b.id)
     }
 
     /// Can be clicked / selected / edited.
     pub fn pickable(&self, b: &Brush) -> bool {
-        self.doc.layer_editable(b) && (b.entity.is_none() || self.show_entities) && !self.ghosted(b)
+        self.doc.layer_editable(b) && (b.entity.is_none() || self.show_entities) && !self.ghosted(b) && !self.hidden.contains(&b.id)
     }
 
     /// Editing a collision layer: everything that isn't collision is a ghost
@@ -800,7 +839,7 @@ impl Editor {
         let (w, h) = self.persp_size;
         let nx = 2.0 * x / w - 1.0;
         let ny = 1.0 - 2.0 * y / h;
-        let t = (FOV_DEG.to_radians() * 0.5).tan();
+        let t = (self.fov.to_radians() * 0.5).tan();
         let dir = (self.cam.forward() + self.cam.right() * (nx * t * (w / h)) + self.cam.up() * (ny * t)).norm();
         (self.cam.pos, dir)
     }
@@ -808,7 +847,7 @@ impl Editor {
     #[allow(dead_code)]
     pub fn persp_mvp(&self) -> M4 {
         let (w, h) = self.persp_size;
-        let proj = M4::perspective(FOV_DEG.to_radians(), w / h, 1.0, 65536.0);
+        let proj = M4::perspective(self.fov.to_radians(), w / h, 1.0, 65536.0);
         let view = M4::look_at(self.cam.pos, self.cam.pos + self.cam.forward(), v3(0.0, 0.0, 1.0));
         proj.mul(&view)
     }
@@ -951,7 +990,16 @@ impl Editor {
     /// Alt frees placement from the grid and Alt+Shift keeps it, unless the
     /// "swap Alt drag behavior" setting reverses the two.
     fn update_free(&mut self) {
-        self.free = self.alt && (self.shift == self.cfg.swap_alt);
+        self.free = self.alt && (self.shift == self.cfg.swap_alt) && self.move_hold.is_none() && self.shift_hold.is_none();
+    }
+
+    /// A G or Shift hold is carrying the selection right now.
+    fn hold_carrying(&self) -> bool {
+        matches!(self.move_hold, Some((_, _, true))) || matches!(self.shift_hold, Some((_, _, true)))
+    }
+
+    fn axis_locked(&self) -> bool {
+        self.axis_lock != self.axis_flip
     }
 
     /// Shift held on its own in a 2D view and the mouse moved past the dead
@@ -960,6 +1008,13 @@ impl Editor {
         // Hold M: the same, without the copy (smaller dead zone: M is deliberate)
         if let Some((view, start, false)) = self.move_hold {
             if view == id && self.drag.is_none() && ((x - start.0).powi(2) + (y - start.1).powi(2)).sqrt() >= 6.0 {
+                // the Block tool's unfinished box moves like a brush
+                if let (Tool::Block, Some(bb)) = (self.tool, self.block_box) {
+                    let grab = self.view(id).to_world(start.0, start.1);
+                    self.drag = Some(Drag::Move { view: id, target: Target::Block, grab, orig: bb, orig_brushes: vec![], changed: false, toggle_on_click: false, clone: false });
+                    self.move_hold = Some((view, start, true));
+                    return;
+                }
                 let selbox = if self.tool == Tool::Select { self.sel_box } else { None };
                 let Some(b) = selbox.or_else(|| self.doc.selection_bounds()) else {
                     self.move_hold = None;
@@ -1010,11 +1065,27 @@ impl Editor {
 
     /// Drop a Shift-held clone (or an M-held move) where it is.
     fn place_shift_clone(&mut self) -> u32 {
-        if let Some(Drag::Move { orig, clone: false, .. }) = self.drag {
+        self.axis_flip = false;
+        if let Some(Drag::Move3D { .. }) = self.drag {
             self.drag = None;
+            self.hold_in_3d = false;
             if let Some(b) = self.doc.selection_bounds() {
-                self.work = b;
+                self.ripple = Some((b, self.time));
+                self.message = Some("Moved".into());
+            }
+            return flags::ALL;
+        }
+        if let Some(Drag::Move { orig, clone: false, target, .. }) = self.drag {
+            self.drag = None;
+            let b = if target == Target::Block { self.block_box } else { self.doc.selection_bounds() };
+            if let Some(b) = b {
+                if target != Target::Block {
+                    self.work = b;
+                }
                 self.message = if b != orig { Some("Moved".into()) } else { None };
+                if b != orig {
+                    self.ripple = Some((b, self.time));
+                }
             }
             return flags::ALL;
         }
@@ -1026,6 +1097,7 @@ impl Editor {
                 }
                 Some(b) => {
                     self.work = b;
+                    self.ripple = Some((b, self.time));
                     let n = self.doc.selection.len();
                     self.message = Some(format!("Cloned {} brush{}", n, if n == 1 { "" } else { "es" }));
                 }
@@ -1440,6 +1512,7 @@ impl Editor {
         self.vsel.clear();
         self.fsel.clear();
         let rev = self.doc.rev;
+        self.hidden.clear();
         self.doc = doc;
         self.doc.rev = rev + 1; // panels watching the revision must refresh
         self.doc.selection.clear();
@@ -2165,7 +2238,7 @@ impl Editor {
             }
             Drag::Pan3D { last, dist } => {
                 let (_, h) = self.persp_size;
-                let k = 2.0 * dist * (FOV_DEG.to_radians() * 0.5).tan() / h;
+                let k = 2.0 * dist * (self.fov.to_radians() * 0.5).tan() / h;
                 let mv = self.cam.right() * (-(x - last.0) * k) + self.cam.up() * ((y - last.1) * k);
                 self.cam.pos = self.cam.pos + mv;
                 Drag::Pan3D { last: (x, y), dist }
@@ -2246,6 +2319,9 @@ impl Editor {
                     if t > 0.0 {
                         let p = o + d * t;
                         let mut delta = v3(p.x - start.x, p.y - start.y, 0.0);
+                        if self.hold_carrying() && self.axis_locked() {
+                            if delta.x.abs() >= delta.y.abs() { delta.y = 0.0 } else { delta.x = 0.0 }
+                        }
                         delta.x = self.snap(delta.x);
                         delta.y = self.snap(delta.y);
                         if delta.len() < 1e5 && (changed || delta != V3::default()) {
@@ -2316,8 +2392,12 @@ impl Editor {
                 let (ha, va, _) = v.kind.axes();
                 let (wh, wv) = v.to_world(x, y);
                 let mut nb = orig;
-                let dh = self.snap(orig.0.get(ha) + wh - grab.0) - orig.0.get(ha);
-                let dv = self.snap(orig.0.get(va) + wv - grab.1) - orig.0.get(va);
+                let mut dh = self.snap(orig.0.get(ha) + wh - grab.0) - orig.0.get(ha);
+                let mut dv = self.snap(orig.0.get(va) + wv - grab.1) - orig.0.get(va);
+                // a G / Shift hold with the axis lock on: only the axis you're moving along most
+                if self.hold_carrying() && self.axis_locked() {
+                    if (wh - grab.0).abs() >= (wv - grab.1).abs() { dv = 0.0 } else { dh = 0.0 }
+                }
                 for (axis, d) in [(ha, dh), (va, dv)] {
                     nb.0.set(axis, orig.0.get(axis) + d);
                     nb.1.set(axis, orig.1.get(axis) + d);
@@ -2547,9 +2627,13 @@ impl Editor {
                     if !self.ctrl {
                         self.click_select(None, false); // plain click on empty space: deselect
                     }
+                } else if !self.sel_box_wait {
+                    // select right away, ready for G / S / R (Ctrl adds)
+                    let add = self.ctrl;
+                    self.apply_sel_box(add);
                 } else {
                     let n = self.sel_box_catch().len();
-                    self.message = Some(format!("Selection box: {} brush{} inside. Enter selects (Ctrl+Enter adds), S / M adjust, Esc cancels", n, if n == 1 { "" } else { "es" }));
+                    self.message = Some(format!("Selection box: {} brush{} inside. Enter selects (Ctrl+Enter adds), S / G adjust, Esc cancels", n, if n == 1 { "" } else { "es" }));
                 }
                 out |= flags::ALL;
             }
@@ -2756,22 +2840,41 @@ impl Editor {
 
     pub fn key(&mut self, id: usize, k: i32, pressed: bool, m: i32, repeat: bool) -> u32 {
         let k3d = id == 0 || self.captured;
-        // Hold M and move the mouse: move the selection (release M to place).
-        if k == key::M && !k3d && m & (mods::CTRL | mods::ALT) == 0 {
+        // Hold G (grab) and move the mouse: move the selection (release G to place).
+        if k == key::G && !self.captured && m & (mods::CTRL | mods::ALT) == 0 {
             if repeat {
                 return 0;
             }
             if pressed {
-                let ok_tool = matches!(self.tool, Tool::Select | Tool::Block | Tool::Entity);
-                let has = !self.doc.selection.is_empty() || (self.tool == Tool::Select && self.sel_box.is_some());
+                let ok_tool = matches!(self.tool, Tool::Select | Tool::Block | Tool::Entity | Tool::Face | Tool::Vertex);
+                let has = !self.doc.selection.is_empty()
+                    || (self.tool == Tool::Select && self.sel_box.is_some())
+                    || (self.tool == Tool::Block && self.block_box.is_some());
+                self.axis_flip = false;
                 self.move_hold = match self.hover {
+                    Some((0, x, y)) if id == 0 && ok_tool && self.drag.is_none() && !self.doc.selection.is_empty() => {
+                        // 3D view: slide the selection across the floor plane under it
+                        let b = self.doc.selection_bounds().unwrap();
+                        let (o, d) = self.persp_ray(x, y);
+                        let t = if d.z.abs() > 1e-4 { (b.0.z - o.z) / d.z } else { -1.0 };
+                        if t <= 0.0 {
+                            self.message = Some("Look toward the selection's floor to move it with G".into());
+                            return flags::ALL;
+                        }
+                        let start = o + d * t;
+                        self.drag = Some(Drag::Move3D { plane_z: b.0.z, start, orig_brushes: self.doc.selected_brushes(), changed: false });
+                        self.hold_in_3d = true;
+                        self.message = Some("Moving: move the mouse, release G to place, Esc cancels".into());
+                        Some((0, (x, y), true))
+                    }
                     Some((hid, x, y)) if hid == id && (1..=3).contains(&id) && ok_tool && self.s_hold.is_none() && self.drag.is_none()
                         && has => {
-                        self.message = Some("Moving: move the mouse, release M to place, Esc cancels".into());
+                        self.message = Some("Moving: move the mouse, release G to place, Esc cancels".into());
                         Some((id, (x, y), false))
                     }
                     _ => None,
                 };
+                self.update_free();
                 return flags::ALL;
             }
             if let Some((_, _, moving)) = self.move_hold.take() {
@@ -2834,6 +2937,20 @@ impl Editor {
                 }
             }
         }
+        // Arrow keys in the 3D view (not flying) nudge along the floor axis nearest
+        // to where the camera points.
+        if pressed && id == 0 && !self.captured && self.cfg.nudge {
+            let dir = match k {
+                key::LEFT => Some((-1, 0)),
+                key::RIGHT => Some((1, 0)),
+                key::UP => Some((0, 1)),
+                key::DOWN => Some((0, -1)),
+                _ => None,
+            };
+            if let Some(dir) = dir {
+                return self.nudge_3d(dir, m & mods::ALT != 0, repeat);
+            }
+        }
         // Arrow keys in a 2D view nudge (holding repeats; one undo step per hold).
         if pressed && !k3d && self.cfg.nudge && (1..=3).contains(&id) {
             let dir = match k {
@@ -2861,11 +2978,26 @@ impl Editor {
             }
             key::ALT => {
                 self.alt = pressed;
+                if pressed && (self.move_hold.is_some() || self.shift_hold.is_some()) {
+                    self.axis_flip = !self.axis_flip;
+                    self.message = Some(if self.axis_locked() { "Axis lock on: moves stay on one axis" } else { "Axis lock off: move freely" }.into());
+                    self.update_free();
+                    return flags::ALL;
+                }
                 self.update_free();
                 return 0;
             }
             key::R if !self.captured && m & (mods::CTRL | mods::ALT) == 0 => {
                 return if pressed { self.start_key_rotate() } else { self.end_key_rotate() };
+            }
+            key::H if pressed && !self.captured && m & (mods::CTRL | mods::ALT | mods::SHIFT) == 0 => {
+                return self.command(cmd::HIDE_TOGGLE);
+            }
+            key::COMMA if pressed && !self.captured && m & (mods::CTRL | mods::ALT) == 0 => {
+                return self.command(cmd::MIRROR_H);
+            }
+            key::PERIOD if pressed && !self.captured && m & (mods::CTRL | mods::ALT) == 0 => {
+                return self.command(cmd::MIRROR_V);
             }
             key::SPACE => {
                 self.keys.space = pressed;
@@ -2875,19 +3007,20 @@ impl Editor {
                 self.bisect_flip = (self.bisect_flip + 1) % 6;
                 return flags::ALL;
             }
-            key::D if !k3d && pressed && m & (mods::CTRL | mods::ALT | mods::SHIFT) == 0 && self.s_hold.is_none() => {
-                return self.command(cmd::DESELECT); // D in a 2D view; Ctrl+D works everywhere (Edit menu)
+            key::D if !self.captured && pressed && m & (mods::CTRL | mods::ALT | mods::SHIFT) == 0 && self.s_hold.is_none() => {
+                return self.command(cmd::DESELECT); // D in any view (when not flying); Ctrl+D works everywhere (Edit menu)
             }
-            key::W if k3d => self.keys.w = pressed,
-            key::A if k3d => self.keys.a = pressed,
-            key::S if k3d => self.keys.s = pressed,
-            key::D if k3d => self.keys.d = pressed,
-            key::Q if k3d => self.keys.q = pressed,
-            key::E if k3d => self.keys.e = pressed,
-            key::UP if k3d => self.keys.up = pressed,
-            key::DOWN if k3d => self.keys.down = pressed,
-            key::LEFT if k3d => self.keys.left = pressed,
-            key::RIGHT if k3d => self.keys.right = pressed,
+            // flying keys only while flying (Z): otherwise the 3D view takes the editing keys
+            key::W if self.captured => self.keys.w = pressed,
+            key::A if self.captured => self.keys.a = pressed,
+            key::S if self.captured => self.keys.s = pressed,
+            key::D if self.captured => self.keys.d = pressed,
+            key::Q if self.captured => self.keys.q = pressed,
+            key::E if self.captured => self.keys.e = pressed,
+            key::UP if self.captured => self.keys.up = pressed,
+            key::DOWN if self.captured => self.keys.down = pressed,
+            key::LEFT if self.captured => self.keys.left = pressed,
+            key::RIGHT if self.captured => self.keys.right = pressed,
             key::Z if pressed && m & (mods::CTRL | mods::ALT) == 0 => return self.toggle_capture(),
             key::ESCAPE if pressed => return self.escape(),
             key::RETURN | key::ENTER if pressed => {
@@ -2909,6 +3042,12 @@ impl Editor {
         d.set(ha, dir.0 as f32 * step);
         d.set(va, dir.1 as f32 * step);
         self.message = None;
+        if self.tool == Tool::Origin {
+            let o = self.active_origin() + d;
+            let mut changed = repeat;
+            self.set_origin(o, &mut changed);
+            return flags::ALL;
+        }
         if self.tool == Tool::Block {
             if let Some((lo, hi)) = self.block_box {
                 self.block_box = Some((lo + d, hi + d));
@@ -2931,6 +3070,48 @@ impl Editor {
         flags::ALL
     }
 
+
+    /// Arrow keys in the 3D view: right / up follow the camera, snapped to the
+    /// nearest floor axis, so "up" moves away from you.
+    fn nudge_3d(&mut self, dir: (i32, i32), fine: bool, repeat: bool) -> u32 {
+        let step = if fine { 1.0 } else { self.grid };
+        let axis = |v: V3| if v.x.abs() >= v.y.abs() { v3(v.x.signum(), 0.0, 0.0) } else { v3(0.0, v.y.signum(), 0.0) };
+        let (r, f) = (axis(self.cam.right()), axis(self.cam.forward()));
+        let d = (r * dir.0 as f32 + f * dir.1 as f32) * step;
+        if self.tool == Tool::Origin {
+            let o = self.active_origin() + d;
+            let mut changed = repeat;
+            self.set_origin(o, &mut changed);
+            return flags::ALL;
+        }
+        if self.doc.selection.is_empty() {
+            return 0;
+        }
+        self.message = None;
+        let orig = self.doc.selected_brushes();
+        let mut changed = repeat;
+        self.translate_brushes(&orig, d, &mut changed);
+        flags::ALL
+    }
+
+    /// Mirror the selection about its center along a world axis.
+    fn mirror_selection(&mut self, axis: usize) -> u32 {
+        let Some((lo, hi)) = self.doc.selection_bounds() else {
+            self.message = Some("Select something to mirror".into());
+            return flags::ALL;
+        };
+        let c = (lo.get(axis) + hi.get(axis)) * 0.5;
+        self.doc.checkpoint();
+        let ids = self.doc.selection.clone();
+        for id in ids {
+            if let Some(b) = self.doc.brush_mut(id) {
+                b.mirror(axis, c);
+            }
+        }
+        self.vsel.clear();
+        self.message = Some(format!("Mirrored along {}", ["X", "Y", "Z"][axis]));
+        flags::ALL
+    }
 
     /// Snap vertices to the grid: selected vertices in the vertex tool,
     /// otherwise every vertex of the selected brushes.
@@ -3036,7 +3217,14 @@ impl Editor {
         }
         let Some((id, x, y)) = self.hover else { return 0 };
         if id == 0 {
-            return 0;
+            // 3D view: turn about the vertical axis, steered like the top view
+            let Some(b) = self.doc.selection_bounds() else { return 0 };
+            let c = ((b.0.x + b.1.x) * 0.5, (b.0.y + b.1.y) * 0.5);
+            let top = self.views.iter().position(|v| v.kind == ViewKind::Top).map(|i| i + 1).unwrap_or(1);
+            self.hold_in_3d = true;
+            self.drag = Some(Drag::Rotate { view: top, center: c, start_ang: x, orig_brushes: self.doc.selected_brushes(), changed: false, by_key: true });
+            self.message = Some("Rotating: move the mouse left / right, release R to finish (Esc cancels)".into());
+            return flags::ALL;
         }
         // Anywhere in the view: the selection turns about its center as the
         // mouse moves left / right (start_ang holds the starting pixel x).
@@ -3053,6 +3241,7 @@ impl Editor {
     fn end_key_rotate(&mut self) -> u32 {
         if matches!(self.drag, Some(Drag::Rotate { by_key: true, .. })) {
             self.drag = None;
+            self.hold_in_3d = false;
             self.message = None;
             return flags::ALL;
         }
@@ -3215,6 +3404,8 @@ impl Editor {
     fn escape(&mut self) -> u32 {
         self.shift_hold = None;
         self.move_hold = None;
+        self.hold_in_3d = false;
+        self.axis_flip = false;
         if self.captured {
             return self.toggle_capture();
         }
@@ -3288,13 +3479,43 @@ impl Editor {
         if matches!(self.drag, Some(Drag::Rotate { by_key: true, .. })) {
             self.drag = None;
         }
+        self.hold_in_3d = false;
         flags::ALL
     }
 
     /// The 2D view a hold-key action (S sizing, Shift clone, R rotate) is
     /// steering right now, so the host can pin the cursor there.
+    /// What a held key is doing right now, for the hint in the corner of the
+    /// view: (view 0-3, kind, text). Kinds: 1 move (G), 2 carry a copy (Shift),
+    /// 3 rotate (R), 4 size (S), 5 pan.
+    pub fn hold_hint(&self) -> Option<(usize, i32, String)> {
+        let lock = if self.axis_locked() { "one axis, Alt frees it" } else { "free, Alt locks an axis" };
+        if let Some((v, _, _)) = self.move_hold {
+            return Some((v, 1, format!("[G] held: the mouse moves the selection ({lock}). Release to drop")));
+        }
+        if let Some((v, _, _)) = self.shift_hold {
+            return Some((v, 2, format!("[Shift] held: move the mouse to carry a copy ({lock}). Release to drop")));
+        }
+        if let Some(Drag::Rotate { view, by_key: true, .. }) = self.drag {
+            let v = if self.hold_in_3d { 0 } else { view };
+            return Some((v, 3, "[R] held: move the mouse left / right to rotate. Release to finish".into()));
+        }
+        if let Some(h) = &self.s_hold {
+            return Some((h.view, 4, "[S] held: move the mouse to size from the nearest side. Release to finish".into()));
+        }
+        if let Some(Drag::Pan { view, .. }) = self.drag {
+            return Some((view, 5, "Panning: release the middle button to stop".into()));
+        }
+        None
+    }
+
     pub fn hold_view(&self) -> Option<usize> {
+        if self.hold_in_3d {
+            return None;
+        }
         match self.drag {
+            // panning a 2D view with the middle button keeps going past the edge too
+            Some(Drag::Pan { view, .. }) => Some(view),
             Some(Drag::SSize { view, .. }) => Some(view),
             Some(Drag::Rotate { view, by_key: true, .. }) => Some(view),
             Some(Drag::Move { view, clone: true, .. }) if matches!(self.shift_hold, Some((_, _, true))) => Some(view),
@@ -3308,6 +3529,12 @@ impl Editor {
         // Animated nodraw stripes: repaint ~40 times a second while any are drawn.
         self.time += dt;
         let mut anim = 0;
+        if let Some((_, t0)) = self.ripple {
+            if self.time - t0 > RIPPLE_SECS {
+                self.ripple = None;
+            }
+            anim = flags::ALL;
+        }
         if self.nd_style != 0 {
             self.anim_acc += dt;
             if self.anim_acc >= 0.025 {
@@ -3438,6 +3665,54 @@ impl Editor {
                 self.show_edges_3d = !self.show_edges_3d;
                 return flags::ALL | flags::TOOL;
             }
+            cmd::HIDE_TOGGLE => {
+                if !self.doc.selection.is_empty() {
+                    let n = self.doc.selection.len();
+                    let sel = std::mem::take(&mut self.doc.selection);
+                    self.hidden.extend(sel);
+                    self.vsel.clear();
+                    self.fsel.clear();
+                    self.message = Some(format!("Hid {} brush{} (H with nothing selected shows everything again)", n, if n == 1 { "" } else { "es" }));
+                } else if !self.hidden.is_empty() {
+                    let n = self.hidden.len();
+                    self.hidden.clear();
+                    self.message = Some(format!("Showing {} hidden brush{}", n, if n == 1 { "" } else { "es" }));
+                } else {
+                    self.message = Some("H hides the selection (H again with nothing selected shows it)".into());
+                }
+                return flags::ALL;
+            }
+            cmd::MIRROR_H | cmd::MIRROR_V => {
+                let horizontal = c == cmd::MIRROR_H;
+                let axis = match self.hover {
+                    Some((id, _, _)) if (1..=3).contains(&id) => {
+                        let (ha, va, _) = self.view(id).kind.axes();
+                        if horizontal { ha } else { va }
+                    }
+                    // 3D view (or none): horizontal is the floor axis across the screen, vertical is up
+                    _ => {
+                        if horizontal {
+                            let r = self.cam.right();
+                            if r.x.abs() >= r.y.abs() { 0 } else { 1 }
+                        } else {
+                            2
+                        }
+                    }
+                };
+                return self.mirror_selection(axis);
+            }
+            cmd::TOGGLE_AXIS_LOCK => {
+                self.axis_lock = !self.axis_lock;
+                return flags::ALL | flags::TOOL;
+            }
+            cmd::TOGGLE_BOX_TOUCH => {
+                self.sel_touch = !self.sel_touch;
+                return flags::ALL | flags::TOOL;
+            }
+            cmd::TOGGLE_COLLISION_SOLID => {
+                self.collision_solid = !self.collision_solid;
+                return flags::ALL | flags::TOOL;
+            }
             cmd::TOGGLE_NODRAW_2D => {
                 self.nodraw_2d = !self.nodraw_2d;
                 return flags::ALL | flags::TOOL;
@@ -3489,6 +3764,7 @@ impl Editor {
                 return flags::ALL | flags::TOOL;
             }
             cmd::NEW => {
+                self.hidden.clear();
                 self.drag = None;
                 self.block_box = None;
                 self.vsel.clear();
@@ -3919,6 +4195,25 @@ mod tests {
     }
 
     #[test]
+    fn g_in_3d_slides_along_floor_without_pinning() {
+        let mut e = editor();
+        let id = e.doc.add_brush(v3(-32.0, -32.0, 0.0), v3(32.0, 32.0, 64.0));
+        e.doc.selection = vec![id];
+        e.cam = Camera { pos: v3(0.0, -10.0, 600.0), yaw: 90.0, pitch: -89.0 };
+        let c = (400.0, 300.0);
+        e.mouse_move(0, c.0, c.1, 0);
+        e.key(0, key::G, true, 0, false);
+        assert_eq!(e.hold_view(), None, "nothing to pin in 3D");
+        e.mouse_move(0, c.0 + 60.0, c.1 + 5.0, 0);
+        e.key(0, key::G, false, 0, false);
+        let (lo, hi) = e.doc.brush(id).unwrap().bounds();
+        assert!(lo.x > -31.0, "moved along +x: {lo:?}");
+        assert_eq!(lo.y, -32.0, "axis lock kept y");
+        assert_eq!((lo.z, hi.z), (0.0, 64.0));
+        assert!(e.drag.is_none());
+    }
+
+    #[test]
     fn alt_drag_in_3d_slides_along_floor() {
         let mut e = editor();
         let id = e.doc.add_brush(v3(-32.0, -32.0, 0.0), v3(32.0, 32.0, 64.0));
@@ -3950,7 +4245,15 @@ mod tests {
         e.command(cmd::UNDO); // undo the Alt nudge
         e.command(cmd::UNDO); // the whole held run is one step
         assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(0.0, 0.0, 0.0));
-        // arrows in the 3D view still fly the camera, not nudge
+        // arrows in the 3D view (not flying) nudge along the floor axis the camera faces
+        let f = e.cam.forward();
+        let ax = if f.x.abs() >= f.y.abs() { v3(f.x.signum(), 0.0, 0.0) } else { v3(0.0, f.y.signum(), 0.0) };
+        e.key(0, key::UP, true, 0, false);
+        assert_eq!(e.doc.brush(id).unwrap().bounds().0, ax * 16.0);
+        e.key(0, key::UP, false, 0, false);
+        e.command(cmd::UNDO);
+        // flying (Z): arrows look around again
+        e.captured = true;
         e.key(0, key::UP, true, 0, false);
         assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(0.0, 0.0, 0.0));
         assert!(e.tick(0.1) != 0);
@@ -4430,30 +4733,153 @@ mod tests {
     }
 
     #[test]
-    fn hold_m_moves_the_selection_from_anywhere_and_esc_cancels() {
+    fn hold_g_moves_the_selection_from_anywhere_and_esc_cancels() {
         let mut e = editor();
+        e.axis_lock = false;
         let id = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0));
         e.doc.selection = vec![id];
         let far = sp(&e, 1, 300.0, 16.0);
         e.mouse_move(1, far.0, far.1, 0);
-        e.key(1, key::M, true, 0, false);
+        e.key(1, key::G, true, 0, false);
         let q = sp(&e, 1, 332.0, 48.0);
         e.mouse_move(1, q.0, q.1, 0);
         assert_eq!(e.hold_view(), Some(1));
-        e.key(1, key::M, false, 0, false);
+        e.key(1, key::G, false, 0, false);
         assert_eq!(e.doc.brushes.len(), 1);
         assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(32.0, 32.0, 0.0));
         assert_eq!(e.hold_view(), None);
         // Esc mid-move puts it back
-        e.key(1, key::M, true, 0, false);
+        e.key(1, key::G, true, 0, false);
         let q2 = sp(&e, 1, 364.0, 48.0);
         e.mouse_move(1, q2.0, q2.1, 0);
         e.key(1, key::ESCAPE, true, 0, false);
-        e.key(1, key::M, false, 0, false);
+        e.key(1, key::G, false, 0, false);
         assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(32.0, 32.0, 0.0));
         // undo takes back the first move
         e.command(cmd::UNDO);
         assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(0.0, 0.0, 0.0));
+        assert!(e.ripple.is_some(), "a drop leaves a ripple");
+    }
+
+    #[test]
+    fn g_axis_lock_keeps_one_axis_and_alt_flips_it() {
+        let mut e = editor();
+        assert!(e.axis_lock, "on by default");
+        let id = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0));
+        e.doc.selection = vec![id];
+        let p = sp(&e, 1, 16.0, 16.0);
+        e.mouse_move(1, p.0, p.1, 0);
+        e.key(1, key::G, true, 0, false);
+        let q = sp(&e, 1, 80.0, 32.0); // mostly sideways
+        e.mouse_move(1, q.0, q.1, 0);
+        assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(64.0, 0.0, 0.0));
+        assert!(e.hold_hint().is_some_and(|h| h.1 == 1 && h.2.contains("[G]")));
+        // Alt during the hold frees it (and isn't free placement)
+        e.key(1, key::ALT, true, mods::ALT, false);
+        assert!(!e.free);
+        e.mouse_move(1, q.0, q.1 + 0.01, mods::ALT);
+        e.mouse_move(1, q.0, q.1, mods::ALT);
+        assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(64.0, 16.0, 0.0));
+        e.key(1, key::ALT, false, 0, false);
+        e.key(1, key::G, false, 0, false);
+        assert!(e.hold_hint().is_none());
+        // next hold starts locked again
+        e.key(1, key::G, true, 0, false);
+        assert!(e.axis_locked());
+        e.key(1, key::G, false, 0, false);
+    }
+
+    #[test]
+    fn g_moves_the_block_tools_box() {
+        let mut e = editor();
+        e.axis_lock = false;
+        e.command(cmd::TOOL_BLOCK);
+        e.block_box = Some((v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0)));
+        let p = sp(&e, 1, 16.0, 16.0);
+        e.mouse_move(1, p.0, p.1, 0);
+        e.key(1, key::G, true, 0, false);
+        let q = sp(&e, 1, 48.0, 48.0);
+        e.mouse_move(1, q.0, q.1, 0);
+        e.key(1, key::G, false, 0, false);
+        assert_eq!(e.block_box.unwrap().0, v3(32.0, 32.0, 0.0));
+        assert!(e.doc.brushes.is_empty(), "still just a box, not a brush");
+    }
+
+    #[test]
+    fn h_hides_selection_and_h_again_shows() {
+        let mut e = editor();
+        let a = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0));
+        let b = e.doc.add_brush(v3(64.0, 0.0, 0.0), v3(96.0, 32.0, 32.0));
+        e.doc.selection = vec![a];
+        e.key(1, key::H, true, 0, false);
+        assert!(e.doc.selection.is_empty());
+        assert!(!e.drawable(e.doc.brush(a).unwrap()));
+        assert!(!e.pickable(e.doc.brush(a).unwrap()));
+        assert!(e.drawable(e.doc.brush(b).unwrap()));
+        e.command(cmd::SELECT_ALL);
+        assert!(!e.doc.selection.contains(&a), "hidden brushes stay out of select all");
+        e.doc.selection.clear();
+        e.key(0, key::H, true, 0, false); // works in the 3D view too
+        assert!(e.drawable(e.doc.brush(a).unwrap()));
+    }
+
+    #[test]
+    fn comma_and_period_mirror_the_selection() {
+        let mut e = editor();
+        // a wedge: mirroring it is visible
+        let id = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(64.0, 32.0, 32.0));
+        e.doc.selection = vec![id];
+        {
+            let b = e.doc.brush_mut(id).unwrap();
+            for v in b.verts.iter_mut() {
+                if v.x > 32.0 && v.z > 16.0 {
+                    v.z = 0.0 + 8.0;
+                }
+            }
+        }
+        let before = e.doc.brush(id).unwrap().clone();
+        let p = sp(&e, 1, 10.0, 10.0);
+        e.mouse_move(1, p.0, p.1, 0); // top view: horizontal = X
+        e.key(1, key::COMMA, true, 0, false);
+        let after = e.doc.brush(id).unwrap().clone();
+        assert_eq!(after.bounds(), before.bounds(), "mirrors in place");
+        for (v, w) in before.verts.iter().zip(after.verts.iter()) {
+            assert_eq!(*w, v3(64.0 - v.x, v.y, v.z));
+        }
+        // faces still point outward
+        let c = v3(32.0, 16.0, 8.0);
+        for f in &after.faces {
+            assert!(f.normal.dot(c) < f.dist + 1e-3, "inside stays inside");
+        }
+        // twice is back where it started
+        e.key(1, key::COMMA, true, 0, false);
+        e.key(1, key::PERIOD, true, 0, false);
+        e.key(1, key::PERIOD, true, 0, false);
+        assert_eq!(e.doc.brush(id).unwrap().verts, before.verts);
+        e.command(cmd::UNDO);
+        e.command(cmd::UNDO);
+        e.command(cmd::UNDO);
+        e.command(cmd::UNDO);
+        assert_eq!(e.doc.brush(id).unwrap().verts, before.verts);
+    }
+
+    #[test]
+    fn arrows_nudge_the_origin_in_the_origin_tool() {
+        let mut e = editor();
+        e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0));
+        e.command(cmd::TOOL_ORIGIN);
+        let o = e.active_origin();
+        e.key(1, key::RIGHT, true, 0, false);
+        assert_eq!(e.active_origin(), o + v3(16.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn hold_hint_and_middle_pan_pins() {
+        let mut e = editor();
+        assert!(e.hold_hint().is_none());
+        e.drag = Some(Drag::Pan { view: 2, last: (0.0, 0.0) });
+        assert_eq!(e.hold_view(), Some(2));
+        assert_eq!(e.hold_hint().map(|h| (h.0, h.1)), Some((2, 5)));
     }
 
     #[test]
@@ -4537,7 +4963,13 @@ mod tests {
         let a = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0));
         let b = e.doc.add_brush(v3(48.0, 0.0, 0.0), v3(96.0, 32.0, 32.0));
         e.command(cmd::TOOL_SELECT);
-        // drag on empty space draws the box
+        // by default releasing the box selects right away
+        drag!(e, 1, sp(&e, 1, -16.0, -16.0), sp(&e, 1, 64.0, 48.0), 0);
+        assert!(e.sel_box.is_none());
+        assert_eq!(e.doc.selection.len(), 2);
+        e.doc.selection.clear();
+        // the old way (setting): the box waits for Enter
+        e.sel_box_wait = true;
         drag!(e, 1, sp(&e, 1, -16.0, -16.0), sp(&e, 1, 64.0, 48.0), 0);
         assert!(e.sel_box.is_some());
         assert_eq!(e.sel_box_catch().len(), 2, "by default the box takes what it touches");
@@ -4597,10 +5029,15 @@ mod tests {
         assert!(e.doc.selection.is_empty());
         e.command(cmd::UNDO);
         assert_eq!(e.doc.selection, vec![a]);
-        // in the 3D view D still flies
+        // in the 3D view D deselects too, unless flying
+        e.captured = true;
         e.key(0, key::D, true, 0, false);
         assert_eq!(e.doc.selection, vec![a]);
         e.key(0, key::D, false, 0, false);
+        e.captured = false;
+        e.key(0, key::D, true, 0, false);
+        assert!(e.doc.selection.is_empty());
+        e.command(cmd::UNDO);
         // Ctrl+D (the menu command) works anywhere
         e.command(cmd::DESELECT);
         assert!(e.doc.selection.is_empty());

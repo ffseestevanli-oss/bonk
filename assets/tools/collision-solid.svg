@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <g stroke="#ffffff" stroke-width="3" stroke-linejoin="round">
+    <rect x="8" y="26" width="22" height="30" fill="#e06666"/>
+    <rect x="30" y="34" width="26" height="22" fill="#6fa8dc"/>
+    <rect x="18" y="8" width="28" height="18" fill="#93c47d"/>
+  </g>
+</svg>

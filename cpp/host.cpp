@@ -77,6 +77,8 @@
 #include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
+#include <QWidgetAction>
+#include <QToolButton>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QStyleFactory>
@@ -176,6 +178,12 @@ const unsigned char *bonk_vtf_decode(const unsigned char *data, size_t len, int 
 const char *bonk_parse_vmt(const char *text);
 const char *bonk_clean_texture_path(const char *p);
 int bonk_tidy_groups();
+const char *bonk_hold_hint(int *out);
+void bonk_selection_options(int *out);
+void bonk_set_axis_lock(int on);
+void bonk_set_collision_solid(int on);
+void bonk_set_sel_box_wait(int on);
+void bonk_set_fov(float deg);
 }
 
 #ifndef BONK_VERSION
@@ -197,7 +205,8 @@ enum Cmd {
     CMD_TOOL_VERTEX, CMD_QUANTIZE, CMD_TOOL_BISECT, CMD_BISECT_MODE_SPLIT, CMD_BISECT_MODE_DELETE, CMD_BISECT_APPLY,
     CMD_TOOL_MANNEQUIN, CMD_TOOL_ORIGIN, CMD_TOOL_FACE, CMD_ORIGIN_TO_SEL_BOTTOM, CMD_ORIGIN_TO_SEL_CENTER, CMD_TOGGLE_MANNEQUINS,
     CMD_GROUP, CMD_UNGROUP, CMD_IGNORE_GROUPS, CMD_TOGGLE_NODRAW_2D, CMD_DESELECT, CMD_TOGGLE_EDGES_3D,
-    CMD_BISECT_MODE_DELETE_LARGER
+    CMD_BISECT_MODE_DELETE_LARGER, CMD_HIDE_TOGGLE, CMD_MIRROR_H, CMD_MIRROR_V, CMD_TOGGLE_AXIS_LOCK, CMD_TOGGLE_BOX_TOUCH,
+    CMD_TOGGLE_COLLISION_SOLID
 };
 
 const char *kViewNames[4] = {"camera", "top (x/y)", "front (y/z)", "side (x/z)"};
@@ -230,6 +239,16 @@ Qt::CursorShape cursorOf(unsigned c) {
     }
 }
 
+/// Lines Proton / Wine / the GPU driver print that have nothing to do with the model.
+bool protonChatter(const QString &l) {
+    if (l.isEmpty()) return false;
+    static const QRegularExpression wineDbg(QStringLiteral("^[0-9a-f]{4,}:(fixme|err|warn|trace):"));
+    return l.startsWith(QStringLiteral("Proton:")) || l.startsWith(QStringLiteral("fixme:")) || l.startsWith(QStringLiteral("wine:")) ||
+           l.startsWith(QStringLiteral("WARNING: radv")) || l.contains(QStringLiteral("ntsync"), Qt::CaseInsensitive) ||
+           l.startsWith(QStringLiteral("esync:")) || l.startsWith(QStringLiteral("fsync:")) || l.startsWith(QStringLiteral("ProtonFixes")) ||
+           l.startsWith(QStringLiteral("pressure-vessel")) || wineDbg.match(l).hasMatch();
+}
+
 // ------------------------------------------------------------------ preferences
 
 struct Prefs {
@@ -247,7 +266,13 @@ struct Prefs {
     bool shiftClone = true;      // hold Shift and move to clone the selection
     bool pinCursor = true;       // pin the cursor while holding S / Shift / R
     bool selInsideOnly = false;  // selection box takes only brushes fully inside it (default: what it touches)
-    int toolLayout = 0;          // 0 icons, 1 list, 2 compact list
+    int toolLayout = 1;          // 0 icons, 1 list (default since 0.12), 2 compact list
+    bool axisLock = true;        // G / Shift moves stay on one axis (Alt flips it while holding)
+    bool selBoxWait = false;     // the selection box waits for Enter (the old way)
+    bool collisionSolid = false; // View → Collision Look: Solid
+    int fov = 75;                // 3D view field of view
+    bool fovUnlocked = false;    // allow more than 120°
+    bool askResize = true;       // ask to shrink oversized textures when they're added
     int density = 0;             // 0 auto (compact under 1440p), 1 compact, 2 regular
     // Nodraw look
     int ndStyle = 0;             // 0 solid, 1 RGB cycle, 2 rainbow flow
@@ -275,7 +300,18 @@ struct Prefs {
         shiftClone = s.value("editing/holdShiftClone", true).toBool();
         pinCursor = s.value("editing/pinCursor", true).toBool();
         selInsideOnly = s.value("editing/selectionBoxInsideOnly", false).toBool(); // (0.11: replaces selectionBoxTouching)
-        toolLayout = s.value("tools/layout", 0).toInt();
+        toolLayout = s.value("tools/layout", 1).toInt();
+        if (!s.value("tools/layoutDefault012", false).toBool()) {
+            toolLayout = 1; // 0.12 makes the list the default layout: everyone starts there once
+            s.setValue("tools/layout", 1);
+            s.setValue("tools/layoutDefault012", true);
+        }
+        axisLock = s.value("editing/axisLock", true).toBool();
+        selBoxWait = s.value("editing/selectionBoxWaitsForEnter", false).toBool();
+        collisionSolid = s.value("view/collisionSolid", false).toBool();
+        fovUnlocked = s.value("view/fovUnlocked", false).toBool();
+        fov = qBound(30, s.value("view/fov", 75).toInt(), fovUnlocked ? 170 : 120);
+        askResize = s.value("textures/askResize", true).toBool();
         density = s.value("view/density", 0).toInt();
         ndStyle = s.value("nodraw/style", 0).toInt();
         ndColor = QColor(s.value("nodraw/color", "#dbbd40").toString());
@@ -316,6 +352,12 @@ struct Prefs {
         s.setValue("editing/selectionBoxInsideOnly", selInsideOnly);
         s.remove("editing/selectionBoxTouching");
         s.setValue("tools/layout", toolLayout);
+        s.setValue("editing/axisLock", axisLock);
+        s.setValue("editing/selectionBoxWaitsForEnter", selBoxWait);
+        s.setValue("view/collisionSolid", collisionSolid);
+        s.setValue("view/fov", fov);
+        s.setValue("view/fovUnlocked", fovUnlocked);
+        s.setValue("textures/askResize", askResize);
         s.setValue("view/density", density);
         s.setValue("nodraw/style", ndStyle);
         s.setValue("nodraw/color", ndColor.name());
@@ -336,6 +378,10 @@ struct Prefs {
         bonk_set_config(nudge, swapAlt, gridIntensity / 100.0f, float(bg.redF()), float(bg.greenF()), float(bg.blueF()), float(rotSnap), hammerKeys);
         bonk_set_shift_clone(shiftClone);
         bonk_set_sel_touch(!selInsideOnly);
+        bonk_set_axis_lock(axisLock);
+        bonk_set_sel_box_wait(selBoxWait);
+        bonk_set_collision_solid(collisionSolid);
+        bonk_set_fov(float(fov));
         bonk_set_nodraw_look(ndStyle, float(ndColor.redF()), float(ndColor.greenF()), float(ndColor.blueF()), ndIntensity / 100.0f,
                              float(ndWidth), ndSpeed / 100.0f, nd2d);
     }
@@ -680,7 +726,7 @@ public:
         // Editing
         auto *editing = new QGroupBox(QStringLiteral("Editing"));
         auto *ef = new QFormLayout(editing);
-        nudge = new QCheckBox(QStringLiteral("Arrow keys nudge the selection in 2D views"));
+        nudge = new QCheckBox(QStringLiteral("Arrow keys nudge the selection (any view, unless flying)"));
         swapAlt = new QCheckBox(QStringLiteral("Swap Alt-drag behavior"));
         swapAlt->setToolTip(QStringLiteral("Off: Alt+drag moves freely, Alt+Shift+drag stays on the grid.\n"
                                            "On: Alt+drag stays on the grid, Alt+Shift+drag moves freely."));
@@ -691,13 +737,21 @@ public:
                                               "Release Shift to place it, Esc cancels."));
         ef->addRow(nudge);
         ef->addRow(shiftClone);
-        pinCursor = new QCheckBox(QStringLiteral("Pin the cursor while holding S / Shift / R"));
+        pinCursor = new QCheckBox(QStringLiteral("Pin the cursor while holding G / S / Shift / R or panning"));
         pinCursor->setToolTip(QStringLiteral("The cursor stays put while you size, clone or rotate with a held key,\n"
                                              "so you never run out of room at the window edge. Turn off if cursor warping misbehaves."));
         ef->addRow(pinCursor);
         selTouch = new QCheckBox(QStringLiteral("Selection box only takes brushes fully inside it"));
         selTouch->setToolTip(QStringLiteral("Off (default): the box takes every brush it touches.\nOn: only brushes entirely inside the box."));
         ef->addRow(selTouch);
+        selWait = new QCheckBox(QStringLiteral("Selection box waits for Enter (the old way)"));
+        selWait->setToolTip(QStringLiteral("Off (default): letting go of the box selects what it takes, ready for G / S / R.\n"
+                                           "On: the box stays up to be adjusted; Enter selects (Ctrl+Enter adds)."));
+        ef->addRow(selWait);
+        axisLock = new QCheckBox(QStringLiteral("Lock G / Shift moves to one axis"));
+        axisLock->setToolTip(QStringLiteral("The move stays on the axis you move along most. Alt while holding flips it for that move.\n"
+                                            "Same as the Axis Lock button under Selection Options."));
+        ef->addRow(axisLock);
         ef->addRow(swapAlt);
         ef->addRow(QStringLiteral("Rotation snaps in steps of"), rotSnap);
         root->addWidget(editing);
@@ -731,6 +785,10 @@ public:
         tf->addRow(swatchTool);
         tf->addRow(applyOnClick);
         tf->addRow(startScreen);
+        askResize = new QCheckBox(QStringLiteral("Offer to resize images that aren't Source-sized when they're added"));
+        askResize->setToolTip(QStringLiteral("Textures imported from a Source game or addon are never asked about.\n"
+                                             "Compiling converts whatever it needs without asking either way."));
+        tf->addRow(askResize);
         root->addWidget(toolsBox);
 
         // Nodraw look
@@ -876,6 +934,9 @@ public:
         QObject::connect(shiftClone, &QCheckBox::toggled, this, [this](bool v) { p.shiftClone = v; changed(); });
         QObject::connect(pinCursor, &QCheckBox::toggled, this, [this](bool v) { p.pinCursor = v; changed(); });
         QObject::connect(selTouch, &QCheckBox::toggled, this, [this](bool v) { p.selInsideOnly = v; changed(); });
+        QObject::connect(selWait, &QCheckBox::toggled, this, [this](bool v) { p.selBoxWait = v; changed(); });
+        QObject::connect(axisLock, &QCheckBox::toggled, this, [this](bool v) { p.axisLock = v; changed(); });
+        QObject::connect(askResize, &QCheckBox::toggled, this, [this](bool v) { p.askResize = v; changed(); });
         QObject::connect(budTris, &QSpinBox::valueChanged, this, [this](int v) { if (!syncing) { p.budTris = v; changed(); } });
         QObject::connect(budVerts, &QSpinBox::valueChanged, this, [this](int v) { if (!syncing) { p.budVerts = v; changed(); } });
         QObject::connect(budMats, &QSpinBox::valueChanged, this, [this](int v) { if (!syncing) { p.budMats = v; changed(); } });
@@ -952,7 +1013,7 @@ private:
     QComboBox *toolLayout, *density, *ndStyle, *ndWidth;
     QPushButton *ndColor;
     QSlider *ndIntensity, *ndSpeed;
-    QCheckBox *nd2d, *selTouch, *exportAfter;
+    QCheckBox *nd2d, *selTouch, *exportAfter, *selWait, *axisLock, *askResize;
     QLineEdit *gmodPath;
     QComboBox *proton;
     QSpinBox *budTris, *budVerts, *budMats, *budPieces;
@@ -980,6 +1041,9 @@ private:
         shiftClone->setChecked(v.shiftClone);
         pinCursor->setChecked(v.pinCursor);
         selTouch->setChecked(v.selInsideOnly);
+        selWait->setChecked(v.selBoxWait);
+        axisLock->setChecked(v.axisLock);
+        askResize->setChecked(v.askResize);
         budTris->setValue(v.budTris);
         budVerts->setValue(v.budVerts);
         budMats->setValue(v.budMats);
@@ -1047,7 +1111,11 @@ public:
     struct Label { float x, y; int align; QString s; QColor c; };
     std::vector<Label> labels;
     QElapsedTimer gridFlash; // Alt+wheel: show the new grid size for a moment
+    QElapsedTimer toolFlash; // mouse 4 / 5: the new tool's icon by the cursor
+    QString toolFlashIcon;
+    QPointF toolFlashAt;
     int wheelAcc = 0;
+    int cursorKind = -1; // the decorated cursor in use (see MainWindow::decorateCursor)
 
     static void textCb(void *ctx, float x, float y, int align, const char *s, unsigned rgba) {
         auto *v = static_cast<Viewport *>(ctx);
@@ -1077,6 +1145,9 @@ protected:
     void initializeGL() override { bonk_view_init(id, getProc); }
     void resizeGL(int w, int h) override { bonk_view_resize(id, float(w), float(h)); }
     void paintGL() override;
+public:
+    void paintOverlay(QPainter &p);
+protected:
     void mousePressEvent(QMouseEvent *e) override;
     void mouseReleaseEvent(QMouseEvent *e) override;
     void mouseMoveEvent(QMouseEvent *e) override;
@@ -1220,6 +1291,12 @@ const ToolDef kModelTools[] = {
     {"face", "Paint", "Face Select & Paint: click faces to select, right-click to paint, drag to move the texture", CMD_TOOL_FACE, 6, "6", "6"},
     {"texture", "Texture", "Texture Picker", -1, -1, "T", "A"},
 };
+/// Toggles: lit while on
+const ToolDef kSelectionOptions[] = {
+    {"ignore-groups", "Ignore Groups", "Ignore Groups: clicks pick single brushes instead of their whole group", CMD_IGNORE_GROUPS, -1, "", ""},
+    {"box-touch", "Box: Touching", "Selection box", CMD_TOGGLE_BOX_TOUCH, -1, "", ""},
+    {"axis-lock", "Axis Lock", "Lock movement to axis: G / Shift moves stay on the axis you move along most", CMD_TOGGLE_AXIS_LOCK, -1, "", ""},
+};
 
 /// Left-hand panel: Brush Manipulation, Entities and Model Tools sections.
 /// Layouts: 0 icons (three per row, sized to the pane; short rows stretch),
@@ -1302,6 +1379,7 @@ public:
         section("Brush Manipulation", kBrushTools, 4);
         section("Entities", kEntityTools, 1);
         section("Model Tools", kModelTools, 3);
+        section("Selection Options", kSelectionOptions, 3);
         v->addStretch(1);
         resizeButtons();
         if (lastSync) lastSync();
@@ -1311,11 +1389,33 @@ public:
 
     void sync(int tool, int bisectMode, bool hammer, bool grey, bool textureOpen) {
         lastSync = [this, tool, bisectMode, hammer, grey, textureOpen] { sync(tool, bisectMode, hammer, grey, textureOpen); };
+        int opts[4] = {0, 1, 1, 0};
+        bonk_selection_options(opts);
         for (Entry &e : entries) {
             ToolButton *b = e.button;
             const ToolDef &d = e.def;
             b->active = d.tool >= 0 ? d.tool == tool : textureOpen;
             b->grey = grey;
+            if (d.cmd == CMD_IGNORE_GROUPS || d.cmd == CMD_TOGGLE_BOX_TOUCH || d.cmd == CMD_TOGGLE_AXIS_LOCK) {
+                QString tip = QString::fromUtf8(d.name);
+                if (d.cmd == CMD_IGNORE_GROUPS) {
+                    b->active = opts[0];
+                    tip += QStringLiteral(" (Ctrl+W)");
+                } else if (d.cmd == CMD_TOGGLE_BOX_TOUCH) {
+                    b->active = opts[1];
+                    b->iconName = QString::fromLatin1(opts[1] ? "box-touch" : "box-inside");
+                    b->label = opts[1] ? QStringLiteral("Box: Touching") : QStringLiteral("Box: Inside");
+                    tip = opts[1] ? QStringLiteral("Selection box takes everything it touches.\nClick: only what's fully inside")
+                                  : QStringLiteral("Selection box takes only what's fully inside.\nClick: everything it touches");
+                } else {
+                    b->active = opts[2];
+                    tip += QStringLiteral(".\nAlt while holding G / Shift flips it for that move");
+                }
+                b->badge.clear();
+                b->setToolTip(tip);
+                b->update();
+                continue;
+            }
             b->badge = QString::fromUtf8(hammer ? d.hkey : d.key);
             QString keys;
             if (d.cmd == -1) keys = hammer ? QStringLiteral("T or Shift+A") : QStringLiteral("T");
@@ -1382,6 +1482,7 @@ private:
 class LayersPane : public QWidget {
 public:
     std::function<void(unsigned)> changed;
+    std::function<void()> toggleCollisionLook;
 
     explicit LayersPane(QWidget *parent = nullptr) : QWidget(parent) {
         setMinimumWidth(gCompact ? 170 : 200);
@@ -1416,6 +1517,22 @@ public:
         gr->addWidget(gl);
         gr->addWidget(ghost, 1);
         v->addWidget(ghostRow);
+        // View → Collision Look, by the ghost slider: orange glass or solid pieces in their own colors
+        auto *lookRow = new QHBoxLayout;
+        lookRow->setContentsMargins(0, 0, 0, 0);
+        auto *ll = new QLabel(QStringLiteral("Collision look"));
+        lookBtn = new QToolButton;
+        lookBtn->setCheckable(true);
+        lookBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        lookBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        lookBtn->setToolTip(QStringLiteral("Ghosted: collision is see-through orange glass.\n"
+                                           "Solid: each collision piece is opaque in its own color, so you can tell them apart.\n"
+                                           "Only changes how it looks (View → Collision Look)."));
+        ll->setToolTip(lookBtn->toolTip());
+        QObject::connect(lookBtn, &QToolButton::clicked, this, [this] { if (toggleCollisionLook) toggleCollisionLook(); });
+        lookRow->addWidget(ll);
+        lookRow->addWidget(lookBtn, 1);
+        v->addLayout(lookRow);
         bonk_set_ghost_opacity(ghost->value() / 100.0f);
 
         auto *addRow = new QHBoxLayout;
@@ -1461,8 +1578,13 @@ public:
             if (col != 1) return;
             int kind = it->data(1, Qt::UserRole + 3).toInt();
             int id = it->data(1, Qt::UserRole).toInt();
-            if (kind == 1) op(3, id);
-            else if (kind == 2) gop(0, id);
+            if (kind == 1) {
+                keepGroup = 0;
+                op(3, id);
+            } else if (kind == 2) {
+                keepGroup = id; // stays highlighted after the tree is rebuilt
+                gop(0, id);
+            }
         });
         QObject::connect(tree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *it, int col) {
             if (col != 1) return;
@@ -1483,16 +1605,17 @@ public:
             int id = it ? it->data(1, Qt::UserRole).toInt() : 0;
             QString name = it ? it->data(1, Qt::UserRole + 1).toString() : QString();
             QMenu m;
+            // a Visual / Collision heading with one layer under it names that layer
+            if (it && kind == 0 && it->childCount() == 1 && it->child(0)->data(1, Qt::UserRole + 3).toInt() == 1) {
+                QTreeWidgetItem *only = it->child(0);
+                const int lid = only->data(1, Qt::UserRole).toInt();
+                const QString lname = only->data(1, Qt::UserRole + 1).toString();
+                m.addAction(QStringLiteral("Set Layer Name…\tF2"), [this, lid, lname] { renameLayer(lid, lname); });
+                m.addSeparator();
+            }
             if (kind == 1) {
                 m.addAction(QStringLiteral("Make Active"), [this, id] { op(3, id); });
-                m.addAction(QStringLiteral("Rename…"), [this, id, name] {
-                    bool ok = false;
-                    QString n = QInputDialog::getText(this, QStringLiteral("Rename layer"), QStringLiteral("Name:"), QLineEdit::Normal, name, &ok);
-                    if (ok) {
-                        QByteArray b = n.toUtf8();
-                        emitChanged(bonk_layer_rename(id, b.constData()));
-                    }
-                });
+                m.addAction(QStringLiteral("Set Layer Name…\tF2"), [this, id, name] { renameLayer(id, name); });
                 m.addAction(QStringLiteral("Select Contents"), [this, id] { op(6, id); });
                 QAction *own = m.addAction(QStringLiteral("Own Origin"), [this, id] { op(9, id); });
                 own->setCheckable(true);
@@ -1512,7 +1635,7 @@ public:
             } else if (kind == 2) {
                 m.addAction(QStringLiteral("Select"), [this, id] { gop(0, id); });
                 m.addAction(QStringLiteral("Duplicate"), [this, id] { gop(1, id); });
-                m.addAction(QStringLiteral("Rename…"), [this, id, name] { renameGroup(id, name); });
+                m.addAction(QStringLiteral("Set Group Name…\tF2"), [this, id, name] { renameGroup(id, name); });
                 m.addSeparator();
                 m.addAction(QStringLiteral("Ungroup"), [this, id] { gop(2, id); });
                 m.addAction(QStringLiteral("Delete Group and Its Brushes"), [this, id] { gop(3, id); });
@@ -1522,6 +1645,28 @@ public:
             m.addAction(QStringLiteral("Add Collision Layer"), [this] { op(1, 0); });
             m.exec(tree->viewport()->mapToGlobal(pos));
         });
+    }
+
+    /// F2: name what's highlighted (a layer, a group, or the only layer under a heading).
+    void renameCurrent() {
+        QTreeWidgetItem *it = tree->currentItem();
+        if (!it) return;
+        int kind = it->data(1, Qt::UserRole + 3).toInt();
+        if (kind == 0 && it->childCount() == 1) {
+            it = it->child(0);
+            kind = it->data(1, Qt::UserRole + 3).toInt();
+        }
+        const int id = it->data(1, Qt::UserRole).toInt();
+        const QString name = it->data(1, Qt::UserRole + 1).toString();
+        if (kind == 1) renameLayer(id, name);
+        else if (kind == 2) renameGroup(id, name);
+    }
+
+    void syncCollisionLook(bool solid) {
+        lookBtn->setChecked(solid);
+        lookBtn->setText(solid ? QStringLiteral("Solid") : QStringLiteral("Ghosted"));
+        QString ic = toolIconPath(solid ? QStringLiteral("collision-solid") : QStringLiteral("collision-ghost"));
+        lookBtn->setIcon(ic.isEmpty() ? QIcon() : QIcon(ic));
     }
 
     /// Developer aid: click a layer's Show box.
@@ -1639,7 +1784,11 @@ public:
         for (QTreeWidgetItem *h : heads) h->setExpanded(true);
         for (auto &li : layerItems) li.second->setExpanded(true);
         for (auto &gi : groupItems) gi.second->setExpanded(openGroups.contains(gi.first));
-        if (sel) tree->setCurrentItem(sel);
+        // a group you clicked stays highlighted (not its layer)
+        auto kg = keepGroup ? groupItems.find(keepGroup) : groupItems.end();
+        if (kg != groupItems.end()) tree->setCurrentItem(kg->second);
+        else if (sel) tree->setCurrentItem(sel);
+        if (kg == groupItems.end()) keepGroup = 0;
         tree->setUpdatesEnabled(true);
         rebuilding = false;
     }
@@ -1648,6 +1797,8 @@ private:
     QTreeWidget *tree;
     QWidget *ghostRow;
     QSlider *ghost;
+    QToolButton *lookBtn;
+    int keepGroup = 0;
     unsigned long long lastRev = 0;
     bool rebuilding = false;
     QSet<int> openGroups;
@@ -1670,6 +1821,14 @@ private:
     }
     void op(int o, int id) { emitChanged(bonk_layer_op(o, id)); }
     void gop(int o, int id) { emitChanged(bonk_group_op(o, id)); }
+    void renameLayer(int id, const QString &cur) {
+        bool ok = false;
+        QString n = QInputDialog::getText(this, QStringLiteral("Set layer name"), QStringLiteral("Name:"), QLineEdit::Normal, cur, &ok);
+        if (ok && !n.trimmed().isEmpty()) {
+            QByteArray b = n.trimmed().toUtf8();
+            emitChanged(bonk_layer_rename(id, b.constData()));
+        }
+    }
     void renameGroup(int id, const QString &cur) {
         bool ok = false;
         QString n = QInputDialog::getText(this, QStringLiteral("Rename group"), QStringLiteral("Name (e.g. Door, Window):"), QLineEdit::Normal, cur, &ok);
@@ -1903,7 +2062,7 @@ public:
         auto *v = new QVBoxLayout(this);
         auto *form = new QFormLayout;
         name = new QLineEdit;
-        name->setPlaceholderText(QStringLiteral("housepack"));
+        name->setPlaceholderText(QStringLiteral("Name of your project, e.g. My Model, My Pack"));
         location = new QLineEdit(defaultProjectsDir());
         auto *browse = new QPushButton(QStringLiteral("Browse…"));
         auto *locRow = new QHBoxLayout;
@@ -2800,6 +2959,8 @@ public:
         for (const QString &f : wf) if (!files.contains(f)) watcher.removePath(f);
         for (const QString &d : dirs) if (!wd.contains(d)) watcher.addPath(d);
         for (const QString &f : files) if (!wf.contains(f)) watcher.addPath(f);
+        // paused (an import is writing files) or the setting is off: no question now
+        if (paused || !askResize) fresh.clear();
         for (const QString &r : fresh) asked.insert(root + QLatin1Char('/') + r);
         if (unreadable && retries < 5) {
             ++retries;
@@ -2874,11 +3035,28 @@ public:
         for (const QString &f : files) asked.remove(QFileInfo(f).absoluteFilePath());
     }
 
+    /// Never ask about these (textures that came from a working Source game or addon).
+    void markAsked(const QStringList &files) {
+        for (const QString &f : files) asked.insert(QFileInfo(f).absoluteFilePath());
+    }
+
+    /// Hold the watcher's scans while an import writes many files; resuming
+    /// scans once, so a batch gets (at most) one question.
+    void pauseScans(bool on) {
+        paused = on;
+        watcher.blockSignals(on);
+        if (on) debounce.stop();
+        else scan();
+    }
+
+    bool askResize = true;
+
 private:
     const Project *project = nullptr;
     QFileSystemWatcher watcher;
     QTimer debounce;
     QSet<QString> asked; // files already offered a resize this session
+    bool paused = false;
     int retries = 0;
 };
 
@@ -3821,6 +3999,8 @@ public:
     QLabel *status;
     QAction *toolSelect, *toolBlock, *toolVertex, *toolBisect, *toolMannequin, *toolOrigin, *toolFace;
     QAction *texAction = nullptr, *showMannequins = nullptr, *ignoreGroupsAct = nullptr, *nodraw2dAct = nullptr, *edges3dAct = nullptr;
+    QAction *lookGhost = nullptr, *lookSolid = nullptr;
+    QSpinBox *fovSpin = nullptr;
     ToolPanel *panel = nullptr;
     LayersPane *layers = nullptr;
     TexturePicker *picker = nullptr;
@@ -3833,6 +4013,7 @@ public:
     QAction *projectSettingsAct = nullptr, *closeProjectAct = nullptr;
     bool captured = false;
     Prefs prefs;
+    QElapsedTimer saveFlash; // "Project saved!" blink in every view
     QString filePath;
     // Cursor pinned during a hold-key action (S / Shift / R): the view, where
     // the cursor is frozen, and the virtual position the mouse has moved to.
@@ -3851,7 +4032,11 @@ public:
             if (picker) picker->syncCurrent();
         }
         unsigned cur = (flags >> 8) & 0xff;
-        if (cur && src && !captured) src->setCursor(cursorOf(cur));
+        if (cur && src && !captured) {
+            src->setCursor(cursorOf(cur));
+            src->cursorKind = -1;
+        }
+        if (src && !captured) decorateCursor(src);
         status->setText(QString::fromUtf8(bonk_status()));
         updateTitle();
         if (layers) layers->refresh();
@@ -3879,7 +4064,82 @@ public:
         }
     }
 
-    void command(int c) { handle(bonk_command(c)); }
+    /// Cursor badges: a paintbrush in Face Select & Paint, and the held key's
+    /// action (G move, Shift copy, R rotate, S size) while one is held.
+    void decorateCursor(Viewport *v) {
+        int hint[2] = {-1, 0};
+        bonk_hold_hint(hint);
+        int kind = 0;
+        if (hint[1] >= 1 && hint[1] <= 4 && hint[0] == v->id) kind = hint[1];
+        else if (bonk_tool() == 6 && (v->cursor().shape() == Qt::ArrowCursor || v->cursorKind == 6)) kind = 6;
+        if (kind == v->cursorKind) return;
+        if (kind == 0) {
+            if (v->cursorKind > 0) v->setCursor(Qt::ArrowCursor);
+            v->cursorKind = 0;
+            return;
+        }
+        v->cursorKind = kind;
+        v->setCursor(badgeCursor(kind));
+    }
+
+    static QCursor badgeCursor(int kind) {
+        static std::map<int, QCursor> cache;
+        auto it = cache.find(kind);
+        if (it != cache.end()) return it->second;
+        const int S = 40;
+        QPixmap pm(S, S);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        // a plain arrow
+        QPolygonF arrow({QPointF(1, 1), QPointF(1, 17), QPointF(5.5, 13), QPointF(8.5, 19.5), QPointF(11, 18.5), QPointF(8, 12), QPointF(13.5, 12)});
+        p.setPen(QPen(Qt::black, 1.2));
+        p.setBrush(Qt::white);
+        p.drawPolygon(arrow);
+        const QRectF badge(17, 17, 21, 21);
+        if (kind == 6) {
+            QString ic = toolIconPath(QStringLiteral("paint-cursor"));
+            if (!ic.isEmpty()) p.drawPixmap(badge.toRect(), QIcon(ic).pixmap(QSize(42, 42)));
+        } else {
+            static const char *letters[5] = {"", "G", "⧉", "R", "S"};
+            static const QColor cols[5] = {QColor(), QColor(70, 140, 230), QColor(80, 180, 110), QColor(220, 140, 50), QColor(200, 90, 200)};
+            p.setPen(QPen(QColor(0, 0, 0, 200), 1.2));
+            p.setBrush(cols[kind]);
+            p.drawRoundedRect(badge.adjusted(1, 1, -1, -1), 5, 5);
+            QFont f;
+            f.setBold(true);
+            f.setPixelSize(13);
+            p.setFont(f);
+            p.setPen(Qt::white);
+            p.drawText(badge, Qt::AlignCenter, QString::fromUtf8(letters[kind]));
+        }
+        p.end();
+        return cache[kind] = QCursor(pm, 1, 1);
+    }
+
+    /// Mouse 4 / 5: Select / Face Select & Paint, with the tool's icon flashing by the cursor.
+    void quickTool(Viewport *v, bool paint, QPointF at) {
+        command(paint ? CMD_TOOL_FACE : CMD_TOOL_SELECT);
+        v->toolFlash.start();
+        v->toolFlashIcon = paint ? QStringLiteral("face") : QStringLiteral("select");
+        v->toolFlashAt = at;
+        v->update();
+        for (int ms : {120, 300, 500, 720}) QTimer::singleShot(ms, v, [v] { v->update(); });
+    }
+
+    void command(int c) {
+        handle(bonk_command(c));
+        if (c == CMD_TOGGLE_BOX_TOUCH || c == CMD_TOGGLE_AXIS_LOCK || c == CMD_TOGGLE_COLLISION_SOLID) {
+            // remembered between sessions
+            int o[4] = {0, 1, 1, 0};
+            bonk_selection_options(o);
+            prefs.selInsideOnly = !o[1];
+            prefs.axisLock = o[2];
+            prefs.collisionSolid = o[3];
+            prefs.save();
+            syncTool();
+        }
+    }
 
     /// T: show the Texture Picker (or bring its tab to the front); hide it if it's already in view.
     void toggleTexture() {
@@ -3921,6 +4181,11 @@ public:
         if (ignoreGroupsAct) ignoreGroupsAct->setChecked(bonk_view_flags() & 1);
         if (nodraw2dAct) nodraw2dAct->setChecked(prefs.nd2d);
         if (edges3dAct) edges3dAct->setChecked(bonk_show_edges());
+        if (lookGhost) {
+            lookGhost->setChecked(!prefs.collisionSolid);
+            lookSolid->setChecked(prefs.collisionSolid);
+        }
+        if (layers) layers->syncCollisionLook(prefs.collisionSolid);
         if (panel) panel->sync(t, bmode, prefs.hammerKeys, prefs.greyTools, pickerDock && pickerDock->isVisible());
         if (picker) picker->setTool(t);
         if (prefs.rememberBisect && bmode != prefs.bisectMode) {
@@ -4013,7 +4278,9 @@ public:
         rebuildRecentModels();
         statusBar()->showMessage(QStringLiteral("Saved %1 (models/%2.mdl). Bonk!").arg(QFileInfo(path).fileName(),
                                  QString::fromUtf8(bonk_model_path())), 4000);
+        saveFlash.start();
         handle(0);
+        repaintAll();
         return true;
     }
 
@@ -4269,6 +4536,7 @@ public:
         }
         enum { Ask, ReplaceAll, KeepAll, SkipAll } clash = Ask;
         QStringList failed, done;
+        library.pauseScans(true);
         for (auto &j : jobs) {
             QString dest = j.second;
             if (QFileInfo(j.first).absoluteFilePath() == QFileInfo(dest).absoluteFilePath()) continue; // already there
@@ -4305,8 +4573,8 @@ public:
             done << dest;
         }
         if (!failed.isEmpty()) QMessageBox::warning(this, QStringLiteral("Import"), QStringLiteral("Couldn't copy: %1").arg(failed.join(QStringLiteral(", "))));
-        library.forget(done); // replaced files get the resize offer again
-        library.scan();       // offers to resize the ones that need it
+        library.forget(done);       // replaced files get the resize offer again
+        library.pauseScans(false);  // one scan: one question for the whole batch
         statusBar()->showMessage(QStringLiteral("Imported %1 texture%2%3").arg(done.size()).arg(done.size() == 1 ? QString() : QStringLiteral("s"))
                                  .arg(g.isEmpty() ? QString() : QStringLiteral(" into ") + g), 4000);
     }
@@ -4452,6 +4720,7 @@ public:
         prog.setWindowModality(Qt::WindowModal);
         prog.setMinimumDuration(300);
         importOver = &prog;
+        library.pauseScans(true);
         struct Reset { QWidget **p; ~Reset() { *p = nullptr; } } resetOver{&importOver};
         int clash = -1, imported = 0;
         QStringList missing, problems, written;
@@ -4500,8 +4769,8 @@ public:
         // faces of the open model follow renames (keep-both copies, cleaned names)
         int moved = 0;
         for (const auto &r : renamed) moved += bonk_rename_material(r.first.toUtf8().constData(), r.second.toUtf8().constData());
-        library.forget(written);
-        library.scan();
+        library.markAsked(written); // valid Source textures: never offer a resize
+        library.pauseScans(false);
         handle(F_R3D | F_R2D | F_TOOL);
         QString msg = QStringLiteral("Imported <b>%1</b> texture%2 from %3 into assets/Textures.")
                           .arg(imported).arg(imported == 1 ? QString() : QStringLiteral("s"), src.describe().toHtmlEscaped());
@@ -4976,7 +5245,10 @@ public:
             while ((nl = partial.indexOf('\n')) >= 0) {
                 const QString l = QString::fromLocal8Bit(partial.left(nl)).trimmed();
                 partial.remove(0, nl + 1);
-                const bool err = l.contains(QStringLiteral("ERROR"), Qt::CaseInsensitive);
+                if (protonChatter(l)) continue;
+                // studiomdl writes its real errors in capitals ("ERROR: …")
+                static const QRegularExpression errRe(QStringLiteral("\\bERROR\\b"));
+                const bool err = errRe.match(l).hasMatch();
                 if (err) job.errors << l;
                 if (compileWin) compileWin->line(l, err);
             }
@@ -5501,6 +5773,7 @@ public:
     void configure() {
         auto refresh = [this] {
             prefs.apply();
+            library.askResize = prefs.askResize;
             picker->applyOnClick = prefs.applyOnClick;
             picker->switchOnClick = prefs.swatchSwitchesTool;
             if (panel && panel->layoutMode() != prefs.toolLayout) panel->setLayoutMode(prefs.toolLayout);
@@ -5560,6 +5833,11 @@ void Viewport::paintGL() {
     labels.clear();
     bonk_view_paint(id, float(width()), float(height()), float(devicePixelRatioF()), &Viewport::textCb, this);
     QPainter p(this);
+    paintOverlay(p);
+}
+
+/// Everything Qt draws over the GL picture: labels, flashes, the hold hint.
+void Viewport::paintOverlay(QPainter &p) {
     p.setRenderHint(QPainter::TextAntialiasing);
     QFont f = font();
     f.setPointSizeF(9.0);
@@ -5580,20 +5858,71 @@ void Viewport::paintGL() {
         p.setPen(l.c);
         p.drawText(QPointF(x, l.y), l.s);
     }
-    if (gridFlash.isValid() && gridFlash.elapsed() < 900) {
+    // big outlined label in the top-right corner (Alt+wheel grid size, "Project saved!")
+    auto cornerLabel = [&](const QString &t, double alpha) {
         QFont gf = font();
         gf.setBold(true);
         gf.setPointSizeF(gCompact ? 13 : 16);
         p.setFont(gf);
-        const QString t = QStringLiteral("Grid %1").arg(double(bonk_grid()));
         QFontMetrics gm(gf);
         QRect r(width() - gm.horizontalAdvance(t) - 26, 8, gm.horizontalAdvance(t) + 16, gm.height() + 8);
-        p.setPen(Qt::NoPen);
-        p.setBrush(QColor(0, 0, 0, 150));
-        p.drawRoundedRect(r, 6, 6);
-        p.setPen(Qt::white);
+        QColor sh = shadow, fg = strong;
+        sh.setAlphaF(sh.alphaF() * alpha);
+        fg.setAlphaF(alpha);
+        p.setPen(sh);
+        for (QPoint o : {QPoint(1, 1), QPoint(-1, 1), QPoint(1, -1), QPoint(-1, -1), QPoint(2, 2)}) p.drawText(r.translated(o), Qt::AlignCenter, t);
+        p.setPen(fg);
         p.drawText(r, Qt::AlignCenter, t);
         p.setFont(f);
+    };
+    if (gridFlash.isValid() && gridFlash.elapsed() < 900)
+        cornerLabel(QStringLiteral("Grid %1").arg(double(bonk_grid())), 1.0); // no dimming: just the label
+    // Saved: a dark tint blinks over every view and fades out
+    if (mw->saveFlash.isValid() && mw->saveFlash.elapsed() < 1400) {
+        const double t = mw->saveFlash.elapsed() / 1400.0;
+        const double tint = t < 0.12 ? t / 0.12 : 1.0 - (t - 0.12) / 0.88;
+        p.fillRect(rect(), QColor(0, 0, 0, int(110 * std::clamp(tint, 0.0, 1.0))));
+        if (id == 0) cornerLabel(QStringLiteral("Project saved!"), std::clamp(1.0 - std::max(0.0, t - 0.6) / 0.4, 0.0, 1.0));
+    }
+    // Mouse 4 / 5 switched tools: the tool's icon by the cursor, fading out
+    if (toolFlash.isValid() && toolFlash.elapsed() < 700) {
+        const double t = toolFlash.elapsed() / 700.0;
+        QString ic = toolIconPath(toolFlashIcon);
+        if (!ic.isEmpty()) {
+            const int sz = 30;
+            QRectF r(toolFlashAt.x() + 14, toolFlashAt.y() - sz - 6 - 10 * t, sz, sz);
+            p.setOpacity(1.0 - t);
+            p.setPen(Qt::NoPen);
+            p.setBrush(palette().color(QPalette::Highlight));
+            p.setRenderHint(QPainter::Antialiasing);
+            p.drawRoundedRect(r.adjusted(-4, -4, 4, 4), 6, 6);
+            p.drawPixmap(r.toRect(), QIcon(ic).pixmap(QSize(sz, sz), devicePixelRatioF()));
+            p.setOpacity(1.0);
+        }
+    }
+    // What the held key is doing: bottom-left of this view, with a slim bar along the bottom
+    {
+        int hint[2] = {-1, 0};
+        const QString h = QString::fromUtf8(bonk_hold_hint(hint));
+        if (hint[0] == id && !h.isEmpty()) {
+            static const QColor cols[6] = {QColor(), QColor(70, 140, 230), QColor(80, 180, 110), QColor(220, 140, 50), QColor(200, 90, 200), QColor(130, 130, 150)};
+            const QColor accent = cols[std::clamp(hint[1], 0, 5)];
+            QFont hf = font();
+            hf.setPointSizeF(gCompact ? 8.5 : 9.5);
+            p.setFont(hf);
+            QFontMetrics hm(hf);
+            const int bar = 3, pad = 6;
+            QString text = hm.elidedText(h, Qt::ElideRight, width() - 24);
+            QRect r(8, height() - bar - hm.height() - 2 * pad - 6, hm.horizontalAdvance(text) + 2 * pad, hm.height() + 2 * pad);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(0, 0, 0, 170));
+            p.drawRoundedRect(r, 5, 5);
+            p.fillRect(QRect(0, height() - bar, width(), bar), accent);
+            p.setPen(Qt::white);
+            p.drawText(r, Qt::AlignCenter, text);
+            p.setFont(f);
+        }
     }
     if (id == 0 && bonk_editing_collision()) {
         // editing the physics hull: say so, loudly
@@ -5616,11 +5945,17 @@ void Viewport::paintGL() {
 
 void Viewport::mousePressEvent(QMouseEvent *e) {
     if (!mw->captured) setFocus(Qt::MouseFocusReason);
+    if (e->button() == Qt::BackButton || e->button() == Qt::ForwardButton) {
+        mw->quickTool(this, e->button() == Qt::ForwardButton, e->position());
+        e->accept();
+        return;
+    }
     QPointF p = mw->pinView == id ? mw->pinVirt : e->position();
     mw->handle(bonk_mouse(id, 0, p.x(), p.y(), int(e->button()), modsOf(e->modifiers())), this);
 }
 
 void Viewport::mouseReleaseEvent(QMouseEvent *e) {
+    if (e->button() == Qt::BackButton || e->button() == Qt::ForwardButton) return;
     QPointF p = mw->pinView == id ? mw->pinVirt : e->position();
     mw->handle(bonk_mouse(id, 1, p.x(), p.y(), int(e->button()), modsOf(e->modifiers())), this);
 }
@@ -5733,6 +6068,7 @@ MainWindow::MainWindow() {
     };
     layers = new LayersPane;
     layers->changed = [this](unsigned f) { handle(f | F_R3D | F_R2D); };
+    layers->toggleCollisionLook = [this] { command(CMD_TOGGLE_COLLISION_SOLID); };
     picker = new TexturePicker(&library);
     picker->changed = [this](unsigned f) { handle(f | F_R3D | F_R2D); };
     picker->importReq = [this] { importTextures(); };
@@ -5749,6 +6085,7 @@ MainWindow::MainWindow() {
         syncTextureAlpha();
         repaintAll();
     };
+    library.askResize = prefs.askResize;
     library.oversized = [this](const QStringList &r) { QTimer::singleShot(0, this, [this, r] { offerResize(r); }); };
     auto dock = [this](const QString &title, const char *name, QWidget *w) {
         auto *d = new QDockWidget(title, this);
@@ -5860,7 +6197,13 @@ MainWindow::MainWindow() {
     ignoreGroupsAct = act(edit, QStringLiteral("&Ignore Groups"), QKeySequence(Qt::CTRL | Qt::Key_W), CMD_IGNORE_GROUPS);
     ignoreGroupsAct->setCheckable(true);
     edit->addSeparator();
-    act(edit, QStringLiteral("&Deselect (D in a 2D view)"), QKeySequence(Qt::CTRL | Qt::Key_D), CMD_DESELECT);
+    act(edit, QStringLiteral("&Deselect (D in a view)"), QKeySequence(Qt::CTRL | Qt::Key_D), CMD_DESELECT);
+    // single keys are handled by the views (they need to know which view the mouse is in)
+    act(edit, QStringLiteral("&Hide Selection / Show Hidden\tH"), QKeySequence(), CMD_HIDE_TOGGLE);
+    act(edit, QStringLiteral("&Mirror Horizontally\t,"), QKeySequence(), CMD_MIRROR_H);
+    act(edit, QStringLiteral("Mirror &Vertically\t."), QKeySequence(), CMD_MIRROR_V);
+    edit->addSeparator();
+    fn(edit, QStringLiteral("Set &Layer Name…"), QKeySequence(Qt::Key_F2), [this] { if (layers) layers->renameCurrent(); });
     fn(edit, QStringLiteral("&Tidy Nested Groups"), QKeySequence(), [this] {
         const int n = bonk_tidy_groups();
         handle(F_R3D | F_R2D);
@@ -5892,6 +6235,45 @@ MainWindow::MainWindow() {
     });
     edges3dAct->setCheckable(true);
     bonk_set_show_edges(QSettings().value("view/edges3d", true).toBool());
+    QMenu *look = view->addMenu(QStringLiteral("&Collision Look"));
+    auto *lookGroup = new QActionGroup(this);
+    lookGhost = fn(look, QStringLiteral("&Ghosted (orange glass)"), QKeySequence(), [this] { if (prefs.collisionSolid) command(CMD_TOGGLE_COLLISION_SOLID); });
+    lookSolid = fn(look, QStringLiteral("&Solid (each piece its own color)"), QKeySequence(), [this] { if (!prefs.collisionSolid) command(CMD_TOGGLE_COLLISION_SOLID); });
+    for (QAction *a : {lookGhost, lookSolid}) {
+        a->setCheckable(true);
+        lookGroup->addAction(a);
+    }
+    view->addSeparator();
+    {
+        // 3D field of view: [75 ▲▼], up to 120 unless unlocked
+        auto *w = new QWidget;
+        auto *h = new QHBoxLayout(w);
+        h->setContentsMargins(28, 2, 8, 2);
+        h->addWidget(new QLabel(QStringLiteral("3D field of view")));
+        fovSpin = new QSpinBox;
+        fovSpin->setRange(30, prefs.fovUnlocked ? 170 : 120);
+        fovSpin->setSuffix(QStringLiteral("°"));
+        fovSpin->setValue(prefs.fov);
+        fovSpin->setToolTip(QStringLiteral("How wide the 3D view sees (Hammer uses 75–90). Up to 120 unless unlocked below."));
+        h->addWidget(fovSpin);
+        auto *wa = new QWidgetAction(this);
+        wa->setDefaultWidget(w);
+        view->addAction(wa);
+        QObject::connect(fovSpin, &QSpinBox::valueChanged, this, [this](int val) {
+            prefs.fov = val;
+            QSettings().setValue("view/fov", val);
+            bonk_set_fov(float(val));
+            views[0]->update();
+        });
+        QAction *unlock = fn(view, QStringLiteral("Unlock Field of View Above 120°"), QKeySequence(), [this] {
+            prefs.fovUnlocked = !prefs.fovUnlocked;
+            QSettings().setValue("view/fovUnlocked", prefs.fovUnlocked);
+            fovSpin->setMaximum(prefs.fovUnlocked ? 170 : 120); // locking again pulls it back to 120
+        });
+        unlock->setCheckable(true);
+        unlock->setChecked(prefs.fovUnlocked);
+        fn(view, QStringLiteral("Reset Field of View"), QKeySequence(), [this] { fovSpin->setValue(75); });
+    }
 
     QMenu *tools = menuBar()->addMenu(QStringLiteral("&Tools"));
     toolSelect = act(tools, QStringLiteral("&Selection Tool"), QKeySequence(), CMD_TOOL_SELECT);
@@ -5945,6 +6327,7 @@ MainWindow::MainWindow() {
         float dt = clock.restart() / 1000.0f;
         unsigned f = bonk_tick(dt);
         if (f) handle(f);
+        if (saveFlash.isValid() && saveFlash.elapsed() < 1500) repaintAll();
     });
     timer.start(8);
 
@@ -6098,6 +6481,18 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
         QTimer::singleShot(1500, &w, [&w, shot] {
             for (const QString &c : qEnvironmentVariable("BONK_SHOT_SCRIPT").split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
                 if (c.startsWith(QStringLiteral("cmd:"))) w.command(c.mid(4).toInt());
+                else if (c.startsWith(QStringLiteral("hover:"))) { // hover:view,x,y
+                    const QStringList a = c.mid(6).split(QLatin1Char(','));
+                    const int v = a.value(0).toInt();
+                    w.handle(bonk_mouse(v, 2, a.value(1).toFloat(), a.value(2).toFloat(), 0, 0), w.views[v]);
+                } else if (c.startsWith(QStringLiteral("keydown:")) || c.startsWith(QStringLiteral("keyup:"))) { // keydown:view,qtkey
+                    const bool down = c.startsWith(QStringLiteral("keydown:"));
+                    const QStringList a = c.mid(down ? 8 : 6).split(QLatin1Char(','));
+                    const int v = a.value(0).toInt();
+                    w.handle(bonk_key(v, a.value(1).toInt(0, 0), down, 0, 0), w.views[v]);
+                } else if (c == QStringLiteral("saveflash")) {
+                    w.saveFlash.start();
+                } else if (c.startsWith(QStringLiteral("toolflash:"))) w.quickTool(w.views[1], c.endsWith(QLatin1Char('5')), QPointF(220, 160));
                 else if (c.startsWith(QStringLiteral("mat:"))) {
                     QByteArray m = c.mid(4).toUtf8();
                     bonk_set_current_material(m.constData());
@@ -6200,7 +6595,20 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                     QRect r(v->mapTo(&w, QPoint(0, 0)), v->size());
                     fprintf(stderr, "view %d %d %d %d %d\n", v->id, r.x(), r.y(), r.width(), r.height());
                 }
-                w.grab().save(shot);
+                QImage img = w.grab().toImage();
+                if (qEnvironmentVariableIsSet("BONK_SHOT_OVERLAY")) { // offscreen has no GL: draw the Qt overlays on a dark view
+                    QPainter q(&img);
+                    for (Viewport *v : w.views) {
+                        QRect r(v->mapTo(&w, QPoint(0, 0)), v->size());
+                        q.save();
+                        q.translate(r.topLeft());
+                        q.setClipRect(QRect(QPoint(0, 0), r.size()));
+                        q.fillRect(QRect(QPoint(0, 0), r.size()), QColor(18, 18, 22));
+                        v->paintOverlay(q);
+                        q.restore();
+                    }
+                }
+                img.save(shot);
                 QApplication::quit();
             });
         });

@@ -26,8 +26,11 @@ Linux PC is now your workstation!*
 Bonk is for making Garry's Mod props the way you'd build them in Hammer, without Windows, a VM,
 or Propper.
 
-- **Hammer-style editing:** four views, brushes you draw, size, move, rotate, clip (Bisect) and
-  edit vertex by vertex, with Hammer-style keys available.
+- **Hammer-style editing:** four views, brushes you draw, size, move, rotate, mirror, clip
+  (Bisect) and edit vertex by vertex, with Hammer-style keys available.
+- **Hold-key editing:** hold G to grab, S to size, R to rotate or Shift to carry a copy, from
+  anywhere in a view. Moves lock to one axis (Alt frees them), the corner of the view says what
+  the held key does, and the 3D view takes the editing keys too when you're not flying.
 - **Textures done right:** a Texture Picker with folders, Face Select & Paint, Hammer-style
   alignment (shift, scale, rotate, justify, wrap, Texture Lock), and Material Properties that
   become the VMT: surface type, transparency, phong, normal maps, reflections…
@@ -150,10 +153,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the pieces fit together and how t
 - [x] Projects, Texture Picker, textured 3D view, texture tools, Material Properties, VTF conversion
 - [x] Compiling with Garry's Mod's studiomdl through Proton; export to the addons folder
 - [x] VMF import with materials from folders or Workshop `.gma` files
+- [x] Hold-key editing everywhere: G grab with axis lock, H hide, mirror, 3D nudging, FOV
+- [ ] Modeling power: Quick Draw, primitives, multi-vertex editing, copy between models
+- [ ] Simplified collision, mass presets, Workshop publishing
 - [ ] Shader work: shader picker (incl. MonitorScreen), more texture slots, live VMT editing
 - [ ] Animated, scrolling and pulsing materials; material preview in the 3D view
 - [ ] Optional Hammer++ / StudioMDL-CE compiler
-- [ ] More primitives (cylinder, wedge, spike)
 - [ ] Skins, bodygroups, LODs and an in-editor model preview
 - [ ] Flathub release
 

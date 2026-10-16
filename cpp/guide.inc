@@ -60,7 +60,8 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("6"), QStringLiteral("Face Select & Paint")},
                   {QStringLiteral("T"), QStringLiteral("Texture Picker: show it, bring it to the front, or hide it")},
                   {QStringLiteral("F1"), QStringLiteral("This guide, open at the page for the tool you're using")},
-                  {QStringLiteral("F9"), QStringLiteral("Compile the model")}};
+                  {QStringLiteral("F9"), QStringLiteral("Compile the model")},
+                  {QStringLiteral("mouse 4 / mouse 5"), QStringLiteral("Back / forward side buttons: Selection tool / Face Select & Paint")}};
         if (hammer)
             p.keys += {{QStringLiteral("Shift+S / Shift+B / Shift+V / Shift+X"), QStringLiteral("Hammer-style: Selection / Block / Vertex / Bisect")},
                        {QStringLiteral("Shift+A"), QStringLiteral("Hammer-style: Texture Picker")}};
@@ -80,18 +81,26 @@ QList<GuidePage> guidePages(bool hammer) {
         p.keys = {{QStringLiteral("click"), QStringLiteral("Select a brush (its whole group, unless groups are ignored)")},
                   {QStringLiteral("Ctrl+click"), QStringLiteral("Add or remove a brush")},
                   {QStringLiteral("click again"), QStringLiteral("Switch between resize and rotate handles")},
-                  {QStringLiteral("drag"), QStringLiteral("On empty space in a 2D view: draw a selection box")},
-                  {QStringLiteral("Enter / Ctrl+Enter"), QStringLiteral("Select what the box caught / add it to the selection")},
-                  {QStringLiteral("D"), QStringLiteral("Deselect (in a 2D view)")},
+                  {QStringLiteral("drag"), QStringLiteral("On empty space in a 2D view: draw a selection box; letting go selects what it took")},
+                  {QStringLiteral("Ctrl+drag"), QStringLiteral("Selection box that adds to the selection")},
+                  {QStringLiteral("D"), QStringLiteral("Deselect (any view, unless you're flying)")},
+                  {QStringLiteral("H"), QStringLiteral("Hide the selection for now; H with nothing selected shows it again")},
                   {QStringLiteral("Ctrl+D"), QStringLiteral("Deselect, anywhere")},
                   {QStringLiteral("Ctrl+A"), QStringLiteral("Select all")},
                   {QStringLiteral("Esc"), QStringLiteral("Cancel what's in progress, else deselect")},
                   {QStringLiteral("Shift+Ctrl+drag"), QStringLiteral("3D view: paint a selection across brushes (or faces)")},
                   {QStringLiteral("Delete"), QStringLiteral("Delete the selection")}};
-        p.html = QStringLiteral("<p>Deselecting can be undone with Ctrl+Z, so a stray D never loses a careful selection.</p>");
-        p.subs = {{QStringLiteral("Selection box"), QStringLiteral("<p>Drag on empty space in a 2D view to draw a box; everything it catches turns yellow. "
-                                                                   "Hold <b>S</b> to resize the box and <b>M</b> to move it, then Enter selects (Ctrl+Enter adds). "
-                                                                   "The box takes every brush it touches; Settings → Editing can make it take only brushes fully inside.</p>")},
+        p.html = QStringLiteral("<p>Deselecting can be undone with Ctrl+Z, so a stray D never loses a careful selection.</p>"
+                                "<p>H only hides things for now: hidden brushes can't be clicked, aren't saved as hidden, and still "
+                                "compile. Use a layer's Show box for something lasting.</p>");
+        p.subs = {{QStringLiteral("Selection box"), QStringLiteral("<p>Drag on empty space in a 2D view to draw a box. When you let go, what it caught "
+                                                                   "is selected, ready for G, S or R (Ctrl+drag adds). "
+                                                                   "The box takes every brush it touches; the <b>Box</b> button under Selection Options "
+                                                                   "switches it to only brushes fully inside.</p>"
+                                                                   "<p>Prefer the old way? Settings → Editing → <i>Selection box waits for Enter</i>: the box "
+                                                                   "stays up, hold <b>S</b> to resize it and <b>G</b> to move it, then Enter selects (Ctrl+Enter adds).</p>")},
+                  {QStringLiteral("Selection Options"), QStringLiteral("<p>Three toggles at the bottom of the tool panel: <b>Ignore Groups</b> (Ctrl+W), "
+                                                                       "<b>Box: Touching / Inside</b>, and <b>Axis Lock</b> for G and Shift moves.</p>")},
                   {QStringLiteral("Resize handles"), QStringLiteral("<p>A selected brush shows square handles in the 2D views: drag one to resize "
                                                                     "from that edge or corner. Click the brush again for round rotate handles.</p>")},
                   {QStringLiteral("Painting a selection"), QStringLiteral("<p>In the 3D view, Shift+Ctrl+drag across brushes: starting on an unselected brush "
@@ -100,18 +109,27 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("groups"), QStringLiteral("moving"), QStringLiteral("sizing")};
     }
     {
-        GuidePage &p = page(QStringLiteral("moving"), MK, QStringLiteral("Moving & copying"), QStringLiteral("move copy clone duplicate nudge drag shift alt m"));
+        GuidePage &p = page(QStringLiteral("moving"), MK, QStringLiteral("Moving & copying"), QStringLiteral("move copy clone duplicate nudge drag shift alt g grab mirror axis lock"));
         p.keys = {{QStringLiteral("drag"), QStringLiteral("Move the selection")},
                   {QStringLiteral("Alt+drag"), QStringLiteral("Move any brush, in any tool (slides along the floor in 3D)")},
-                  {QStringLiteral("M (hold) + move"), QStringLiteral("Move the selection from anywhere in a 2D view; release M to place it")},
+                  {QStringLiteral("G (hold) + move"), QStringLiteral("Grab: move the selection from anywhere (2D views, or along the floor in 3D); release G to drop it")},
+                  {QStringLiteral("Alt (while holding)"), QStringLiteral("Flip the axis lock for this move")},
                   {QStringLiteral("Shift+drag"), QStringLiteral("Drag out a copy")},
                   {QStringLiteral("Shift (hold) + move"), QStringLiteral("A copy follows the mouse; release Shift to place it")},
-                  {QStringLiteral("arrows"), QStringLiteral("Nudge one grid step in a 2D view")},
+                  {QStringLiteral("arrows"), QStringLiteral("Nudge one grid step (in 3D, up moves away from you)")},
                   {QStringLiteral("Alt+arrows"), QStringLiteral("Nudge 1 unit")},
+                  {QStringLiteral(", / ."), QStringLiteral("Mirror the selection horizontally / vertically (as the view under the mouse sees it)")},
                   {QStringLiteral("Esc"), QStringLiteral("Cancel the move or copy")}};
-        p.html = QStringLiteral("<p>While S, Shift, M or R is held, the cursor stays pinned where it was, so you never run into the edge of "
-                                "the window; it comes back to the same spot when you let go. Settings → Editing can turn pinning, and "
-                                "hold-Shift copying, off.</p><p>Copies of a group become new groups named <i>Window (1)</i>, <i>Window (2)</i>…</p>");
+        p.html = QStringLiteral("<p><b>Axis lock</b> (on by default): a G or Shift move stays on the axis you're moving along most, which "
+                                "keeps things lined up. Alt while holding frees it for that move; the Axis Lock button under Selection "
+                                "Options turns it off for good.</p>"
+                                "<p>While a key is held, the corner of the view says what it's doing, the cursor shows a badge, and a "
+                                "ripple marks where the brush landed when you let go.</p>"
+                                "<p>While G, S, Shift or R is held in a 2D view (or you pan with the middle button), the cursor stays pinned "
+                                "where it was, so you never run into the edge of the window; it comes back to the same spot when you let go. "
+                                "Settings → Editing can turn pinning, and hold-Shift copying, off.</p>"
+                                "<p>G also moves the Block tool's box before you create it, and the Origin tool's origin moves with the arrows.</p>"
+                                "<p>Copies of a group become new groups named <i>Window (1)</i>, <i>Window (2)</i>…</p>");
         p.see = {QStringLiteral("grid"), QStringLiteral("rotating"), QStringLiteral("groups")};
     }
     {
@@ -153,9 +171,9 @@ QList<GuidePage> guidePages(bool hammer) {
     }
     {
         GuidePage &p = page(QStringLiteral("view3d"), MK, QStringLiteral("3D view & flying"), QStringLiteral("camera fly mouselook orbit pan zoom wasd edges 2d views"));
-        p.keys = {{QStringLiteral("Z"), QStringLiteral("Mouselook on / off")},
-                  {QStringLiteral("W / A / S / D"), QStringLiteral("Fly (mouselook, or while the 3D view has focus)")},
-                  {QStringLiteral("Q / E"), QStringLiteral("Down / up")},
+        p.keys = {{QStringLiteral("Z"), QStringLiteral("Mouselook (flying) on / off")},
+                  {QStringLiteral("W / A / S / D"), QStringLiteral("Fly, while in mouselook")},
+                  {QStringLiteral("Q / E"), QStringLiteral("Down / up, while in mouselook")},
                   {QStringLiteral("Shift"), QStringLiteral("Fly faster")},
                   {QStringLiteral("right-drag"), QStringLiteral("Look around")},
                   {QStringLiteral("middle-drag"), QStringLiteral("Orbit around what's in the center of the view")},
@@ -164,6 +182,10 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("Space+drag"), QStringLiteral("2D: pan (middle-drag too)")},
                   {QStringLiteral("Ctrl+E"), QStringLiteral("Center the 2D views on the selection")}};
         p.html = QStringLiteral("<p>In mouselook the mouse looks, left-click selects at the crosshair, and Z or Esc lets go.</p>"
+                                "<p>Out of mouselook, the 3D view takes the editing keys: D, H, G (slides along the floor), R (turns about "
+                                "the vertical), the mirror keys, and the arrows nudge. S sizing and Shift copying stay in the 2D views, "
+                                "where there's a clear edge to grab.</p>"
+                                "<p>View → 3D field of view sets how wide it sees (75° by default, up to 120°; View → Unlock goes further).</p>"
                                 "<p>View → Show Edges in 3D turns the black brush outlines off for a cleaner look; selected brushes keep "
                                 "their red borders.</p>");
         p.see = {QStringLiteral("selecting")};
@@ -294,10 +316,12 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("Ctrl+U"), QStringLiteral("Ungroup one level")},
                   {QStringLiteral("Ctrl+W"), QStringLiteral("Ignore groups: clicks pick single brushes")}};
         p.html = QStringLiteral("<p><b>Layers:</b> click a layer to make it active (new brushes go there), double-click to select its contents, "
-                                "right-click to rename, delete, or move / copy the selection onto it. The Show box hides a layer. "
+                                "right-click (or F2) to set its name, delete it, or move / copy the selection onto it. A Visual or Collision "
+                                "heading with one layer under it names that layer too. The Show box hides a layer. "
                                 "Right-click → Own Origin gives a layer its own origin.</p>"
-                                "<p><b>Groups</b> appear under their layer: click to select, double-click to rename, right-click to "
-                                "duplicate or ungroup.</p>");
+                                "<p><b>Groups</b> appear under their layer: click to select (it stays highlighted), double-click or F2 to "
+                                "rename, right-click to duplicate or ungroup. A group on a hidden, ghosted or locked layer can't be "
+                                "selected; the status bar says so.</p>");
         p.see = {QStringLiteral("collision"), QStringLiteral("selecting")};
     }
     {
@@ -307,6 +331,9 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "is a see-through ghost (the slider sets how visible) and the 3D view tells you you're editing collision.</p>"
                                 "<p>Each collision brush is one convex piece. Keep them few and simple: studiomdl allows 20 by default "
                                 "(Bonk raises the limit when it needs to).</p>"
+                                "<p><b>Collision look</b> (View menu, or the button under the layers): <i>Ghosted</i> draws collision as orange "
+                                "glass; <i>Solid</i> draws each piece opaque in its own color, so you can see where one ends and the next "
+                                "begins. It only changes the look.</p>"
                                 "<p>No collision layer when you compile? Bonk offers to <b>Generate</b> one from the visual brushes, "
                                 "or to compile without physics.</p>");
         p.see = {QStringLiteral("budget"), QStringLiteral("compiling")};
