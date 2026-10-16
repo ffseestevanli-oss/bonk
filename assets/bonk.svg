@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <defs>
+    <linearGradient id="wood" x1="0" y1="-1" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#f6cf8e"/>
+      <stop offset="0.55" stop-color="#d99a52"/>
+      <stop offset="1" stop-color="#a8682c"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c313a"/>
+      <stop offset="1" stop-color="#1b1e24"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background tile -->
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#bg)"/>
+
+  <!-- impact burst behind the hit -->
+  <polygon fill="#ffd23f" stroke="#11141a" stroke-width="2.5" stroke-linejoin="round"
+           points="98,26 103,42 118,36 109,50 124,58 107,61 112,77 98,68 88,80 87,64 71,62 84,53 76,38 91,44"/>
+
+  <!-- the cube (a brush!) -->
+  <g stroke="#11141a" stroke-width="3" stroke-linejoin="round">
+    <polygon fill="#ffb067" points="80,66 104,79 80,92 56,79"/>
+    <polygon fill="#e8833a" points="56,79 80,92 80,118 56,105"/>
+    <polygon fill="#c4621f" points="80,92 104,79 104,105 80,118"/>
+  </g>
+
+  <!-- the bat -->
+  <g transform="translate(13 108) rotate(-46)">
+    <path fill="url(#wood)" stroke="#11141a" stroke-width="3" stroke-linejoin="round"
+          d="M7,-4 L38,-4 C54,-4.5 62,-10.5 73,-11 L94,-11 A11,11 0 0 1 94,11 L73,11 C62,10.5 54,4.5 38,4 L7,4 Z"/>
+    <!-- grip tape -->
+    <rect x="9" y="-4" width="24" height="8" fill="#3a3f4a" stroke="#11141a" stroke-width="2"/>
+    <path d="M13,-4 L17,4 M19,-4 L23,4 M25,-4 L29,4" stroke="#6b7280" stroke-width="1.6"/>
+    <!-- knob -->
+    <ellipse cx="5" cy="0" rx="4.5" ry="8" fill="#c98b45" stroke="#11141a" stroke-width="3"/>
+    <!-- highlight -->
+    <path d="M60,-6.5 C66,-8.5 70,-8.5 76,-8.5 L92,-8.5" fill="none" stroke="#fff3d6" stroke-width="2.4" stroke-linecap="round" opacity="0.85"/>
+  </g>
+
+  <!-- swing lines -->
+  <path d="M44,22 Q52,16 62,16 M36,32 Q44,26 52,25" fill="none" stroke="#e6e9ef" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+</svg>

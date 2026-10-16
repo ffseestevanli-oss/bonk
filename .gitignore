@@ -1,0 +1,5 @@
+/target
+/Built Binaries/
+*.tmp
+*.swp
+.DS_Store

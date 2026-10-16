@@ -1,0 +1,17 @@
+[package]
+name = "bonk"
+version = "0.11.3"
+edition = "2021"
+description = "Bonk! Model Prop-inator!: a Hammer-style brush modeler that builds Garry's Mod props on Linux"
+license = "GPL-3.0-or-later"
+authors = ["Steventechno", "Claude Opus 5.5 (Anthropic)"]
+repository = "https://github.com/steventechno/bonk"
+readme = "README.md"
+build = "build.rs"
+
+# No crate dependencies: the Qt6 host is compiled from cpp/host.cpp by build.rs,
+# and OpenGL functions are loaded at runtime through Qt's context.
+[dependencies]
+
+[profile.release]
+opt-level = 3
