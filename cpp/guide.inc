@@ -301,13 +301,18 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("double-click"), QStringLiteral("Texture: Material Properties. Folder: open it")},
                   {QStringLiteral("Alt+click"), QStringLiteral("3D view: pick up a face's texture")},
                   {QStringLiteral("Ctrl+wheel"), QStringLiteral("Zoom the swatches")},
-                  {QStringLiteral("right-click"), QStringLiteral("Cut / copy / paste, rename, delete (to the Trash), new folder")},
+                  {QStringLiteral("right-click"), QStringLiteral("Select faces using it, replace it, cut / copy / paste, rename, delete, new folder")},
                   {QStringLiteral("drop"), QStringLiteral("PNG / JPG files or folders from Dolphin: import them")}};
         p.html = QStringLiteral("<p><b>Apply</b> puts the current texture on the selected faces, or on every face of the selected brushes. "
                                 "Clicking a swatch also switches to Face Select &amp; Paint (Settings can turn that off).</p>");
         p.subs = {{QStringLiteral("Folders"), QStringLiteral("<p>The picker works like a file manager: double-click a folder to open it, use the "
                                                              "breadcrumb to go back, drag swatches onto folders to move them. Moving or renaming a texture "
                                                              "updates every model in the project that uses it.</p>")},
+                  {QStringLiteral("Animated textures"), QStringLiteral("<p><b>Import Animation…</b> makes a texture that plays frames: pick several "
+                                                                       "images (they're used in name order, frame2 before frame10), one sprite sheet (you say how "
+                                                                       "many columns and rows), or a GIF (its speed comes along). The frames are kept as one tall "
+                                                                       "image with a ▶ badge, play in the 3D view, and compile to a multi-frame VTF with an "
+                                                                       "AnimatedTexture proxy. Material Properties → Animation sets the frame rate.</p>")},
                   {QStringLiteral("Color textures"), QStringLiteral("<p>The Color tile makes a solid color as a texture (a tiny 16×16 PNG in "
                                                                     "colors/, named by its hex code; rename it if you like).</p>")},
                   {QStringLiteral("Resize offer"), QStringLiteral("<p>Source needs power-of-two sizes (64, 128 … 2048, 4096; width and height can differ). "
@@ -321,7 +326,8 @@ QList<GuidePage> guidePages(bool hammer) {
     {
         GuidePage &p = page(QStringLiteral("face"), GD, QStringLiteral("Face Select & Paint"), QStringLiteral("face paint texture align shift scale rotate justify wrap lock fit nodraw new brush"));
         p.keys = {{QStringLiteral("click"), QStringLiteral("Select a face (Ctrl adds / removes); its texture becomes current")},
-                  {QStringLiteral("right-click"), QStringLiteral("Paint the current texture, aligned like the source face")},
+                  {QStringLiteral("right-click"), QStringLiteral("Paint the current texture, aligned like the source face (at the crosshair while flying)")},
+                  {QStringLiteral("right-drag"), QStringLiteral("Paint every face you sweep across, in one undo step (flying too: look around while holding it)")},
                   {QStringLiteral("Shift+right-click"), QStringLiteral("Paint the whole brush")},
                   {QStringLiteral("Alt+right-click"), QStringLiteral("Wrap on as one continuous sheet (that face becomes the next source)")},
                   {QStringLiteral("drag"), QStringLiteral("Move the texture on the selected faces")},
@@ -330,7 +336,11 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("Alt"), QStringLiteral("No snapping while dragging")}};
         p.html = QStringLiteral("<p>New brushes start out <b>nodraw</b>: they're invisible in game and cost nothing until you paint "
                                 "the faces that should show (they wear the nodraw stripes in the 3D view until then).</p>"
-                                "<p>The picker's Face section has shift, scale and rotate fields, justify buttons, Stretch and Reset.</p>");
+                                "<p>The picker's Face section shows the selected face's texture and name, and has shift, scale and rotate "
+                                "fields, justify buttons, Stretch and Reset.</p>"
+                                "<p><b>Select All Using</b> selects every face in the model that uses that texture. <b>Replace…</b> swaps a "
+                                "texture for another, everywhere in the model or only on the selected faces; alignment stays. Both are on a "
+                                "swatch's right-click menu too.</p>");
         p.subs = {{QStringLiteral("Scale"), QStringLiteral("<p>Texture scale on a face: the Scale fields, or Shift+drag. 0.25 is Hammer's default.</p>")},
                   {QStringLiteral("Treat as one"), QStringLiteral("<p>With several faces selected, Treat as one aligns and justifies them as if they were one big face.</p>")},
                   {QStringLiteral("Texture Lock"), QStringLiteral("<p>Texture Lock keeps textures in place on the brush as you move it; Scale texture with brush "
@@ -338,10 +348,18 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("textures"), QStringLiteral("material")};
     }
     {
-        GuidePage &p = page(QStringLiteral("material"), GD, QStringLiteral("Material Properties"), QStringLiteral("material vmt surfaceprop transparent alpha reflection envmap phong normal bump preset override"));
-        p.html = QStringLiteral("<p>Double-click a texture in the picker to set what goes into its VMT: surface type (footsteps, bullet impacts), "
-                                "transparency (alpha test or translucent), double-sided, glow, reflections, phong shine, a normal map, and "
-                                "presets for monitors, signs and glass. Extra lines go straight into the VMT.</p>"
+        GuidePage &p = page(QStringLiteral("material"), GD, QStringLiteral("Material Properties"), QStringLiteral("material vmt shader surfaceprop transparent alpha reflection envmap phong normal bump detail mask preset override scroll pulse sine animated proxy monitorscreen"));
+        p.html = QStringLiteral("<p>Double-click a texture in the picker to set what goes into its VMT, in four tabs:</p><ul>"
+                                "<li><b>Basics:</b> preset (monitor, sign, glass), shader (VertexLitGeneric, UnlitGeneric, MonitorScreen), "
+                                "surface type (footsteps, bullet impacts), transparency, double-sided, glow and its mask.</li>"
+                                "<li><b>Maps:</b> normal map, reflections and their mask (or a mask texture), phong shine and a sharpness map, "
+                                "and a detail texture with its scale, strength and blend mode.</li>"
+                                "<li><b>Animation:</b> scrolling (TextureScroll: speed and direction), pulsing (Sine: brightness or "
+                                "transparency between Low and High over a period) and the frame rate of an imported animation. They all "
+                                "play in the 3D view.</li>"
+                                "<li><b>Extra:</b> lines that go straight into the VMT.</li></ul>"
+                                "<p>The VMT on the right is live, and you can type into it: from then on your text is used as is (Back to "
+                                "Generated returns to the settings).</p>"
                                 "<p>Settings are kept next to the image in a .bonkmat file, so they travel with the texture. <b>Only this model</b> "
                                 "stores an override inside the open model instead.</p>");
         p.subs = {{QStringLiteral("Hand-edited VMTs"), QStringLiteral("<p>Bonk writes the VMTs when it compiles. If you edit one by hand, Bonk notices "

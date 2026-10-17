@@ -93,6 +93,10 @@ uniform float u_use_tex;
 uniform sampler2D u_tex;
 // textures' transparency: x = 0 opaque, 1 alpha test (y = reference), 2 translucent
 uniform vec2 u_alpha;
+// moving materials: x frames in the strip, y current frame, zw scroll offset
+uniform vec4 u_anim;
+// pulse: x brightness, y alpha
+uniform vec2 u_pulse;
 out vec4 o_col;
 // Nodraw look: u_nd = (style, intensity, stripe width px, phase); u_nd_col = solid color.
 // style 0 solid, 1 RGB cycle (all stripes one hue, cycling), 2 rainbow flow.
@@ -119,10 +123,19 @@ void main() {
     }
     // textured faces: texel x (lighting * tint); the vertex color carries both
     if (u_use_tex > 0.5) {
-        vec4 t = texture(u_tex, v_uv);
+        vec2 uv = v_uv + u_anim.zw;
+        vec4 t;
+        if (u_anim.x > 1.5) {
+            // one frame of a strip: wrap inside the frame, mip from the unwrapped coordinates
+            vec2 f = vec2(uv.x, (fract(uv.y) + u_anim.y) / u_anim.x);
+            t = textureGrad(u_tex, f, dFdx(uv) * vec2(1.0, 1.0 / u_anim.x), dFdy(uv) * vec2(1.0, 1.0 / u_anim.x));
+        } else {
+            t = texture(u_tex, uv);
+        }
         if (u_alpha.x > 0.5 && u_alpha.x < 1.5 && t.a < u_alpha.y) discard;
-        c.rgb *= t.rgb * 1.25;
+        c.rgb *= t.rgb * 1.25 * u_pulse.x;
         if (u_alpha.x > 1.5) c.a *= t.a;
+        c.a *= u_pulse.y;
     }
     o_col = c;
 }
@@ -137,6 +150,8 @@ struct Prog {
     alpha: i32,
     nd: i32,
     nd_col: i32,
+    anim: i32,
+    pulse: i32,
 }
 
 pub struct Renderer {
@@ -380,7 +395,7 @@ impl Renderer {
         });
     }
 
-    unsafe fn draw_lit_tex(&self, mvp: &M4, data: &[f32], tex: u32, alpha: (u8, f32)) {
+    unsafe fn draw_lit_tex(&self, mvp: &M4, data: &[f32], tex: u32, alpha: (u8, f32), anim: Option<(texstore::Anim, f32)>) {
         if data.is_empty() {
             return;
         }
@@ -388,6 +403,17 @@ impl Renderer {
         (g.UseProgram)(self.lit.id);
         (g.Uniform1f)(self.lit.use_tex, 1.0);
         (g.Uniform2f)(self.lit.alpha, alpha.0 as f32, alpha.1);
+        match anim {
+            Some((a, t)) => {
+                let (frame, off, c, al) = a.at(t);
+                (g.Uniform4f)(self.lit.anim, a.frames.max(1) as f32, frame as f32, off[0], off[1]);
+                (g.Uniform2f)(self.lit.pulse, c, al);
+            }
+            None => {
+                (g.Uniform4f)(self.lit.anim, 1.0, 0.0, 0.0, 0.0);
+                (g.Uniform2f)(self.lit.pulse, 1.0, 1.0);
+            }
+        }
         (g.Uniform1i)(self.lit.tex, 0);
         (g.ActiveTexture)(gl::TEXTURE0);
         (g.BindTexture)(gl::TEXTURE_2D, tex);
@@ -1039,7 +1065,7 @@ impl Renderer {
         for (name, (tex, data)) in textured.iter() {
             let a = texstore::alpha(name);
             if a.0 != 2 {
-                self.draw_lit_tex(&mvp, data, *tex, a);
+                self.draw_lit_tex(&mvp, data, *tex, a, texstore::anim(name).map(|an| (an, ed.time)));
             }
         }
         self.draw_flat(&mvp, &f.edges, gl::LINES);
@@ -1065,7 +1091,7 @@ impl Renderer {
         for (name, (tex, data)) in textured.iter() {
             let a = texstore::alpha(name);
             if a.0 == 2 {
-                self.draw_lit_tex(&mvp, data, *tex, a);
+                self.draw_lit_tex(&mvp, data, *tex, a, texstore::anim(name).map(|an| (an, ed.time)));
             }
         }
         self.draw_lit(&mvp, &glass);
@@ -1211,5 +1237,5 @@ unsafe fn program(g: &Gl, vs: &str, fs: &str) -> Result<Prog, String> {
         let c = CString::new(n).unwrap();
         (g.GetUniformLocation)(p, c.as_ptr())
     };
-    Ok(Prog { id: p, mvp: loc("u_mvp"), stripes: loc("u_stripes"), use_tex: loc("u_use_tex"), tex: loc("u_tex"), alpha: loc("u_alpha"), nd: loc("u_nd"), nd_col: loc("u_nd_col") })
+    Ok(Prog { id: p, mvp: loc("u_mvp"), stripes: loc("u_stripes"), use_tex: loc("u_use_tex"), tex: loc("u_tex"), alpha: loc("u_alpha"), nd: loc("u_nd"), nd_col: loc("u_nd_col"), anim: loc("u_anim"), pulse: loc("u_pulse") })
 }

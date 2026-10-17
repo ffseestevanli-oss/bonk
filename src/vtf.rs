@@ -217,8 +217,15 @@ fn uncompressed(img: &Image, alpha: bool) -> Vec<u8> {
 }
 
 /// Encode a VTF file.
+#[allow(dead_code)]
 pub fn encode(img: &Image, opt: VtfOptions) -> Vec<u8> {
-    let alpha = img.has_alpha();
+    encode_frames(std::slice::from_ref(img), opt)
+}
+
+/// Encode a VTF with one or more frames (all the same size; for AnimatedTexture).
+pub fn encode_frames(frames: &[Image], opt: VtfOptions) -> Vec<u8> {
+    let img = &frames[0];
+    let alpha = frames.iter().any(|f| f.has_alpha());
     let (format, mut flags) = if opt.normal {
         (if alpha { FMT_BGRA8888 } else { FMT_BGR888 }, FLAG_NORMAL)
     } else if alpha {
@@ -229,12 +236,19 @@ pub fn encode(img: &Image, opt: VtfOptions) -> Vec<u8> {
     if alpha {
         flags |= if opt.alpha_test { FLAG_ONEBITALPHA } else { FLAG_EIGHTBITALPHA };
     }
-    // mip chain, largest first
-    let mut mips = vec![img.clone()];
-    while mips.last().unwrap().w > 1 || mips.last().unwrap().h > 1 {
-        let n = mips.last().unwrap().half();
-        mips.push(n);
-    }
+    // mip chain per frame, largest first
+    let chains: Vec<Vec<Image>> = frames
+        .iter()
+        .map(|f| {
+            let mut mips = vec![f.clone()];
+            while mips.last().unwrap().w > 1 || mips.last().unwrap().h > 1 {
+                let n = mips.last().unwrap().half();
+                mips.push(n);
+            }
+            mips
+        })
+        .collect();
+    let mips = &chains[0];
     // reflectivity: average linear color
     let mut refl = [0f64; 3];
     for p in img.px.chunks(4) {
@@ -255,7 +269,7 @@ pub fn encode(img: &Image, opt: VtfOptions) -> Vec<u8> {
     o.extend_from_slice(&(img.w as u16).to_le_bytes());
     o.extend_from_slice(&(img.h as u16).to_le_bytes());
     o.extend_from_slice(&flags.to_le_bytes());
-    o.extend_from_slice(&1u16.to_le_bytes()); // frames
+    o.extend_from_slice(&(frames.len() as u16).to_le_bytes()); // frames
     o.extend_from_slice(&0u16.to_le_bytes()); // first frame
     o.extend_from_slice(&[0u8; 4]);
     for r in refl {
@@ -271,25 +285,38 @@ pub fn encode(img: &Image, opt: VtfOptions) -> Vec<u8> {
     o.extend_from_slice(&1u16.to_le_bytes()); // depth
     o.resize(80, 0);
     o.extend_from_slice(&compress(&thumb, false));
-    for m in mips.iter().rev() {
-        let data = match format {
-            FMT_DXT1 => compress(m, false),
-            FMT_DXT5 => compress(m, true),
-            _ => uncompressed(m, alpha),
-        };
-        o.extend_from_slice(&data);
+    // smallest mip first; within a mip level, every frame in turn
+    for level in (0..mips.len()).rev() {
+        for chain in &chains {
+            let m = &chain[level];
+            let data = match format {
+                FMT_DXT1 => compress(m, false),
+                FMT_DXT5 => compress(m, true),
+                _ => uncompressed(m, alpha),
+            };
+            o.extend_from_slice(&data);
+        }
     }
     o
 }
 
 pub fn write(path: &str, img: &Image, opt: VtfOptions) -> Result<(), String> {
-    if img.w == 0 || img.h == 0 || img.w > 65535 || img.h > 65535 || img.px.len() < img.w * img.h * 4 {
-        return Err("bad image size".into());
+    write_frames(path, std::slice::from_ref(img), opt)
+}
+
+pub fn write_frames(path: &str, frames: &[Image], opt: VtfOptions) -> Result<(), String> {
+    if frames.is_empty() || frames.len() > 1024 {
+        return Err("bad frame count".into());
+    }
+    for img in frames {
+        if img.w == 0 || img.h == 0 || img.w > 65535 || img.h > 65535 || img.px.len() < img.w * img.h * 4 || img.w != frames[0].w || img.h != frames[0].h {
+            return Err("bad image size".into());
+        }
     }
     if let Some(dir) = std::path::Path::new(path).parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("couldn't create {}: {}", dir.display(), e))?;
     }
-    let data = encode(img, opt);
+    let data = encode_frames(frames, opt);
     let tmp = format!("{}.tmp", path);
     let mut f = std::fs::File::create(&tmp).map_err(|e| format!("couldn't write {}: {}", tmp, e))?;
     f.write_all(&data).map_err(|e| format!("couldn't write {}: {}", tmp, e))?;
@@ -299,6 +326,21 @@ pub fn write(path: &str, img: &Image, opt: VtfOptions) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn frames_are_stored_for_animated_texture() {
+        let mk = |c: u8| Image { w: 8, h: 8, px: (0..64).flat_map(|_| [c, 0, 0, 255]).collect() };
+        let data = encode_frames(&[mk(255), mk(0), mk(128)], VtfOptions::default());
+        assert_eq!(u16::from_le_bytes([data[24], data[25]]), 3, "frame count in the header");
+        // frame 0 decodes as the first image
+        let img = crate::vtfread::decode(&data).unwrap();
+        assert_eq!((img.w, img.h), (8, 8));
+        assert!(img.px[0] > 200, "first frame is the red one: {}", img.px[0]);
+        let one = encode_frames(&[mk(1)], VtfOptions::default()).len();
+        let two = encode_frames(&[mk(1), mk(2)], VtfOptions::default()).len();
+        assert_eq!(data.len() - two, two - one, "each frame adds its own data");
+        assert!(two > one);
+    }
+
     use super::*;
 
     fn checker(w: usize, h: usize, alpha: bool) -> Image {

@@ -2,6 +2,31 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.14.0 — "Textures"
+
+### Texture tools
+- **Select All Using / Replace…** in the Face section (and on a swatch's right-click menu): select
+  every face that uses a texture, or swap it for another everywhere in the model or only on the
+  selected faces. Alignment stays; one undo step.
+- **Face preview:** the Face section shows the selected face's texture and its name.
+- **Paint by dragging:** in Face Select & Paint, hold the right button and sweep across faces to
+  paint them all (one undo step; Shift paints whole brushes, Alt wraps). While flying, the right
+  button paints at the crosshair and keeps painting as you look around.
+
+### Shaders
+- **Material Properties in tabs** (Basics, Maps, Animation, Extra) with a **MonitorScreen** shader
+  choice.
+- **More texture slots:** detail texture (scale, strength, blend mode), reflection mask texture
+  ($envmapmask), glow mask ($selfillummask) and a phong sharpness map ($phongexponenttexture).
+  Compiling converts them too.
+- **Live VMT:** the VMT is shown as you change settings and you can type into it; your text is then
+  used as is until "Back to Generated".
+- **Moving materials:** scrolling (TextureScroll), pulsing brightness or transparency (Sine) and
+  animated frames (AnimatedTexture), all playing in the 3D view.
+- **Import Animation…** in the Texture Picker: frames from several images (name order), a sprite
+  sheet (columns × rows) or a GIF (with its speed). Kept as one strip image with a ▶ badge and
+  compiled to a multi-frame VTF.
+
 ## 0.13.5
 
 - **Collision edges stand out while you edit the collision model:** thick, light lines with a dark

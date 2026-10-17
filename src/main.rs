@@ -382,6 +382,26 @@ pub extern "C" fn bonk_sel_box_mode() -> c_int {
     with_ed(|ed| if !ed.sel_box_only { 0 } else if ed.sel_box_wait { 2 } else { 1 })
 }
 
+/// Select every face using `material` (switches to Face Select & Paint). Returns the count.
+#[no_mangle]
+pub extern "C" fn bonk_select_faces_with(material: *const c_char) -> c_int {
+    let m = path_arg(material).unwrap_or_default();
+    with_ed(|ed| ed.select_faces_with(&m) as c_int)
+}
+
+/// Replace `find` with `with` (selected_only: just the selected faces). Returns faces changed.
+#[no_mangle]
+pub extern "C" fn bonk_replace_material(find: *const c_char, with: *const c_char, selected_only: c_int) -> c_int {
+    let (f, w) = (path_arg(find).unwrap_or_default(), path_arg(with).unwrap_or_default());
+    with_ed(|ed| ed.replace_material(&f, &w, selected_only != 0) as c_int)
+}
+
+/// The materials on the selected faces, one per line.
+#[no_mangle]
+pub extern "C" fn bonk_selected_face_materials() -> *const c_char {
+    ret_str(with_ed(|ed| ed.selected_face_materials().join("\n")))
+}
+
 /// Block tool shape (0 block, 1 cylinder, 2 wedge, 3 spike, 4 orb) and faces count.
 #[no_mangle]
 pub extern "C" fn bonk_set_block_shape(shape: c_int, faces: c_int) -> u32 {
@@ -908,6 +928,45 @@ pub extern "C" fn bonk_show_mannequins() -> c_int {
 pub extern "C" fn bonk_texture_alpha(name: *const c_char, mode: c_int, reference: f32) {
     let n = path_arg(name).unwrap_or_default();
     texstore::set_alpha(&n, mode.clamp(0, 2) as u8, reference);
+}
+
+/// How a material moves in the 3D view: frames stacked in its image (and their
+/// fps), TextureScroll (rate in texture widths per second, angle in degrees),
+/// and Sine pulsing (mode 0 off, 1 brightness, 2 alpha; min, max, period).
+#[no_mangle]
+pub extern "C" fn bonk_texture_anim(name: *const c_char, frames: c_int, fps: f32, scroll_rate: f32, scroll_angle: f32, pulse_mode: c_int, pmin: f32, pmax: f32, period: f32) {
+    let n = path_arg(name).unwrap_or_default();
+    let (sn, cs) = scroll_angle.to_radians().sin_cos();
+    texstore::set_anim(
+        &n,
+        texstore::Anim {
+            frames: frames.max(1) as u32,
+            fps,
+            scroll: [scroll_rate * cs, -scroll_rate * sn],
+            pulse: [pmin, pmax, if pulse_mode == 0 { 0.0 } else { period.max(0.05) }],
+            pulse_alpha: pulse_mode == 2,
+        },
+    );
+}
+
+/// A multi-frame VTF from frames stacked top to bottom in one image (each w × frame_h).
+#[no_mangle]
+pub extern "C" fn bonk_write_vtf_frames(path: *const c_char, w: c_int, frame_h: c_int, frames: c_int, rgba: *const u8, flags: c_int) -> c_int {
+    let Some(p) = path_arg(path) else { return -1 };
+    if rgba.is_null() || w <= 0 || frame_h <= 0 || frames <= 0 {
+        set_error("bad image");
+        return -1;
+    }
+    let one = w as usize * frame_h as usize * 4;
+    let all = unsafe { std::slice::from_raw_parts(rgba, one * frames as usize) };
+    let imgs: Vec<vtf::Image> = all.chunks(one).map(|c| vtf::Image { w: w as usize, h: frame_h as usize, px: c.to_vec() }).collect();
+    match vtf::write_frames(&p, &imgs, vtf::VtfOptions { normal: flags & 1 != 0, alpha_test: flags & 2 != 0 }) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_error(&e);
+            -1
+        }
+    }
 }
 
 // ------------------------------------------------------------------ VMF / VTF / VMT import

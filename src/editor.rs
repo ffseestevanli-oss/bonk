@@ -191,6 +191,8 @@ enum Drag {
     /// Right-drag look in 3D. In Face Select & Paint a right *click* (no
     /// drag) paints instead: `face_click` until it moves.
     Look { last: (f32, f32), start: (f32, f32), face_click: bool },
+    /// Face Select & Paint, right button held: paint every face swept over (one undo step)
+    PaintFaces { last: Option<(u32, usize)> },
     /// Alt+drag in the 3D view: slide the selection across a horizontal plane
     Move3D { plane_z: f32, start: V3, orig_brushes: Vec<Brush>, changed: bool },
     /// Hold S + move the mouse: resize from the corner nearest where S went down
@@ -469,6 +471,7 @@ pub struct Editor {
     pub fov: f32,
     /// "Dropped here" ripple: (bounds, start time)
     pub ripple: Option<((V3, V3), f32)>,
+    mat_anim_acc: f32,
     /// A hold (G / R) started in the 3D view: nothing to pin the cursor to
     hold_in_3d: bool,
     /// How visible ghosted (non-collision) brushes are while editing collision, 0..1
@@ -558,6 +561,7 @@ impl Editor {
             collision_solid: false,
             fov: FOV_DEG,
             ripple: None,
+            mat_anim_acc: 0.0,
             hold_in_3d: false,
             ghost_opacity: 0.25,
             nodraw_2d: false,
@@ -703,6 +707,71 @@ impl Editor {
 
     /// A texture was moved or renamed: point faces (and overrides) at the new
     /// name. One undo step. Returns faces changed.
+    /// Face Select & Paint with every face using `material` selected (brushes you
+    /// can click; hidden and locked layers are left out). Returns the count.
+    pub fn select_faces_with(&mut self, material: &str) -> usize {
+        self.tool = Tool::Face;
+        self.drag = None;
+        let mut fsel = Vec::new();
+        for b in self.doc.brushes.iter().filter(|b| b.entity.is_none() && self.pickable(b)) {
+            for (i, f) in b.faces.iter().enumerate() {
+                if f.material == material {
+                    fsel.push((b.id, i));
+                }
+            }
+        }
+        self.fsel = fsel;
+        self.src_face = self.fsel.first().copied();
+        let n = self.fsel.len();
+        self.message = Some(format!("{} face{} use {}", n, if n == 1 { "" } else { "s" }, material_display(material)));
+        n
+    }
+
+    /// Put `with` where `find` is: on every face in the model (`selected_only`
+    /// false) or only on the selected faces (an empty `find` then means all of
+    /// them). Alignment stays. One undo step; returns how many faces changed.
+    pub fn replace_material(&mut self, find: &str, with: &str, selected_only: bool) -> usize {
+        let targets: Vec<(u32, usize)> = if selected_only {
+            self.tex_targets()
+                .into_iter()
+                .filter(|k| find.is_empty() || self.doc.brush(k.0).and_then(|b| b.faces.get(k.1)).is_some_and(|f| f.material == find))
+                .collect()
+        } else {
+            self.doc
+                .brushes
+                .iter()
+                .filter(|b| b.entity.is_none())
+                .flat_map(|b| b.faces.iter().enumerate().filter(|(_, f)| f.material == find).map(move |(i, _)| (b.id, i)))
+                .collect()
+        };
+        if targets.is_empty() || find == with {
+            self.message = Some("Nothing to replace".into());
+            return 0;
+        }
+        self.doc.checkpoint();
+        for &(bid, i) in &targets {
+            if let Some(f) = self.doc.brush_mut(bid).and_then(|b| b.faces.get_mut(i)) {
+                f.material = with.to_string();
+            }
+        }
+        let n = targets.len();
+        self.message = Some(format!("Replaced on {} face{}: now {}", n, if n == 1 { "" } else { "s" }, material_display(with)));
+        n
+    }
+
+    /// The materials on the selected faces, in order, each once.
+    pub fn selected_face_materials(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (bid, i) in self.tex_targets() {
+            if let Some(f) = self.doc.brush(bid).and_then(|b| b.faces.get(i)) {
+                if !out.contains(&f.material) {
+                    out.push(f.material.clone());
+                }
+            }
+        }
+        out
+    }
+
     pub fn rename_material(&mut self, old: &str, new: &str) -> usize {
         let n = self.material_usage(old);
         let has_override = self.doc.mat_overrides.iter().any(|o| o.0 == old);
@@ -901,6 +970,21 @@ impl Editor {
         let t = (self.fov.to_radians() * 0.5).tan();
         let dir = (self.cam.forward() + self.cam.right() * (nx * t * (w / h)) + self.cam.up() * (ny * t)).norm();
         (self.cam.pos, dir)
+    }
+
+    /// Where a world point lands in the 3D view, in pixels (the inverse of persp_ray).
+    #[allow(dead_code)]
+    pub fn persp_project(&self, p: V3) -> Option<(f32, f32)> {
+        let (w, h) = self.persp_size;
+        let d = p - self.cam.pos;
+        let z = d.dot(self.cam.forward());
+        if z <= 1e-3 {
+            return None;
+        }
+        let t = (self.fov.to_radians() * 0.5).tan();
+        let nx = d.dot(self.cam.right()) / z / (t * (w / h));
+        let ny = d.dot(self.cam.up()) / z / t;
+        Some(((nx + 1.0) * 0.5 * w, (1.0 - ny) * 0.5 * h))
     }
 
     #[allow(dead_code)]
@@ -1721,7 +1805,30 @@ impl Editor {
     /// Paint face `k`: the current material plus the source face's alignment
     /// (Shift: every face of that brush; Alt: wrap from the source instead,
     /// and the painted face becomes the next source so you can walk around).
+    /// Right-drag painting: the face under (x, y), if it's a new one.
+    fn paint_drag_at(&mut self, x: f32, y: f32) -> u32 {
+        let Some((bid, _, Some(f))) = self.pick_3d_face(x, y) else { return 0 };
+        if !self.doc.brush(bid).is_some_and(|b| b.entity.is_none()) {
+            return 0;
+        }
+        let last = match self.drag {
+            Some(Drag::PaintFaces { last }) => last,
+            _ => return 0,
+        };
+        // Shift paints whole brushes: one paint per brush is enough
+        let same = last.is_some_and(|l| l == (bid, f) || (self.shift && l.0 == bid));
+        if same {
+            return 0;
+        }
+        self.drag = Some(Drag::PaintFaces { last: Some((bid, f)) });
+        self.paint_face_ext((bid, f), self.shift, self.alt, false)
+    }
+
     fn paint_face(&mut self, k: (u32, usize), whole: bool, wrap: bool) -> u32 {
+        self.paint_face_ext(k, whole, wrap, true)
+    }
+
+    fn paint_face_ext(&mut self, k: (u32, usize), whole: bool, wrap: bool, checkpoint: bool) -> u32 {
         let src = self.src_face.filter(|s| {
             self.doc.brush(s.0).and_then(|b| b.faces.get(s.1)).is_some_and(|f| f.material == self.current_material)
         });
@@ -1731,7 +1838,9 @@ impl Editor {
         } else {
             vec![k]
         };
-        self.doc.checkpoint();
+        if checkpoint {
+            self.doc.checkpoint();
+        }
         let material = self.current_material.clone();
         for &t in &targets {
             let tex = match src {
@@ -2194,6 +2303,13 @@ impl Editor {
     }
 
     fn persp_press(&mut self, x: f32, y: f32, btn: i32, m: i32) -> u32 {
+        if btn == button::RIGHT && self.tool == Tool::Face {
+            // paint: under the cursor, or at the crosshair while flying; keep painting while held
+            let (px, py) = if self.captured { (self.persp_size.0 * 0.5, self.persp_size.1 * 0.5) } else { (x, y) };
+            self.doc.checkpoint();
+            self.drag = Some(Drag::PaintFaces { last: None });
+            return self.paint_drag_at(px, py) | flags::ALL;
+        }
         if btn == button::RIGHT && !self.captured {
             self.drag = Some(Drag::Look { last: (x, y), start: (x, y), face_click: self.tool == Tool::Face });
             return 0;
@@ -2338,6 +2454,10 @@ impl Editor {
                     self.tex_drag_update(start, (x, y), face, mode, &orig);
                 }
                 Drag::TexDrag { start, face, mode, orig, moved, ctrl_click }
+            }
+            Drag::PaintFaces { last } => {
+                self.drag = Some(Drag::PaintFaces { last });
+                return self.paint_drag_at(x, y) | flags::ALL;
             }
             Drag::Look { last, start, mut face_click } => {
                 if face_click && ((x - start.0).abs() > 4.0 || (y - start.1).abs() > 4.0) {
@@ -2994,6 +3114,9 @@ impl Editor {
                 self.orbit_pivot = None;
                 out |= flags::ALL;
             }
+            Some(Drag::PaintFaces { last: None }) => {
+                self.doc.revert_to_checkpoint(); // painted nothing: no empty undo step
+            }
             Some(Drag::Look { start, face_click: true, .. }) => {
                 // Face Select & Paint: right-click paints that face (Shift: the
                 // whole brush, Alt: continue the source face's texture onto it).
@@ -3133,6 +3256,10 @@ impl Editor {
         if matches!(self.drag, Some(Drag::Paint { .. })) {
             let (w, h) = self.persp_size;
             self.paint_at(w * 0.5, h * 0.5);
+        }
+        if matches!(self.drag, Some(Drag::PaintFaces { .. })) {
+            let (w, h) = self.persp_size;
+            self.paint_drag_at(w * 0.5, h * 0.5);
         }
         flags::ALL
     }
@@ -3918,6 +4045,16 @@ impl Editor {
                 self.anim_acc = 0.0;
                 if self.doc.brushes.iter().any(|b| b.entity.is_none() && self.drawable(b) && !self.doc.is_collision(b) && b.faces.iter().any(|f| f.material == geom::NODRAW)) {
                     anim = if self.nodraw_2d { flags::ALL } else { flags::R3D };
+                }
+            }
+        }
+        // scrolling / pulsing / animated materials play in the 3D view (~30 fps)
+        if texstore::any_anim() {
+            self.mat_anim_acc += dt;
+            if self.mat_anim_acc >= 0.033 {
+                self.mat_anim_acc = 0.0;
+                if self.doc.brushes.iter().any(|b| self.drawable(b) && b.faces.iter().any(|f| texstore::anim(&f.material).is_some())) {
+                    anim |= flags::R3D;
                 }
             }
         }
@@ -5432,6 +5569,57 @@ mod tests {
     }
 
     #[test]
+    fn select_faces_with_a_texture_and_replace_it() {
+        let mut e = editor();
+        let a = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0));
+        let b = e.doc.add_brush(v3(64.0, 0.0, 0.0), v3(96.0, 32.0, 32.0));
+        for (id, n) in [(a, 2), (b, 3)] {
+            for i in 0..n {
+                e.doc.brush_mut(id).unwrap().faces[i].material = "walls/brick".into();
+            }
+        }
+        e.doc.brush_mut(a).unwrap().faces[0].tex.shift = [5.0, 7.0];
+        assert_eq!(e.select_faces_with("walls/brick"), 5);
+        assert_eq!(e.tool, Tool::Face);
+        assert_eq!(e.selected_face_materials(), vec!["walls/brick".to_string()]);
+        // only selected: one face
+        e.fsel = vec![(a, 0)];
+        assert_eq!(e.replace_material("walls/brick", "walls/stone", true), 1);
+        assert_eq!(e.doc.brush(a).unwrap().faces[0].tex.shift, [5.0, 7.0], "alignment stays");
+        // everywhere
+        assert_eq!(e.replace_material("walls/brick", "walls/stone", false), 4);
+        assert!(!e.doc.brushes.iter().any(|x| x.faces.iter().any(|f| f.material == "walls/brick")));
+        e.command(cmd::UNDO);
+        assert_eq!(e.doc.brushes.iter().flat_map(|x| x.faces.iter()).filter(|f| f.material == "walls/brick").count(), 4);
+    }
+
+    #[test]
+    fn right_drag_paints_every_face_swept_over_in_one_undo() {
+        let mut e = editor();
+        let a = e.doc.add_brush(v3(-200.0, -32.0, 0.0), v3(-136.0, 32.0, 64.0));
+        let b = e.doc.add_brush(v3(136.0, -32.0, 0.0), v3(200.0, 32.0, 64.0));
+        e.cam = Camera { pos: v3(0.0, -10.0, 600.0), yaw: 90.0, pitch: -89.0 };
+        e.command(cmd::TOOL_FACE);
+        e.current_material = "walls/brick".into();
+        let pa = e.persp_project(v3(-168.0, 0.0, 64.0)).unwrap();
+        let pb = e.persp_project(v3(168.0, 0.0, 64.0)).unwrap();
+        e.mouse_press(0, pa.0, pa.1, button::RIGHT, 0);
+        e.mouse_move(0, (pa.0 + pb.0) * 0.5, pa.1, button::RIGHT);
+        e.mouse_move(0, pb.0, pb.1, button::RIGHT);
+        e.mouse_release(0, pb.0, pb.1, button::RIGHT);
+        let top = |e: &Editor, id: u32| e.doc.brush(id).unwrap().faces.iter().any(|f| f.normal.z > 0.9 && f.material == "walls/brick");
+        assert!(top(&e, a) && top(&e, b));
+        e.command(cmd::UNDO);
+        assert!(!top(&e, a) && !top(&e, b), "one undo step for the whole sweep");
+        // flying: right button paints at the crosshair
+        e.captured = true;
+        e.cam = Camera { pos: v3(-168.0, 0.0, 600.0), yaw: 90.0, pitch: -89.0 };
+        e.mouse_press(0, 0.0, 0.0, button::RIGHT, 0);
+        e.mouse_release(0, 0.0, 0.0, button::RIGHT);
+        assert!(top(&e, a));
+    }
+
+    #[test]
     fn g_moves_the_block_tools_box() {
         let mut e = editor();
         e.axis_lock = false;
@@ -5985,14 +6173,12 @@ mod tests {
         e.mouse_release(0, 400.0, 300.0, button::LEFT);
         assert_eq!(e.current_material, "stone");
         assert_eq!(e.fsel, vec![(a, fa)]);
-        // right *drag* turns the camera and paints nothing
-        let before = e.doc.brush(a).unwrap().clone();
+        // right *drag* paints (since 0.14), and doesn't turn the camera
         let yaw = e.cam.yaw;
         e.mouse_press(0, 400.0, 300.0, button::RIGHT, 0);
         e.mouse_move(0, 460.0, 300.0, 0);
         e.mouse_release(0, 460.0, 300.0, button::RIGHT);
-        assert_ne!(e.cam.yaw, yaw);
-        assert_eq!(e.doc.brush(a).unwrap(), &before);
+        assert_eq!(e.cam.yaw, yaw);
         // Esc clears the face selection
         e.key(0, key::ESCAPE, true, 0, false);
         assert!(e.fsel.is_empty());

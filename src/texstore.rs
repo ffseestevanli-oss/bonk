@@ -22,6 +22,66 @@ thread_local! {
     static GEN: RefCell<u64> = const { RefCell::new(0) };
     /// Transparency per material for the 3D view: (0 opaque / 1 alpha test / 2 translucent, reference)
     static ALPHA: RefCell<HashMap<String, (u8, f32)>> = RefCell::new(HashMap::new());
+    /// Moving materials for the 3D view (scrolling, pulsing, animated frames)
+    static ANIM: RefCell<HashMap<String, Anim>> = RefCell::new(HashMap::new());
+}
+
+/// How a material moves, as the game would show it.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Anim {
+    /// Frames stacked top to bottom in the image (1 = still)
+    pub frames: u32,
+    pub fps: f32,
+    /// TextureScroll: texture widths per second along (u, v)
+    pub scroll: [f32; 2],
+    /// Sine: (min, max, period seconds, on alpha instead of brightness); period 0 = off
+    pub pulse: [f32; 3],
+    pub pulse_alpha: bool,
+}
+
+impl Anim {
+    pub fn is_still(&self) -> bool {
+        self.frames <= 1 && self.scroll == [0.0, 0.0] && self.pulse[2] <= 0.0
+    }
+
+    /// (frame, uv offset, brightness multiplier, alpha multiplier) at time `t`
+    pub fn at(&self, t: f32) -> (u32, [f32; 2], f32, f32) {
+        let frame = if self.frames > 1 { ((t * self.fps.max(0.0)).floor() as u64 % self.frames as u64) as u32 } else { 0 };
+        let off = [(self.scroll[0] * t).fract(), (self.scroll[1] * t).fract()];
+        let (mut c, mut a) = (1.0, 1.0);
+        if self.pulse[2] > 0.0 {
+            let k = (std::f32::consts::TAU * t / self.pulse[2]).sin() * 0.5 + 0.5;
+            let v = self.pulse[0] + (self.pulse[1] - self.pulse[0]) * k;
+            if self.pulse_alpha {
+                a = v.clamp(0.0, 1.0);
+            } else {
+                c = v.max(0.0);
+            }
+        }
+        (frame, off, c, a)
+    }
+}
+
+pub fn set_anim(name: &str, a: Anim) {
+    ANIM.with(|m| {
+        if a.is_still() {
+            m.borrow_mut().remove(name);
+        } else {
+            m.borrow_mut().insert(name.to_string(), a);
+        }
+    });
+}
+
+pub fn anim(name: &str) -> Option<Anim> {
+    ANIM.with(|m| m.borrow().get(name).copied())
+}
+
+pub fn any_anim() -> bool {
+    ANIM.with(|m| !m.borrow().is_empty())
+}
+
+fn frames_of(name: &str) -> u32 {
+    anim(name).map(|a| a.frames.max(1)).unwrap_or(1)
 }
 
 pub fn set_alpha(name: &str, mode: u8, reference: f32) {
@@ -66,7 +126,8 @@ pub fn get(name: &str) -> Option<(u32, u32, u64, Rc<Vec<u8>>)> {
     STORE.with(|s| s.borrow().get(name).map(|t| (t.w, t.h, t.gen, t.rgba.clone())))
 }
 
-/// Size of a loaded texture, if any.
+/// Size of a loaded texture, if any: one frame of an animation strip.
 pub fn size(name: &str) -> Option<(u32, u32)> {
-    STORE.with(|s| s.borrow().get(name).map(|t| (t.w, t.h)))
+    let n = frames_of(name);
+    STORE.with(|s| s.borrow().get(name).map(|t| (t.w, (t.h / n).max(1))))
 }

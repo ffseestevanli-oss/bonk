@@ -3,14 +3,6 @@
 Queued ideas that haven't shipped yet, grouped by the build they're planned for.
 Shipped work is in [CHANGELOG.md](CHANGELOG.md).
 
-## Build 3: Textures
-- Find and select every face using a texture, and replace it (buttons in the Texture Editor)
-- Small preview of the selected face's texture, with its name
-- Paint while flying (mouselook)
-- Hold right-click and drag to paint across many brushes (normal and fly mode)
-- Shader work: shader picker (MonitorScreen included), more texture slots, live VMT editing
-- Animated, scrolling and pulsing materials; material preview in the 3D view
-
 ## Build 4: Physics
 - Simplified collision: when a collision layer is made, choose Complex (all detail) or Simplified
   (details removed, walls become solids, open holes such as doors and windows kept), with a short

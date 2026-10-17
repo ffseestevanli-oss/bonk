@@ -52,6 +52,7 @@
 #include <QTreeWidget>
 #include <QListWidget>
 #include <QInputDialog>
+#include <QCollator>
 #include <QHeaderView>
 #include <QAbstractButton>
 #include <QGroupBox>
@@ -143,6 +144,8 @@ const char *bonk_model_path();
 const char *bonk_mat_override(const char *name);
 void bonk_set_mat_override(const char *name, const char *props);
 int bonk_write_vtf(const char *path, int w, int h, const unsigned char *rgba, int flags);
+int bonk_write_vtf_frames(const char *path, int w, int frame_h, int frames, const unsigned char *rgba, int flags);
+void bonk_texture_anim(const char *name, int frames, float fps, float scroll_rate, float scroll_angle, int pulse_mode, float pmin, float pmax, float period);
 int bonk_face_info(float *out);
 unsigned bonk_face_set(int field, float value);
 unsigned bonk_face_justify(int mode);
@@ -194,6 +197,9 @@ const char *bonk_overlap_scan();
 unsigned bonk_select_ids(const char *ids);
 int bonk_selected_group();
 int bonk_sel_box_mode();
+int bonk_select_faces_with(const char *material);
+int bonk_replace_material(const char *find, const char *with, int selected_only);
+const char *bonk_selected_face_materials();
 }
 
 #ifndef BONK_VERSION
@@ -2626,6 +2632,23 @@ struct MatProps {
     bool isNormalMap = false;     // this texture *is* a normal map (converted as one)
     QString preset;               // "", "monitor", "sign", "glass"
     QString extra;                // free VMT lines
+    // more texture slots (material keys of project textures)
+    QString detail;               // $detail
+    double detailScale = 4.0;     // $detailscale
+    double detailBlend = 0.5;     // $detailblendfactor
+    int detailMode = 0;           // $detailblendmode
+    QString envMaskTex;           // $envmapmask
+    QString selfillumMask;        // $selfillummask
+    QString phongExpTex;          // $phongexponenttexture
+    // moving materials
+    bool scroll = false;          // TextureScroll proxy
+    double scrollRate = 0.25;     // texture widths per second
+    double scrollAngle = 0.0;     // degrees
+    int pulse = 0;                // Sine proxy: 0 off, 1 brightness ($color2 / $color), 2 alpha ($alpha)
+    double pulseMin = 0.4, pulseMax = 1.0, pulsePeriod = 1.0;
+    int frames = 1;               // an animation strip: frames stacked top to bottom (AnimatedTexture)
+    double fps = 10.0;
+    QString custom;               // the whole VMT, edited by hand (used as is when set)
 
     bool isDefault() const { return serialize() == MatProps().serialize(); }
 
@@ -2651,6 +2674,23 @@ struct MatProps {
         add("normalmap", QString::number(isNormalMap));
         add("preset", preset);
         add("extra", extra);
+        add("detail", detail);
+        add("detailscale", QString::number(detailScale));
+        add("detailblend", QString::number(detailBlend));
+        add("detailmode", QString::number(detailMode));
+        add("envmasktex", envMaskTex);
+        add("selfillummask", selfillumMask);
+        add("phongexptex", phongExpTex);
+        add("scroll", QString::number(scroll));
+        add("scrollrate", QString::number(scrollRate));
+        add("scrollangle", QString::number(scrollAngle));
+        add("pulse", QString::number(pulse));
+        add("pulsemin", QString::number(pulseMin));
+        add("pulsemax", QString::number(pulseMax));
+        add("pulseperiod", QString::number(pulsePeriod));
+        add("frames", QString::number(frames));
+        add("fps", QString::number(fps));
+        add("custom", custom);
         return kv.join(QLatin1Char(';'));
     }
 
@@ -2675,6 +2715,23 @@ struct MatProps {
             else if (k == QStringLiteral("normalmap")) p.isNormalMap = v.toInt();
             else if (k == QStringLiteral("preset")) p.preset = v;
             else if (k == QStringLiteral("extra")) p.extra = v;
+            else if (k == QStringLiteral("detail")) p.detail = v;
+            else if (k == QStringLiteral("detailscale")) p.detailScale = v.toDouble();
+            else if (k == QStringLiteral("detailblend")) p.detailBlend = v.toDouble();
+            else if (k == QStringLiteral("detailmode")) p.detailMode = v.toInt();
+            else if (k == QStringLiteral("envmasktex")) p.envMaskTex = v;
+            else if (k == QStringLiteral("selfillummask")) p.selfillumMask = v;
+            else if (k == QStringLiteral("phongexptex")) p.phongExpTex = v;
+            else if (k == QStringLiteral("scroll")) p.scroll = v.toInt();
+            else if (k == QStringLiteral("scrollrate")) p.scrollRate = v.toDouble();
+            else if (k == QStringLiteral("scrollangle")) p.scrollAngle = v.toDouble();
+            else if (k == QStringLiteral("pulse")) p.pulse = v.toInt();
+            else if (k == QStringLiteral("pulsemin")) p.pulseMin = v.toDouble();
+            else if (k == QStringLiteral("pulsemax")) p.pulseMax = v.toDouble();
+            else if (k == QStringLiteral("pulseperiod")) p.pulsePeriod = v.toDouble();
+            else if (k == QStringLiteral("frames")) p.frames = std::max(1, v.toInt());
+            else if (k == QStringLiteral("fps")) p.fps = v.toDouble();
+            else if (k == QStringLiteral("custom")) p.custom = v;
         }
         return p;
     }
@@ -2718,7 +2775,20 @@ struct MatProps {
 
     /// The VMT text for material `key`, its VTFs living in `pool`
     /// (e.g. "materials/housepack").
+    /// Every project texture this material uses besides its own image.
+    QStringList extraTextures() const {
+        QStringList k;
+        for (const QString &t : {bumpmap, detail, envMaskTex, selfillumMask, phongExpTex})
+            if (!t.isEmpty()) k << t;
+        return k;
+    }
+
     QString vmt(const QString &key, const QString &pool) const {
+        if (!custom.trimmed().isEmpty()) return custom.endsWith(QLatin1Char('\n')) ? custom : custom + QLatin1Char('\n');
+        return generatedVmt(key, pool);
+    }
+
+    QString generatedVmt(const QString &key, const QString &pool) const {
         QString vtfDir = pool;
         if (vtfDir.startsWith(QStringLiteral("materials/"))) vtfDir.remove(0, 10);
         auto tex = [&](const QString &k) { return vtfDir.isEmpty() ? k : vtfDir + QLatin1Char('/') + k; };
@@ -2751,11 +2821,43 @@ struct MatProps {
         if (phong && sh == QStringLiteral("VertexLitGeneric")) {
             line(QStringLiteral("$phong"), QStringLiteral("1"));
             line(QStringLiteral("$phongboost"), num(phongBoost));
-            line(QStringLiteral("$phongexponent"), num(phongExp));
+            if (!phongExpTex.isEmpty()) line(QStringLiteral("$phongexponenttexture"), tex(phongExpTex));
+            else line(QStringLiteral("$phongexponent"), num(phongExp));
             line(QStringLiteral("$phongfresnelranges"), QStringLiteral("[0.2 0.6 1]"));
         }
+        if (envmap && envMask == 3 && !envMaskTex.isEmpty()) line(QStringLiteral("$envmapmask"), tex(envMaskTex));
+        if (selfillum && !selfillumMask.isEmpty() && sh == QStringLiteral("VertexLitGeneric")) line(QStringLiteral("$selfillummask"), tex(selfillumMask));
+        if (!detail.isEmpty()) {
+            line(QStringLiteral("$detail"), tex(detail));
+            line(QStringLiteral("$detailscale"), num(detailScale));
+            line(QStringLiteral("$detailblendfactor"), num(detailBlend));
+            if (detailMode) line(QStringLiteral("$detailblendmode"), QString::number(detailMode));
+        }
+        if (frames > 1) line(QStringLiteral("$frame"), QStringLiteral("0"));
         for (const QString &x : extra.split(QLatin1Char('\n'), Qt::SkipEmptyParts))
             if (!x.trimmed().isEmpty()) lines << QLatin1Char('\t') + x.trimmed();
+        // moving materials: proxies
+        QStringList px;
+        auto block = [&](const QString &name, const QList<QPair<QString, QString>> &kv) {
+            px << QStringLiteral("\t\t\"%1\"\n\t\t{").arg(name);
+            for (const auto &p : kv) px << QStringLiteral("\t\t\t\"%1\" \"%2\"").arg(p.first, p.second);
+            px << QStringLiteral("\t\t}");
+        };
+        if (scroll)
+            block(QStringLiteral("TextureScroll"), {{QStringLiteral("texturescrollvar"), QStringLiteral("$basetexturetransform")},
+                                                    {QStringLiteral("texturescrollrate"), num(scrollRate)},
+                                                    {QStringLiteral("texturescrollangle"), num(scrollAngle)}});
+        if (pulse)
+            block(QStringLiteral("Sine"), {{QStringLiteral("sinemin"), num(pulseMin)},
+                                           {QStringLiteral("sinemax"), num(pulseMax)},
+                                           {QStringLiteral("sineperiod"), num(pulsePeriod)},
+                                           {QStringLiteral("resultVar"), pulse == 2 ? QStringLiteral("$alpha")
+                                                                         : sh == QStringLiteral("VertexLitGeneric") ? QStringLiteral("$color2") : QStringLiteral("$color")}});
+        if (frames > 1)
+            block(QStringLiteral("AnimatedTexture"), {{QStringLiteral("animatedtexturevar"), QStringLiteral("$basetexture")},
+                                                      {QStringLiteral("animatedtextureframenumvar"), QStringLiteral("$frame")},
+                                                      {QStringLiteral("animatedtextureframerate"), num(fps)}});
+        if (!px.isEmpty()) lines << QStringLiteral("\t\"Proxies\"\n\t{\n%1\n\t}").arg(px.join(QLatin1Char('\n')));
         return QStringLiteral("\"%1\"\n{\n%2\n}\n").arg(sh, lines.join(QLatin1Char('\n')));
     }
 };
@@ -2778,10 +2880,30 @@ public:
         setWindowTitle(QStringLiteral("Material Properties: %1").arg(key));
         const QString ov = QString::fromUtf8(bonk_mat_override(key.toUtf8().constData()));
         MatProps p = ov.isEmpty() ? MatProps::loadSidecar(imageFile) : MatProps::parse(ov);
+        framesInImage = std::max(1, MatProps::loadSidecar(imageFile).frames); // a property of the image itself
+
+        auto texCombo = [&] {
+            auto *c = new QComboBox;
+            c->addItem(QStringLiteral("(none)"), QString());
+            for (const QString &k : projectKeys)
+                if (k != key) c->addItem(k, k);
+            return c;
+        };
+        auto dspin = [](double lo, double hi, double step) {
+            auto *s = new QDoubleSpinBox;
+            s->setRange(lo, hi);
+            s->setSingleStep(step);
+            s->setDecimals(step < 0.1 ? 2 : 1);
+            return s;
+        };
 
         auto *root = new QHBoxLayout(this);
         auto *left = new QVBoxLayout;
-        auto *form = new QFormLayout;
+        auto *tabs = new QTabWidget;
+
+        // --- Basics
+        auto *basics = new QWidget;
+        auto *form = new QFormLayout(basics);
         preset = new QComboBox;
         preset->addItem(QStringLiteral("None"), QString());
         preset->addItem(QStringLiteral("Monitor screen (shows a camera: _rt_Camera)"), QStringLiteral("monitor"));
@@ -2790,6 +2912,7 @@ public:
         shader = new QComboBox;
         shader->addItem(QStringLiteral("VertexLitGeneric (lit, the usual for models)"), QStringLiteral("VertexLitGeneric"));
         shader->addItem(QStringLiteral("UnlitGeneric (fullbright)"), QStringLiteral("UnlitGeneric"));
+        shader->addItem(QStringLiteral("MonitorScreen (screens: bright, like a display)"), QStringLiteral("MonitorScreen"));
         surf = new QComboBox;
         surf->setEditable(true);
         for (const char *s : kSurfaceProps) surf->addItem(QString::fromLatin1(s));
@@ -2798,30 +2921,11 @@ public:
         surf->setToolTip(QStringLiteral("$surfaceprop: impact sounds, bullet decals, footsteps and physics feel"));
         transp = new QComboBox;
         transp->addItems({QStringLiteral("None"), QStringLiteral("Alpha test (cut-out: fences, leaves)"), QStringLiteral("Translucent (glass, smoke)")});
-        alphaRef = new QDoubleSpinBox;
-        alphaRef->setRange(0.0, 1.0);
-        alphaRef->setSingleStep(0.05);
+        alphaRef = dspin(0.0, 1.0, 0.05);
         nocull = new QCheckBox(QStringLiteral("Double-sided ($nocull)"));
         selfillum = new QCheckBox(QStringLiteral("Glows ($selfillum, uses the image's alpha)"));
-        bump = new QComboBox;
-        bump->addItem(QStringLiteral("(none)"), QString());
-        for (const QString &k : projectKeys)
-            if (k != key) bump->addItem(k, k);
-        isNormal = new QCheckBox(QStringLiteral("This texture is a normal map (convert it as one)"));
-        envmap = new QCheckBox(QStringLiteral("Reflections ($envmap env_cubemap)"));
-        envTint = new QDoubleSpinBox;
-        envTint->setRange(0.0, 1.0);
-        envTint->setSingleStep(0.05);
-        envMask = new QComboBox;
-        envMask->addItems({QStringLiteral("Whole surface"), QStringLiteral("Base texture alpha"), QStringLiteral("Normal map alpha")});
-        phong = new QCheckBox(QStringLiteral("Shine ($phong)"));
-        boost = new QDoubleSpinBox;
-        boost->setRange(0.0, 50.0);
-        exponent = new QDoubleSpinBox;
-        exponent->setRange(1.0, 200.0);
-        extra = new QPlainTextEdit;
-        extra->setPlaceholderText(QStringLiteral("\"$detail\" \"detail/noise\"   (any extra VMT lines)"));
-        extra->setMaximumHeight(70);
+        selfillumMask = texCombo();
+        selfillumMask->setToolTip(QStringLiteral("$selfillummask: a separate image whose brightness says where it glows"));
         form->addRow(QStringLiteral("Preset"), preset);
         form->addRow(QStringLiteral("Shader"), shader);
         form->addRow(QStringLiteral("Surface type"), surf);
@@ -2829,16 +2933,89 @@ public:
         form->addRow(QStringLiteral("Alpha test cut-off"), alphaRef);
         form->addRow(nocull);
         form->addRow(selfillum);
-        form->addRow(QStringLiteral("Normal map"), bump);
-        form->addRow(isNormal);
-        form->addRow(envmap);
-        form->addRow(QStringLiteral("Reflection strength"), envTint);
-        form->addRow(QStringLiteral("Reflection mask"), envMask);
-        form->addRow(phong);
-        form->addRow(QStringLiteral("Shine boost"), boost);
-        form->addRow(QStringLiteral("Shine sharpness"), exponent);
-        form->addRow(QStringLiteral("Extra lines"), extra);
-        left->addLayout(form);
+        form->addRow(QStringLiteral("Glow mask"), selfillumMask);
+        tabs->addTab(basics, QStringLiteral("Basics"));
+
+        // --- Maps
+        auto *maps = new QWidget;
+        auto *mf = new QFormLayout(maps);
+        bump = texCombo();
+        isNormal = new QCheckBox(QStringLiteral("This texture is a normal map (convert it as one)"));
+        envmap = new QCheckBox(QStringLiteral("Reflections ($envmap env_cubemap)"));
+        envTint = dspin(0.0, 1.0, 0.05);
+        envMask = new QComboBox;
+        envMask->addItems({QStringLiteral("Whole surface"), QStringLiteral("Base texture alpha"), QStringLiteral("Normal map alpha"), QStringLiteral("Mask texture")});
+        envMaskTex = texCombo();
+        envMaskTex->setToolTip(QStringLiteral("$envmapmask: bright where it should reflect"));
+        phong = new QCheckBox(QStringLiteral("Shine ($phong)"));
+        boost = dspin(0.0, 50.0, 0.5);
+        exponent = dspin(1.0, 200.0, 1.0);
+        phongExpTex = texCombo();
+        phongExpTex->setToolTip(QStringLiteral("$phongexponenttexture: how sharp the shine is, per pixel (replaces Shine sharpness)"));
+        detail = texCombo();
+        detail->setToolTip(QStringLiteral("$detail: a small texture tiled over this one for close-up grain"));
+        detailScale = dspin(0.01, 64.0, 0.5);
+        detailBlend = dspin(0.0, 1.0, 0.05);
+        detailMode = new QComboBox;
+        detailMode->addItems({QStringLiteral("0: darken / lighten (default)"), QStringLiteral("1: add"), QStringLiteral("2: translucent detail"),
+                              QStringLiteral("3: blend by base alpha"), QStringLiteral("4: multiply by detail alpha")});
+        mf->addRow(QStringLiteral("Normal map"), bump);
+        mf->addRow(isNormal);
+        mf->addRow(envmap);
+        mf->addRow(QStringLiteral("Reflection strength"), envTint);
+        mf->addRow(QStringLiteral("Reflection mask"), envMask);
+        mf->addRow(QStringLiteral("Mask texture"), envMaskTex);
+        mf->addRow(phong);
+        mf->addRow(QStringLiteral("Shine boost"), boost);
+        mf->addRow(QStringLiteral("Shine sharpness"), exponent);
+        mf->addRow(QStringLiteral("Sharpness map"), phongExpTex);
+        mf->addRow(QStringLiteral("Detail texture"), detail);
+        mf->addRow(QStringLiteral("Detail scale"), detailScale);
+        mf->addRow(QStringLiteral("Detail strength"), detailBlend);
+        mf->addRow(QStringLiteral("Detail blend"), detailMode);
+        tabs->addTab(maps, QStringLiteral("Maps"));
+
+        // --- Animation
+        auto *anim = new QWidget;
+        auto *af = new QFormLayout(anim);
+        framesLabel = new QLabel;
+        framesLabel->setWordWrap(true);
+        fps = dspin(0.1, 120.0, 1.0);
+        fps->setToolTip(QStringLiteral("Frames per second (AnimatedTexture)"));
+        scroll = new QCheckBox(QStringLiteral("Scroll ($basetexturetransform via TextureScroll)"));
+        scrollRate = dspin(-20.0, 20.0, 0.05);
+        scrollRate->setToolTip(QStringLiteral("Texture widths per second"));
+        scrollAngle = dspin(-360.0, 360.0, 15.0);
+        scrollAngle->setToolTip(QStringLiteral("Direction in degrees: 0 moves right, 90 up"));
+        pulse = new QComboBox;
+        pulse->addItems({QStringLiteral("Off"), QStringLiteral("Brightness"), QStringLiteral("Transparency (needs Translucent)")});
+        pulse->setToolTip(QStringLiteral("Sine proxy: the value swings between Low and High"));
+        pulseMin = dspin(0.0, 4.0, 0.05);
+        pulseMax = dspin(0.0, 4.0, 0.05);
+        pulsePeriod = dspin(0.05, 60.0, 0.1);
+        pulsePeriod->setSuffix(QStringLiteral(" s"));
+        af->addRow(framesLabel);
+        af->addRow(QStringLiteral("Frame rate"), fps);
+        af->addRow(scroll);
+        af->addRow(QStringLiteral("Scroll speed"), scrollRate);
+        af->addRow(QStringLiteral("Scroll direction"), scrollAngle);
+        af->addRow(QStringLiteral("Pulse"), pulse);
+        af->addRow(QStringLiteral("Low"), pulseMin);
+        af->addRow(QStringLiteral("High"), pulseMax);
+        af->addRow(QStringLiteral("Period"), pulsePeriod);
+        af->addRow(hintLabel(QStringLiteral("Scrolling, pulsing and frames play in the 3D view, as in game.")));
+        tabs->addTab(anim, QStringLiteral("Animation"));
+
+        // --- Extra
+        auto *ex = new QWidget;
+        auto *exl = new QVBoxLayout(ex);
+        extra = new QPlainTextEdit;
+        extra->setPlaceholderText(QStringLiteral("\"$detailtint\" \"[1 0.9 0.8]\"   (any extra VMT lines)"));
+        exl->addWidget(new QLabel(QStringLiteral("Extra lines, added inside the material:")));
+        exl->addWidget(extra, 1);
+        tabs->addTab(ex, QStringLiteral("Extra"));
+
+        left->addWidget(tabs, 1);
         warn = new QLabel;
         warn->setWordWrap(true);
         warn->setStyleSheet(QStringLiteral("color:#e0823d"));
@@ -2853,43 +3030,73 @@ public:
         left->addWidget(buttons);
         root->addLayout(left, 3);
 
+        // --- the VMT, live and editable
         auto *right = new QVBoxLayout;
-        right->addWidget(new QLabel(QStringLiteral("<b>VMT preview</b>")));
+        auto *rh = new QHBoxLayout;
+        rh->addWidget(new QLabel(QStringLiteral("<b>VMT</b> (edit it directly if you like)")), 1);
+        backBtn = new QPushButton(QStringLiteral("Back to Generated"));
+        backBtn->setToolTip(QStringLiteral("Forget your hand edits and write the VMT from the settings on the left again"));
+        rh->addWidget(backBtn);
+        right->addLayout(rh);
+        customNote = new QLabel(QStringLiteral("Hand-edited: this text is written as is; the settings on the left no longer change it."));
+        customNote->setWordWrap(true);
+        customNote->setStyleSheet(QStringLiteral("color:#e0823d"));
+        right->addWidget(customNote);
         preview = new QPlainTextEdit;
-        preview->setReadOnly(true);
         preview->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-        preview->setMinimumWidth(320);
+        preview->setMinimumWidth(340);
         preview->setLineWrapMode(QPlainTextEdit::NoWrap);
         preview->setTabStopDistance(QFontMetricsF(preview->font()).horizontalAdvance(QLatin1Char(' ')) * 4);
         right->addWidget(preview, 1);
         right->addWidget(hintLabel(QStringLiteral("Written into each model's materials folder at compile time. "
-                                                  "A VMT you've edited by hand is never overwritten.")));
+                                                  "A VMT you've edited in the addon folder by hand is never overwritten.")));
         root->addLayout(right, 2);
 
         load(p);
-        for (QComboBox *c : {preset, shader, transp, envMask, bump})
+        for (QComboBox *c : {preset, shader, transp, envMask, bump, detail, detailMode, envMaskTex, selfillumMask, phongExpTex, pulse})
             QObject::connect(c, &QComboBox::currentIndexChanged, this, [this] { changed(); });
         QObject::connect(surf, &QComboBox::currentTextChanged, this, [this] { changed(); });
-        for (QCheckBox *c : {nocull, selfillum, envmap, phong, isNormal})
+        for (QCheckBox *c : {nocull, selfillum, envmap, phong, isNormal, scroll})
             QObject::connect(c, &QCheckBox::toggled, this, [this] { changed(); });
-        for (QDoubleSpinBox *s : {alphaRef, envTint, boost, exponent})
+        for (QDoubleSpinBox *s : {alphaRef, envTint, boost, exponent, detailScale, detailBlend, fps, scrollRate, scrollAngle, pulseMin, pulseMax, pulsePeriod})
             QObject::connect(s, &QDoubleSpinBox::valueChanged, this, [this] { changed(); });
         QObject::connect(extra, &QPlainTextEdit::textChanged, this, [this] { changed(); });
+        QObject::connect(preview, &QPlainTextEdit::textChanged, this, [this] {
+            if (loading) return;
+            custom = preview->toPlainText(); // typed into the VMT: it's yours now
+            customNote->show();
+            backBtn->setEnabled(true);
+        });
+        QObject::connect(backBtn, &QPushButton::clicked, this, [this] {
+            custom.clear();
+            changed();
+        });
         QObject::connect(preset, &QComboBox::currentIndexChanged, this, [this] { applyPreset(); });
         QObject::connect(buttons, &QDialogButtonBox::accepted, this, [this] { save(); });
         QObject::connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-        QObject::connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this, [this] { load(MatProps()); });
-        resize(860, 560);
+        QObject::connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this, [this] { custom.clear(); load(MatProps()); });
+        resize(920, 600);
     }
 
 private:
-    QString key, imageFile, pool;
-    QComboBox *preset, *shader, *surf, *transp, *bump, *envMask;
-    QDoubleSpinBox *alphaRef, *envTint, *boost, *exponent;
-    QCheckBox *nocull, *selfillum, *envmap, *phong, *isNormal, *overrideBox;
+    QString key, imageFile, pool, custom;
+    int framesInImage = 1;
+    QComboBox *preset, *shader, *surf, *transp, *bump, *envMask, *envMaskTex, *selfillumMask, *phongExpTex, *detail, *detailMode, *pulse;
+    QDoubleSpinBox *alphaRef, *envTint, *boost, *exponent, *detailScale, *detailBlend, *fps, *scrollRate, *scrollAngle, *pulseMin, *pulseMax, *pulsePeriod;
+    QCheckBox *nocull, *selfillum, *envmap, *phong, *isNormal, *overrideBox, *scroll;
     QPlainTextEdit *extra, *preview;
-    QLabel *warn;
+    QLabel *warn, *framesLabel, *customNote;
+    QPushButton *backBtn;
     bool loading = false;
+
+    static void pick(QComboBox *c, const QString &k) {
+        int i = c->findData(k);
+        if (i < 0 && !k.isEmpty()) {
+            c->addItem(k, k);
+            i = c->count() - 1;
+        }
+        c->setCurrentIndex(i < 0 ? 0 : i);
+    }
 
     MatProps gather() const {
         MatProps p;
@@ -2900,20 +3107,38 @@ private:
         p.alphaRef = alphaRef->value();
         p.nocull = nocull->isChecked();
         p.selfillum = selfillum->isChecked();
+        p.selfillumMask = selfillumMask->currentData().toString();
         p.bumpmap = bump->currentData().toString();
         p.isNormalMap = isNormal->isChecked();
         p.envmap = envmap->isChecked();
         p.envTint = envTint->value();
         p.envMask = envMask->currentIndex();
+        p.envMaskTex = envMaskTex->currentData().toString();
         p.phong = phong->isChecked();
         p.phongBoost = boost->value();
         p.phongExp = exponent->value();
+        p.phongExpTex = phongExpTex->currentData().toString();
+        p.detail = detail->currentData().toString();
+        p.detailScale = detailScale->value();
+        p.detailBlend = detailBlend->value();
+        p.detailMode = detailMode->currentIndex();
+        p.frames = framesInImage;
+        p.fps = fps->value();
+        p.scroll = scroll->isChecked();
+        p.scrollRate = scrollRate->value();
+        p.scrollAngle = scrollAngle->value();
+        p.pulse = pulse->currentIndex();
+        p.pulseMin = pulseMin->value();
+        p.pulseMax = pulseMax->value();
+        p.pulsePeriod = pulsePeriod->value();
         p.extra = extra->toPlainText();
+        p.custom = custom;
         return p;
     }
 
     void load(const MatProps &p) {
         loading = true;
+        custom = p.custom;
         preset->setCurrentIndex(std::max(0, preset->findData(p.preset)));
         shader->setCurrentIndex(std::max(0, shader->findData(p.shader)));
         surf->setCurrentText(p.surfaceprop);
@@ -2921,15 +3146,29 @@ private:
         alphaRef->setValue(p.alphaRef);
         nocull->setChecked(p.nocull);
         selfillum->setChecked(p.selfillum);
-        int bi = bump->findData(p.bumpmap);
-        bump->setCurrentIndex(bi < 0 ? 0 : bi);
+        pick(selfillumMask, p.selfillumMask);
+        pick(bump, p.bumpmap);
         isNormal->setChecked(p.isNormalMap);
         envmap->setChecked(p.envmap);
         envTint->setValue(p.envTint);
-        envMask->setCurrentIndex(std::clamp(p.envMask, 0, 2));
+        envMask->setCurrentIndex(std::clamp(p.envMask, 0, 3));
+        pick(envMaskTex, p.envMaskTex);
         phong->setChecked(p.phong);
         boost->setValue(p.phongBoost);
         exponent->setValue(p.phongExp);
+        pick(phongExpTex, p.phongExpTex);
+        pick(detail, p.detail);
+        detailScale->setValue(p.detailScale);
+        detailBlend->setValue(p.detailBlend);
+        detailMode->setCurrentIndex(std::clamp(p.detailMode, 0, 4));
+        fps->setValue(p.fps);
+        scroll->setChecked(p.scroll);
+        scrollRate->setValue(p.scrollRate);
+        scrollAngle->setValue(p.scrollAngle);
+        pulse->setCurrentIndex(std::clamp(p.pulse, 0, 2));
+        pulseMin->setValue(p.pulseMin);
+        pulseMax->setValue(p.pulseMax);
+        pulsePeriod->setValue(p.pulsePeriod);
         extra->setPlainText(p.extra);
         loading = false;
         changed();
@@ -2958,13 +3197,38 @@ private:
         alphaRef->setEnabled(p.transparency == 1);
         envTint->setEnabled(p.envmap);
         envMask->setEnabled(p.envmap);
+        envMaskTex->setEnabled(p.envmap && p.envMask == 3);
         boost->setEnabled(p.phong);
-        exponent->setEnabled(p.phong);
-        preview->setPlainText(p.vmt(key, pool));
+        exponent->setEnabled(p.phong && p.phongExpTex.isEmpty());
+        phongExpTex->setEnabled(p.phong);
+        selfillumMask->setEnabled(p.selfillum);
+        for (QWidget *w : std::initializer_list<QWidget *>{detailScale, detailBlend, detailMode}) w->setEnabled(!p.detail.isEmpty());
+        for (QWidget *w : std::initializer_list<QWidget *>{scrollRate, scrollAngle}) w->setEnabled(p.scroll);
+        for (QWidget *w : std::initializer_list<QWidget *>{pulseMin, pulseMax, pulsePeriod}) w->setEnabled(p.pulse != 0);
+        fps->setEnabled(framesInImage > 1);
+        framesLabel->setText(framesInImage > 1
+                                 ? QStringLiteral("<b>%1 frames</b> (an animation imported with Import Animation). They play with AnimatedTexture.").arg(framesInImage)
+                                 : QStringLiteral("A still image. To animate frames, use <b>Import Animation…</b> in the Texture Picker."));
+        {
+            loading = true; // showing the VMT isn't an edit
+            const int pos = preview->textCursor().position();
+            const QString text = p.vmt(key, pool);
+            if (preview->toPlainText() != text) preview->setPlainText(text);
+            if (preview->hasFocus()) {
+                QTextCursor c = preview->textCursor();
+                c.setPosition(std::min(pos, int(text.size())));
+                preview->setTextCursor(c);
+            }
+            loading = false;
+        }
+        customNote->setVisible(!custom.isEmpty());
+        backBtn->setEnabled(!custom.isEmpty());
         QString w;
         if (p.phong && p.bumpmap.isEmpty()) w = QStringLiteral("Shine ($phong) generally needs a normal map in Source; pick one, or it may not show.");
         else if (p.envMask == 2 && p.envmap && p.bumpmap.isEmpty()) w = QStringLiteral("The normal-map reflection mask needs a normal map.");
-        else if (p.selfillum && p.shader == QStringLiteral("UnlitGeneric")) w = QStringLiteral("UnlitGeneric is already fullbright, so Glows does nothing.");
+        else if (p.envMask == 3 && p.envmap && p.envMaskTex.isEmpty()) w = QStringLiteral("Pick a mask texture for the reflections.");
+        else if (p.selfillum && p.shader != QStringLiteral("VertexLitGeneric")) w = QStringLiteral("This shader is already fullbright, so Glows does nothing.");
+        else if (p.pulse == 2 && p.transparency != 2) w = QStringLiteral("Pulsing transparency needs Transparency: Translucent.");
         warn->setText(w);
         warn->setVisible(!w.isEmpty());
     }
@@ -3018,6 +3282,8 @@ struct TexEntry {
     bool converted = false;
     bool props = false; // has a .bonkmat
     QString vtf;        // where its VTF goes
+    int frames = 1;     // an animation strip: frames stacked top to bottom
+    QSize frameSize() const { return QSize(size.width(), size.height() / std::max(1, frames)); }
 };
 
 /// The project's textures: scans assets/Textures (live, through a file
@@ -3095,7 +3361,8 @@ public:
             for (const TexEntry &n : next) dup |= n.key == e.key;
             if (dup) continue;
             const TexEntry *old = find(e.key);
-            if (old && old->file == e.file && old->mtime == e.mtime) {
+            if (QFileInfo::exists(MatProps::sidecarFor(e.file))) e.frames = std::max(1, MatProps::loadSidecar(e.file).frames);
+            if (old && old->file == e.file && old->mtime == e.mtime && old->frames == e.frames) {
                 e.size = old->size;
                 e.icon = old->icon;
             } else {
@@ -3111,13 +3378,27 @@ public:
                 QImage sq(192, 192, QImage::Format_ARGB32_Premultiplied);
                 sq.fill(Qt::transparent);
                 {
-                    QImage t = img.scaled(192, 192, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    // an animation shows its first frame, with a film-strip mark
+                    const QImage first = e.frames > 1 ? img.copy(0, 0, img.width(), img.height() / e.frames) : img;
+                    QImage t = first.scaled(192, 192, Qt::KeepAspectRatio, Qt::SmoothTransformation);
                     QPainter q(&sq);
                     q.drawImage((192 - t.width()) / 2, (192 - t.height()) / 2, t);
+                    if (e.frames > 1) {
+                        q.setRenderHint(QPainter::Antialiasing);
+                        q.setPen(Qt::NoPen);
+                        q.setBrush(QColor(0, 0, 0, 170));
+                        q.drawRoundedRect(QRectF(6, 150, 74, 36), 6, 6);
+                        QFont f;
+                        f.setPixelSize(22);
+                        f.setBold(true);
+                        q.setFont(f);
+                        q.setPen(Qt::white);
+                        q.drawText(QRectF(6, 150, 74, 36), Qt::AlignCenter, QStringLiteral("▶ %1").arg(e.frames));
+                    }
                 }
                 e.icon = QIcon(QPixmap::fromImage(sq));
                 any = true;
-                if (needsResize(e.size) && !asked.contains(e.file)) fresh << e.rel;
+                if (needsResize(e.frames > 1 ? e.frameSize() : e.size) && !asked.contains(e.file)) fresh << e.rel;
             }
             e.vtf = vtfPath(e.key);
             QFileInfo vi(e.vtf);
@@ -3213,6 +3494,13 @@ public:
         MatProps p = MatProps::loadSidecar(e.file);
         int flags = (p.isNormalMap ? 1 : 0) | (p.transparency == 1 ? 2 : 0);
         QByteArray path = QFile::encodeName(e.vtf.isEmpty() ? vtfPath(e.key) : e.vtf);
+        if (p.frames > 1) {
+            // an animation strip: one VTF frame per strip cell (AnimatedTexture)
+            const int fh = rgba.height() / p.frames;
+            if (fh < 1 || bonk_write_vtf_frames(path.constData(), rgba.width(), fh, p.frames, rgba.constBits(), flags) != 0)
+                return fh < 1 ? QStringLiteral("the animation's frames are too small") : QString::fromUtf8(bonk_last_error());
+            return QString();
+        }
         if (bonk_write_vtf(path.constData(), rgba.width(), rgba.height(), rgba.constBits(), flags) != 0)
             return QString::fromUtf8(bonk_last_error());
         return QString();
@@ -3353,6 +3641,7 @@ class TexturePicker : public QWidget {
 public:
     std::function<void(unsigned)> changed;  // editor flags to handle (repaint etc.)
     std::function<void()> importReq;        // Import… pressed
+    std::function<void()> animReq;          // Import Animation… pressed
     std::function<void(const QStringList &, const QString &)> dropped; // paths, group ("" = ask)
     std::function<void()> switchToFace;     // swatch clicked outside Face Select & Paint
     std::function<void(const QStringList &)> convertReq; // keys to convert ([] = all)
@@ -3462,9 +3751,14 @@ public:
         importBtn->setToolTip(QStringLiteral("Copy PNG / JPG files into the project's assets/Textures (or drop them here)"));
         convertBtn = new QPushButton(QStringLiteral("Convert All"));
         convertBtn->setToolTip(QStringLiteral("Convert every texture that isn't converted yet to VTF\n(into addon/<project>/<texture pool>)"));
+        auto *animBtn = new QPushButton(QStringLiteral("Import Animation…"));
+        animBtn->setToolTip(QStringLiteral("Make an animated texture: pick several images (its frames, in name order),\n"
+                                           "one sprite sheet, or a GIF. It plays in the 3D view and in game (AnimatedTexture)."));
+        QObject::connect(animBtn, &QPushButton::clicked, this, [this] { if (animReq) animReq(); });
         br->addWidget(applyBtn, 0, 0);
         br->addWidget(importBtn, 0, 1);
-        br->addWidget(convertBtn, 1, 0, 1, 2);
+        br->addWidget(animBtn, 1, 0, 1, 2);
+        br->addWidget(convertBtn, 2, 0, 1, 2);
         v->addLayout(br);
 
         buildFaceSection(v);
@@ -3514,6 +3808,8 @@ public:
                 const TexEntry *e = lib->find(key);
                 if (!e) return;
                 m.addAction(QStringLiteral("Material Properties…"), [this, key] { if (propertiesReq) propertiesReq(key); });
+                m.addAction(QStringLiteral("Select Faces Using This"), [this, key] { selectUsing(key); });
+                m.addAction(QStringLiteral("Replace This Texture…"), [this, key] { replaceDialog(key); });
                 m.addAction(e->converted ? QStringLiteral("Convert Again") : QStringLiteral("Convert to VTF"), [this, key] { if (convertReq) convertReq({key}); });
                 m.addSeparator();
                 m.addAction(QStringLiteral("Cut"), [file, key] { file(QStringLiteral("cut"), {key}, QString()); })->setShortcut(QKeySequence::Cut);
@@ -3775,7 +4071,69 @@ private:
 
     // Face section
     QGroupBox *faceBox;
-    QLabel *faceCount;
+    QLabel *faceCount, *facePreview, *faceTexName;
+    QPushButton *selUsingBtn, *replaceBtn;
+
+    QStringList selectedMats() const {
+        return QString::fromUtf8(bonk_selected_face_materials()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    }
+
+    void selectUsing(const QString &key) {
+        QByteArray k = key.toUtf8();
+        const int n = bonk_select_faces_with(k.constData());
+        if (switchToFace) switchToFace();
+        if (changed) changed(F_R3D | F_R2D | F_TOOL);
+        (void)n;
+        refreshFace();
+    }
+
+    /// Replace a texture: on the selected faces, or everywhere in the model.
+    void replaceDialog(const QString &find) {
+        QDialog d(this);
+        d.setWindowTitle(QStringLiteral("Replace texture"));
+        auto *form = new QFormLayout(&d);
+        auto *findBox = new QComboBox;
+        auto *withBox = new QComboBox;
+        findBox->setEditable(true);
+        withBox->setEditable(true);
+        QStringList keys{QStringLiteral("tools/toolsnodraw")};
+        for (const TexEntry &e : lib->entries) keys << e.key;
+        const QStringList sel = selectedMats();
+        if (find.isEmpty() && sel.size() > 1) findBox->addItem(QStringLiteral("(any texture on the selected faces)"), QString());
+        for (const QString &k : keys) findBox->addItem(displayName(k), k);
+        if (!find.isEmpty()) {
+            int i = findBox->findData(find);
+            if (i < 0) { findBox->addItem(displayName(find), find); i = findBox->count() - 1; }
+            findBox->setCurrentIndex(i);
+        }
+        for (const QString &k : keys) withBox->addItem(displayName(k), k);
+        const QString cur = QString::fromUtf8(bonk_current_material());
+        int wi = withBox->findData(cur);
+        withBox->setCurrentIndex(wi < 0 ? 0 : wi);
+        auto *everywhere = new QRadioButton(QStringLiteral("Everywhere in the model"));
+        auto *selected = new QRadioButton(QStringLiteral("Only on the selected faces"));
+        selected->setEnabled(!sel.isEmpty());
+        (sel.isEmpty() || !find.isEmpty() ? everywhere : selected)->setChecked(true);
+        form->addRow(QStringLiteral("Find"), findBox);
+        form->addRow(QStringLiteral("Replace with"), withBox);
+        form->addRow(everywhere);
+        form->addRow(selected);
+        form->addRow(hintLabel(QStringLiteral("Texture alignment stays as it is. Ctrl+Z undoes it.")));
+        auto *bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        bb->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Replace"));
+        form->addRow(bb);
+        QObject::connect(bb, &QDialogButtonBox::accepted, &d, &QDialog::accept);
+        QObject::connect(bb, &QDialogButtonBox::rejected, &d, &QDialog::reject);
+        if (d.exec() != QDialog::Accepted) return;
+        auto keyOf = [](QComboBox *c) {
+            const int i = c->findText(c->currentText());
+            return i >= 0 ? c->itemData(i).toString() : cleanGamePath(c->currentText());
+        };
+        const QByteArray f = keyOf(findBox).toUtf8(), w = keyOf(withBox).toUtf8();
+        bonk_replace_material(f.constData(), w.constData(), selected->isChecked());
+        if (changed) changed(F_R3D | F_R2D | F_TOOL);
+        refreshFace();
+    }
     QDoubleSpinBox *fShiftU, *fShiftV, *fScaleU, *fScaleV, *fRot;
     QCheckBox *lockBox, *scaleBox, *groupBox;
     bool syncingFace = false;
@@ -3804,8 +4162,36 @@ private:
         g->setContentsMargins(8, 6, 8, 8);
         g->setHorizontalSpacing(6);
         g->setVerticalSpacing(4);
+        // the selected face's texture: a thumbnail and its name
+        auto *pv = new QHBoxLayout;
+        facePreview = new QLabel;
+        facePreview->setFixedSize(48, 48);
+        facePreview->setScaledContents(true);
+        facePreview->setFrameShape(QFrame::StyledPanel);
+        faceTexName = new QLabel;
+        faceTexName->setWordWrap(true);
+        faceTexName->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        pv->addWidget(facePreview);
+        pv->addWidget(faceTexName, 1);
+        g->addLayout(pv, 0, 0, 1, 4);
         faceCount = new QLabel;
-        g->addWidget(faceCount, 0, 0, 1, 4);
+        g->addWidget(faceCount, 8, 0, 1, 4);
+        auto *fr = new QHBoxLayout;
+        selUsingBtn = new QPushButton(QStringLiteral("Select All Using"));
+        selUsingBtn->setToolTip(QStringLiteral("Select every face in the model that uses this texture"));
+        replaceBtn = new QPushButton(QStringLiteral("Replace…"));
+        replaceBtn->setToolTip(QStringLiteral("Swap this texture for another, on the selected faces or everywhere in the model"));
+        fr->addWidget(selUsingBtn);
+        fr->addWidget(replaceBtn);
+        g->addLayout(fr, 9, 0, 1, 4);
+        QObject::connect(selUsingBtn, &QPushButton::clicked, this, [this] {
+            const QStringList m = selectedMats();
+            if (!m.isEmpty()) selectUsing(m.first());
+        });
+        QObject::connect(replaceBtn, &QPushButton::clicked, this, [this] {
+            const QStringList m = selectedMats();
+            replaceDialog(m.size() == 1 ? m.first() : QString());
+        });
         auto spin = [](double lo, double hi, double step, int dec) {
             auto *s = new QDoubleSpinBox;
             s->setRange(lo, hi);
@@ -3913,6 +4299,21 @@ private:
                                       : QStringLiteral("%1 faces (values from the source face)").arg(n));
         } else {
             faceCount->setText(QStringLiteral("Click faces in the 3D view to edit their textures"));
+        }
+        const QStringList mats = n > 0 ? selectedMats() : QStringList();
+        facePreview->setVisible(!mats.isEmpty());
+        faceTexName->setVisible(!mats.isEmpty());
+        selUsingBtn->setEnabled(mats.size() == 1);
+        if (mats.size() == 1) {
+            const QString k = mats.first();
+            const TexEntry *e = lib->find(k);
+            const bool nd = k.isEmpty() || k == QStringLiteral("tools/toolsnodraw");
+            facePreview->setPixmap((e ? e->icon : builtinIcon(nd)).pixmap(96, 96));
+            faceTexName->setText(QStringLiteral("<b>%1</b>%2").arg(displayName(k).toHtmlEscaped(),
+                                 !e && !nd ? QStringLiteral("<br><span style='color:#e0823d'>not in this project</span>") : QString()));
+        } else if (mats.size() > 1) {
+            facePreview->setPixmap(QPixmap());
+            faceTexName->setText(QStringLiteral("<b>%1 textures</b>").arg(mats.size()));
         }
         groupBox->setEnabled(n > 1);
         syncingFace = false;
@@ -5276,10 +5677,15 @@ public:
 
     /// Tell the 3D view which textures are cut-outs or see-through (from
     /// their Material Properties, the open model's overrides included).
+    /// The 3D view's look for each texture: transparency, and how it moves
+    /// (frames, scrolling, pulsing) as the game would show it.
     void syncTextureAlpha() {
         for (const TexEntry &e : library.entries) {
             const MatProps p = propsFor(e.key);
-            bonk_texture_alpha(e.key.toUtf8().constData(), p.transparency, float(p.alphaRef));
+            const QByteArray k = e.key.toUtf8();
+            bonk_texture_alpha(k.constData(), p.transparency, float(p.alphaRef));
+            bonk_texture_anim(k.constData(), e.frames, float(p.fps), p.scroll ? float(p.scrollRate) : 0.0f, float(p.scrollAngle),
+                              p.pulse, float(p.pulseMin), float(p.pulseMax), float(p.pulsePeriod));
         }
     }
 
@@ -5493,7 +5899,7 @@ public:
             {
                 ensureVtf(key);
                 const MatProps mp_ = propsFor(key);
-                if (!mp_.bumpmap.isEmpty()) ensureVtf(mp_.bumpmap);
+                for (const QString &t : mp_.extraTextures()) ensureVtf(t);
                 if (surfaceprop.isEmpty() && !mp_.surfaceprop.isEmpty()) surfaceprop = mp_.surfaceprop;
                 text = mp_.vmt(key, project.texturePool);
             }
@@ -6063,6 +6469,141 @@ public:
         }
     }
 
+    // ---------------------------------------------------------- animations
+
+    /// Texture Picker → Import Animation…: frames from several images (name
+    /// order), one sprite sheet, or a GIF, saved as one strip image (frames
+    /// stacked top to bottom) plus its frame count. Compiling turns it into a
+    /// multi-frame VTF with an AnimatedTexture proxy.
+    void importAnimation(QStringList files = QStringList()) {
+        if (!ensureProject()) return;
+        if (files.isEmpty())
+            files = QFileDialog::getOpenFileNames(this, QStringLiteral("Import animation: pick the frames, a sprite sheet or a GIF"),
+                                                  QSettings().value("files/importDir", QDir::homePath()).toString(),
+                                                  QStringLiteral("Images (*.png *.jpg *.jpeg *.gif *.PNG *.JPG *.JPEG *.GIF)"));
+        if (files.isEmpty()) return;
+        QSettings().setValue("files/importDir", QFileInfo(files.first()).absolutePath());
+        QList<QImage> frames;
+        double fps = 10.0;
+        const bool assume = qEnvironmentVariableIsSet("BONK_ASSUME_YES");
+        if (files.size() == 1 && files.first().endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive)) {
+            QImageReader r(files.first());
+            int delays = 0, n = 0;
+            while (r.canRead()) {
+                QImage im = r.read();
+                if (im.isNull()) break;
+                frames << im;
+                if (r.nextImageDelay() > 0) { delays += r.nextImageDelay(); ++n; }
+            }
+            if (n) fps = std::clamp(1000.0 * n / delays, 1.0, 60.0);
+            if (frames.isEmpty()) {
+                QMessageBox::warning(this, QStringLiteral("Import animation"), QStringLiteral("Couldn't read the GIF's frames: %1").arg(r.errorString()));
+                return;
+            }
+        } else if (files.size() == 1) {
+            // one image: a sprite sheet. Guess the grid from square frames, then ask.
+            QImage sheet(files.first());
+            if (sheet.isNull()) return;
+            int cols = 1, rows = 1;
+            if (sheet.width() > sheet.height() && sheet.width() % sheet.height() == 0) cols = sheet.width() / sheet.height();
+            else if (sheet.height() > sheet.width() && sheet.height() % sheet.width() == 0) rows = sheet.height() / sheet.width();
+            if (!assume) {
+                QDialog d(this);
+                d.setWindowTitle(QStringLiteral("Sprite sheet"));
+                auto *f = new QFormLayout(&d);
+                auto *c = new QSpinBox;
+                auto *r = new QSpinBox;
+                auto *cnt = new QSpinBox;
+                c->setRange(1, 64);
+                r->setRange(1, 64);
+                cnt->setRange(1, 4096);
+                c->setValue(cols);
+                r->setValue(rows);
+                cnt->setValue(cols * rows);
+                f->addRow(new QLabel(QStringLiteral("%1 is %2 × %3. How is it divided? Frames go left to right, then top to bottom.")
+                                         .arg(QFileInfo(files.first()).fileName()).arg(sheet.width()).arg(sheet.height())));
+                f->addRow(QStringLiteral("Columns"), c);
+                f->addRow(QStringLiteral("Rows"), r);
+                f->addRow(QStringLiteral("Frames used"), cnt);
+                QObject::connect(c, &QSpinBox::valueChanged, &d, [c, r, cnt] { cnt->setValue(c->value() * r->value()); });
+                QObject::connect(r, &QSpinBox::valueChanged, &d, [c, r, cnt] { cnt->setValue(c->value() * r->value()); });
+                auto *bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+                f->addRow(bb);
+                QObject::connect(bb, &QDialogButtonBox::accepted, &d, &QDialog::accept);
+                QObject::connect(bb, &QDialogButtonBox::rejected, &d, &QDialog::reject);
+                if (d.exec() != QDialog::Accepted) return;
+                cols = c->value();
+                rows = r->value();
+                const int used = cnt->value();
+                const int fw = sheet.width() / cols, fh = sheet.height() / rows;
+                for (int i = 0; i < std::min(used, cols * rows); ++i) frames << sheet.copy((i % cols) * fw, (i / cols) * fh, fw, fh);
+            } else {
+                const int fw = sheet.width() / cols, fh = sheet.height() / rows;
+                for (int i = 0; i < cols * rows; ++i) frames << sheet.copy((i % cols) * fw, (i / cols) * fh, fw, fh);
+            }
+        } else {
+            // several images: their frames, in natural name order (frame2 before frame10)
+            QCollator col;
+            col.setNumericMode(true);
+            std::sort(files.begin(), files.end(), [&col](const QString &a, const QString &b) { return col.compare(QFileInfo(a).fileName(), QFileInfo(b).fileName()) < 0; });
+            for (const QString &f : files) {
+                QImage im(f);
+                if (im.isNull()) {
+                    QMessageBox::warning(this, QStringLiteral("Import animation"), QStringLiteral("Couldn't read %1").arg(QFileInfo(f).fileName()));
+                    return;
+                }
+                frames << im;
+            }
+        }
+        if (frames.size() < 2) {
+            QMessageBox::information(this, QStringLiteral("Import animation"), QStringLiteral("An animation needs at least two frames."));
+            return;
+        }
+        // every frame the same power-of-two size, and the strip no taller than GL likes
+        QSize fs = resizeTarget(frames.first().size());
+        while (fs.height() * frames.size() > 16384 && fs.height() > 4) fs = QSize(std::max(4, fs.width() / 2), fs.height() / 2);
+        QImage strip(fs.width(), fs.height() * int(frames.size()), QImage::Format_ARGB32);
+        strip.fill(Qt::transparent);
+        {
+            QPainter q(&strip);
+            for (int i = 0; i < frames.size(); ++i)
+                q.drawImage(QRect(0, i * fs.height(), fs.width(), fs.height()), frames[i].scaled(fs, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+        }
+        // its name
+        QString base = QFileInfo(files.first()).completeBaseName();
+        static const QRegularExpression trail(QStringLiteral("[_\\-\\s]*\\d+$"));
+        if (files.size() > 1) base.remove(trail);
+        if (base.isEmpty()) base = QStringLiteral("animation");
+        QString name = base;
+        if (!assume) {
+            bool ok = false;
+            name = QInputDialog::getText(this, QStringLiteral("Import animation"),
+                                         QStringLiteral("%1 frames of %2 × %3. Name it:").arg(frames.size()).arg(fs.width()).arg(fs.height()),
+                                         QLineEdit::Normal, base, &ok);
+            if (!ok || name.trimmed().isEmpty()) return;
+        }
+        const QString folder = picker ? picker->folder() : QString();
+        const QString dir = project.texturesDir() + (folder.isEmpty() ? QString() : QLatin1Char('/') + folder);
+        QDir().mkpath(dir);
+        QString path = dir + QLatin1Char('/') + cleanProjectName(name) + QStringLiteral(".png");
+        for (int n = 2; QFileInfo::exists(path); ++n) path = dir + QLatin1Char('/') + cleanProjectName(name) + QStringLiteral("_%1.png").arg(n);
+        library.pauseScans(true);
+        MatProps mp;
+        mp.frames = int(frames.size());
+        mp.fps = std::round(fps * 10.0) / 10.0;
+        if (!strip.save(path) || !mp.saveSidecar(path)) {
+            library.pauseScans(false);
+            QMessageBox::warning(this, QStringLiteral("Import animation"), QStringLiteral("Couldn't save %1").arg(path));
+            return;
+        }
+        library.markAsked({path});
+        library.pauseScans(false);
+        syncTextureAlpha();
+        handle(F_R3D | F_TOOL);
+        statusBar()->showMessage(QStringLiteral("Imported a %1-frame animation (%2 fps): %3. Material Properties → Animation changes its speed.")
+                                     .arg(frames.size()).arg(mp.fps).arg(QDir(project.texturesDir()).relativeFilePath(path)), 8000);
+    }
+
     /// Offer to resize images that are over 4096 or not powers of two.
     void offerResize(const QStringList &rels) {
         QString list;
@@ -6411,6 +6952,7 @@ MainWindow::MainWindow() {
     picker = new TexturePicker(&library);
     picker->changed = [this](unsigned f) { handle(f | F_R3D | F_R2D); };
     picker->importReq = [this] { importTextures(); };
+    picker->animReq = [this] { importAnimation(); };
     picker->dropped = [this](const QStringList &paths, const QString &g) { importPaths(paths, g, g.isEmpty()); };
     picker->switchToFace = [this] { command(CMD_TOOL_FACE); };
     picker->convertReq = [this](const QStringList &keys) { convertTextures(keys); };
@@ -6841,6 +7383,21 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                 } else if (c == QStringLiteral("copy")) w.copySelection(false);
                 else if (c == QStringLiteral("paste") || c == QStringLiteral("pastem")) w.pasteClipboard(c.endsWith(QLatin1Char('m')));
                 else if (c == QStringLiteral("overlaps")) w.findOverlaps();
+                else if (c.startsWith(QStringLiteral("anim:"))) w.importAnimation(c.mid(5).split(QLatin1Char('|')));
+                else if (c.startsWith(QStringLiteral("selusing:"))) { QByteArray k = c.mid(9).toUtf8(); bonk_select_faces_with(k.constData()); w.handle(F_R3D | F_R2D | F_TOOL); }
+                else if (c == QStringLiteral("convertall")) { if (w.picker->convertReq) w.picker->convertReq({}); }
+                else if (c.startsWith(QStringLiteral("matdlg:"))) { // matdlg:key:tab
+                    const QString key = c.section(QLatin1Char(':'), 1, 1);
+                    const TexEntry *e = w.library.find(key);
+                    if (e) {
+                        QStringList keys;
+                        for (const TexEntry &x : w.library.entries) keys << x.key;
+                        auto *d = new MaterialDialog(&w, key, e->file, w.project.texturePool, keys, true);
+                        d->setAttribute(Qt::WA_DeleteOnClose);
+                        d->findChild<QTabWidget *>()->setCurrentIndex(c.section(QLatin1Char(':'), 2, 2).toInt());
+                        d->show();
+                    }
+                }
                 else if (c.startsWith(QStringLiteral("select:"))) { QByteArray b = c.mid(7).toUtf8(); w.handle(bonk_select_ids(b.constData())); }
                 else if (c == QStringLiteral("current")) w.layers->debugCurrent();
                 else if (c.startsWith(QStringLiteral("fold:"))) w.layers->debugFold(c.mid(5).toInt());

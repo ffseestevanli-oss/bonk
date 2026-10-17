@@ -36,7 +36,8 @@ or Propper.
   the held key does, and the 3D view takes the editing keys too when you're not flying.
 - **Textures done right:** a Texture Picker with folders, Face Select & Paint, Hammer-style
   alignment (shift, scale, rotate, justify, wrap, Texture Lock), and Material Properties that
-  become the VMT: surface type, transparency, phong, normal maps, reflections…
+  become the VMT: shaders, surface type, transparency, phong, normal / detail / mask maps,
+  reflections, and scrolling, pulsing or animated materials that play in the 3D view.
 - **Built-in VTF conversion:** drop PNG or JPG files in and Bonk writes the VTFs itself.
 - **Collision models:** a separate collision layer you shape yourself (or one generated from the
   visual brushes), with a live Budget bar for studiomdl's limits.
@@ -159,8 +160,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the pieces fit together and how t
 - [x] Hold-key editing everywhere: G grab with axis lock, H hide, mirror, 3D nudging, FOV
 - [x] Modeling power: Quick Draw, primitives, multi-vertex editing, copy between models, overlap check
 - [ ] Simplified collision, mass presets, Workshop publishing
-- [ ] Shader work: shader picker (incl. MonitorScreen), more texture slots, live VMT editing
-- [ ] Animated, scrolling and pulsing materials; material preview in the 3D view
+- [x] Shader work: shader picker (incl. MonitorScreen), more texture slots, live VMT editing
+- [x] Animated, scrolling and pulsing materials; texture find / replace; paint by dragging
 - [ ] Optional Hammer++ / StudioMDL-CE compiler
 - [ ] Skins, bodygroups, LODs and an in-editor model preview
 - [ ] Flathub release
