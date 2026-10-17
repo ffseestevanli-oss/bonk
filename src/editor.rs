@@ -367,6 +367,8 @@ pub mod cmd {
     pub const TOGGLE_VERTEX_PICK: i32 = 38;
     /// Measurement Buddies: place a car (HL2 jeep sized)
     pub const TOOL_CAR: i32 = 39;
+    /// The Select button's right half: box select (again: instant ↔ Enter)
+    pub const TOGGLE_SEL_BOX_MODE: i32 = 40;
 }
 
 #[derive(Default)]
@@ -449,6 +451,10 @@ pub struct Editor {
     pub sel_touch: bool,
     /// The selection box waits for Enter (the old way) instead of selecting on release
     pub sel_box_wait: bool,
+    /// The Select button's right half: every drag draws a selection box (never grabs a brush)
+    pub sel_box_only: bool,
+    /// What was selected before a Ctrl+box started (live boxes add to it)
+    sel_box_base: Vec<u32>,
     /// G / Shift moves stay on one axis (the one you move along most); Alt flips it for a hold
     pub axis_lock: bool,
     axis_flip: bool,
@@ -543,6 +549,8 @@ impl Editor {
             sel_box: None,
             sel_touch: true,
             sel_box_wait: false,
+            sel_box_only: false,
+            sel_box_base: Vec::new(),
             axis_lock: true,
             axis_flip: false,
             axis_commit: None,
@@ -760,6 +768,28 @@ impl Editor {
     }
 
     /// Enter with a selection box: select what it catches (Ctrl adds).
+    /// Instant box: what the box touches is the selection, live, while it's up.
+    fn live_sel_box(&mut self) {
+        if self.tool != Tool::Select || !self.sel_box_only || self.sel_box_wait {
+            return;
+        }
+        let mut sel = self.sel_box_base.clone();
+        for c in self.sel_box_catch() {
+            if !sel.contains(&c) {
+                sel.push(c);
+            }
+        }
+        if sel != self.doc.selection {
+            self.doc.selection = sel;
+            self.sel_mode = HandleMode::Scale;
+        }
+    }
+
+    /// An instant box is up and live.
+    fn live_box_up(&self) -> bool {
+        self.tool == Tool::Select && self.sel_box_only && !self.sel_box_wait && self.sel_box.is_some()
+    }
+
     fn apply_sel_box(&mut self, add: bool) -> u32 {
         let caught = self.sel_box_catch();
         if add {
@@ -1319,6 +1349,12 @@ impl Editor {
                         }
                     }
                 }
+                if self.sel_box_only {
+                    // box select: every drag draws a box, even over brushes
+                    self.sel_box_base = if ctrl { self.doc.selection.clone() } else { Vec::new() };
+                    self.drag = Some(Drag::SelNew { view: id, start: (wh, wv), start_px: (x, y) });
+                    return flags::ALL;
+                }
                 let mode = self.sel_mode;
                 if let Some(b) = self.doc.selection_bounds() {
                     match self.hit_box(id, b, x, y, mode) {
@@ -1362,8 +1398,10 @@ impl Editor {
                 }
                 let hit = self.pick_2d(id, x, y);
                 if hit.is_none() {
-                    // empty space: drag out a selection box (a click just deselects)
-                    self.drag = Some(Drag::SelNew { view: id, start: (wh, wv), start_px: (x, y) });
+                    // point and click: empty space deselects (boxes are the right half's job)
+                    if !ctrl {
+                        self.click_select(None, false);
+                    }
                     return flags::ALL;
                 }
                 self.click_select(hit, ctrl);
@@ -2453,6 +2491,7 @@ impl Editor {
                 } else {
                     self.sel_box = None;
                 }
+                self.live_sel_box();
                 Drag::SelNew { view, start, start_px }
             }
             Drag::NewBox { view, start, start_px, ctrl, quick } => {
@@ -2813,6 +2852,7 @@ impl Editor {
             }
             Target::SelBox => {
                 self.sel_box = Some(nb);
+                self.live_sel_box();
             }
             Target::Selection => {
                 if !*changed {
@@ -2880,9 +2920,9 @@ impl Editor {
                         self.click_select(None, false); // plain click on empty space: deselect
                     }
                 } else if !self.sel_box_wait {
-                    // select right away, ready for G / S / R (Ctrl adds)
-                    let add = self.ctrl;
-                    self.apply_sel_box(add);
+                    // instant: the box stays up, its brushes selected; its handles adjust it
+                    let n = self.doc.selection.len();
+                    self.message = Some(format!("{} brush{} selected: drag the box's edges to adjust; Delete, G, S, R work on them", n, if n == 1 { "" } else { "es" }));
                 } else {
                     let n = self.sel_box_catch().len();
                     self.message = Some(format!("Selection box: {} brush{} inside. Enter selects (Ctrl+Enter adds), S / G adjust, Esc cancels", n, if n == 1 { "" } else { "es" }));
@@ -3106,6 +3146,13 @@ impl Editor {
 
     pub fn key(&mut self, id: usize, k: i32, pressed: bool, m: i32, repeat: bool) -> u32 {
         let k3d = id == 0 || self.captured;
+        // an instant box's brushes get worked on: the box steps aside (they stay selected)
+        if pressed && !repeat && self.live_box_up()
+            && matches!(k, key::G | key::S | key::R | key::H | key::COMMA | key::PERIOD | key::UP | key::DOWN | key::LEFT | key::RIGHT)
+            && m & mods::CTRL == 0
+        {
+            self.sel_box = None;
+        }
         // Hold G (grab) and move the mouse: move the selection (release G to place).
         if k == key::G && !self.captured && m & (mods::CTRL | mods::ALT) == 0 {
             if repeat {
@@ -3897,6 +3944,9 @@ impl Editor {
     // ------------------------------------------------------------------ commands
 
     pub fn command(&mut self, c: i32) -> u32 {
+        if self.live_box_up() && matches!(c, cmd::DELETE | cmd::MIRROR_H | cmd::MIRROR_V | cmd::HIDE_TOGGLE | cmd::GROUP | cmd::UNGROUP | cmd::QUANTIZE) {
+            self.sel_box = None;
+        }
         match c {
             cmd::UNDO => {
                 self.drag = None;
@@ -4031,6 +4081,23 @@ impl Editor {
                 };
                 return self.mirror_selection(axis);
             }
+            cmd::TOGGLE_SEL_BOX_MODE => {
+                if self.tool != Tool::Select || !self.sel_box_only {
+                    if self.tool != Tool::Select {
+                        self.command(cmd::TOOL_SELECT);
+                    }
+                    self.sel_box_only = true;
+                } else {
+                    self.sel_box_wait = !self.sel_box_wait;
+                    self.sel_box = None;
+                }
+                self.message = Some(if self.sel_box_wait {
+                    "Box select (Enter): drag a box, adjust it, Enter selects (Ctrl+Enter adds). Click the box half again: instant"
+                } else {
+                    "Box select (instant): what the box touches is selected as you drag. Click the box half again: Enter mode"
+                }.into());
+                return flags::ALL | flags::TOOL;
+            }
             cmd::TOGGLE_VERTEX_PICK => {
                 if self.tool == Tool::Vertex {
                     self.vertex_pick = !self.vertex_pick;
@@ -4084,7 +4151,11 @@ impl Editor {
             cmd::BISECT_APPLY => return self.apply_bisect(),
             cmd::TOOL_SELECT | cmd::TOOL_BLOCK | cmd::TOOL_VERTEX | cmd::TOOL_BISECT | cmd::TOOL_MANNEQUIN | cmd::TOOL_CAR | cmd::TOOL_ORIGIN | cmd::TOOL_FACE => {
                 self.tool = match c {
-                    cmd::TOOL_SELECT => Tool::Select,
+                    cmd::TOOL_SELECT => {
+                        self.sel_box_only = false; // the left half: point and click
+                        self.sel_box = None;
+                        Tool::Select
+                    }
                     cmd::TOOL_BLOCK => Tool::Block,
                     cmd::TOOL_VERTEX => Tool::Vertex,
                     cmd::TOOL_BISECT => Tool::Bisect,
@@ -5534,14 +5605,33 @@ mod tests {
         let a = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0));
         let b = e.doc.add_brush(v3(48.0, 0.0, 0.0), v3(96.0, 32.0, 32.0));
         e.command(cmd::TOOL_SELECT);
-        // by default releasing the box selects right away
+        // point and click: a drag on empty space draws nothing
         drag!(e, 1, sp(&e, 1, -16.0, -16.0), sp(&e, 1, 64.0, 48.0), 0);
-        assert!(e.sel_box.is_none());
+        assert!(e.sel_box.is_none() && e.doc.selection.is_empty());
+        // the box half, instant: what it touches is selected while you drag, and it stays up
+        e.command(cmd::TOGGLE_SEL_BOX_MODE);
+        assert!(e.sel_box_only && !e.sel_box_wait);
+        let (p0, p1) = (sp(&e, 1, 16.0, 16.0), sp(&e, 1, 34.0, 24.0)); // starts on brush A: still a box, no grab
+        e.mouse_press(1, p0.0, p0.1, button::LEFT, 0);
+        e.mouse_move(1, p1.0, p1.1, button::LEFT);
+        assert_eq!(e.doc.selection, vec![a], "live while dragging");
+        let p2 = sp(&e, 1, 64.0, 24.0);
+        e.mouse_move(1, p2.0, p2.1, button::LEFT);
         assert_eq!(e.doc.selection.len(), 2);
+        e.mouse_release(1, p2.0, p2.1, button::LEFT);
+        assert!(e.sel_box.is_some(), "the box stays up");
+        assert_eq!(e.doc.brush(a).unwrap().bounds().0, v3(0.0, 0.0, 0.0), "nothing got grabbed");
+        // Delete removes what it touches, and the box goes
+        e.command(cmd::DELETE);
+        assert_eq!(e.doc.brushes.len(), 0);
+        assert!(e.sel_box.is_none());
+        e.command(cmd::UNDO);
         e.doc.selection.clear();
-        // the old way (setting): the box waits for Enter
-        e.sel_box_wait = true;
+        // the box half again: Enter mode (the old way)
+        e.command(cmd::TOGGLE_SEL_BOX_MODE);
+        assert!(e.sel_box_wait);
         drag!(e, 1, sp(&e, 1, -16.0, -16.0), sp(&e, 1, 64.0, 48.0), 0);
+        assert!(e.doc.selection.is_empty(), "waits for Enter");
         assert!(e.sel_box.is_some());
         assert_eq!(e.sel_box_catch().len(), 2, "by default the box takes what it touches");
         e.sel_touch = false;
@@ -5560,6 +5650,10 @@ mod tests {
         // a plain click on empty space still deselects
         click!(e, 1, sp(&e, 1, 300.0, 300.0), 0);
         assert!(e.doc.selection.is_empty());
+        // the left half (1) goes back to point and click
+        e.command(cmd::TOOL_SELECT);
+        assert!(!e.sel_box_only);
+        e.command(cmd::TOGGLE_SEL_BOX_MODE);
         // Esc drops a box
         drag!(e, 1, sp(&e, 1, -16.0, -16.0), sp(&e, 1, 64.0, 48.0), 0);
         e.key(1, key::ESCAPE, true, 0, false);

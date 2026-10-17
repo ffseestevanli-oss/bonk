@@ -193,6 +193,7 @@ unsigned bonk_paste(const char *text, int at_mouse);
 const char *bonk_overlap_scan();
 unsigned bonk_select_ids(const char *ids);
 int bonk_selected_group();
+int bonk_sel_box_mode();
 }
 
 #ifndef BONK_VERSION
@@ -215,7 +216,7 @@ enum Cmd {
     CMD_TOOL_MANNEQUIN, CMD_TOOL_ORIGIN, CMD_TOOL_FACE, CMD_ORIGIN_TO_SEL_BOTTOM, CMD_ORIGIN_TO_SEL_CENTER, CMD_TOGGLE_MANNEQUINS,
     CMD_GROUP, CMD_UNGROUP, CMD_IGNORE_GROUPS, CMD_TOGGLE_NODRAW_2D, CMD_DESELECT, CMD_TOGGLE_EDGES_3D,
     CMD_BISECT_MODE_DELETE_LARGER, CMD_HIDE_TOGGLE, CMD_MIRROR_H, CMD_MIRROR_V, CMD_TOGGLE_AXIS_LOCK, CMD_TOGGLE_BOX_TOUCH,
-    CMD_TOGGLE_COLLISION_SOLID, CMD_TOGGLE_VERTEX_PICK, CMD_TOOL_CAR
+    CMD_TOGGLE_COLLISION_SOLID, CMD_TOGGLE_VERTEX_PICK, CMD_TOOL_CAR, CMD_TOGGLE_SEL_BOX_MODE
 };
 
 const char *kViewNames[4] = {"camera", "top (x/y)", "front (y/z)", "side (x/z)"};
@@ -753,9 +754,10 @@ public:
         selTouch = new QCheckBox(QStringLiteral("Selection box only takes brushes fully inside it"));
         selTouch->setToolTip(QStringLiteral("Off (default): the box takes every brush it touches.\nOn: only brushes entirely inside the box."));
         ef->addRow(selTouch);
-        selWait = new QCheckBox(QStringLiteral("Selection box waits for Enter (the old way)"));
-        selWait->setToolTip(QStringLiteral("Off (default): letting go of the box selects what it takes, ready for G / S / R.\n"
-                                           "On: the box stays up to be adjusted; Enter selects (Ctrl+Enter adds)."));
+        selWait = new QCheckBox(QStringLiteral("Box select waits for Enter (select + Enter mode)"));
+        selWait->setToolTip(QStringLiteral("The Select button's box half. Off (default): instant, what the box touches is selected as you drag.\n"
+                                           "On: the box stays up to be adjusted; Enter selects (Ctrl+Enter adds).\n"
+                                           "Clicking the box half while it's on switches between the two."));
         ef->addRow(selWait);
         axisLock = new QCheckBox(QStringLiteral("Lock G / Shift moves to one axis"));
         axisLock->setToolTip(QStringLiteral("The move stays on the axis you move along most. Alt while holding flips it for that move.\n"
@@ -1401,6 +1403,15 @@ public:
                     else QObject::connect(b, &QAbstractButton::clicked, this, [ot] { ot(); });
                     entries.push_back({d, b, mode == 0 && inRow == 3});
                     h->addWidget(b);
+                    if (d.cmd == CMD_TOOL_SELECT) {
+                        // [ Select  1 |▭] : point and click on the left, box select on the right
+                        selectBox = new ToolButton(b);
+                        selectBox->small = true;
+                        selectBox->iconName = QStringLiteral("box-instant");
+                        QObject::connect(selectBox, &QAbstractButton::clicked, this, [oc] { oc(CMD_TOGGLE_SEL_BOX_MODE); });
+                        b->corner = selectBox;
+                        b->placeCorner();
+                    }
                     if (d.cmd == CMD_TOOL_VERTEX) {
                         // [ Vertex  3 |↖] : the segment turns on vertex select
                         vertexPick = new ToolButton(b);
@@ -1419,6 +1430,7 @@ public:
             v->addSpacing(gCompact ? 3 : 6);
         };
         vertexPick = nullptr;
+        selectBox = nullptr;
         section("Brush Manipulation", kBrushTools, 4);
         // Block tool: what it makes (shown while the Block tool is active)
         shapeBox = new QWidget;
@@ -1480,6 +1492,20 @@ public:
         int opts[4] = {0, 1, 1, 0};
         bonk_selection_options(opts);
         if (shapeBox) shapeBox->setVisible(tool == 1);
+        const int boxMode = bonk_sel_box_mode();
+        if (selectBox) {
+            selectBox->active = tool == 0 && boxMode != 0;
+            selectBox->grey = grey;
+            selectBox->iconName = QString::fromLatin1(boxMode == 2 ? "box-enter" : "box-instant");
+            selectBox->setToolTip(boxMode == 0 ? QStringLiteral("Box select: every drag draws a selection box, even over brushes.\n"
+                                                                  "Click again to switch between instant and select + Enter.")
+                                  : boxMode == 1 ? QStringLiteral("Box select, instant: what the box touches is selected as you drag; the box\n"
+                                                                  "stays up to adjust. Delete, G, S, R work on what it caught.\n"
+                                                                  "Click: select + Enter mode. The Select half (or 1): point and click.")
+                                                 : QStringLiteral("Box select + Enter: drag a box, adjust it (handles, S, G), Enter selects.\n"
+                                                                  "Click: instant mode. The Select half (or 1): point and click."));
+            selectBox->update();
+        }
         if (vertexPick) {
             vertexPick->active = tool == 2 && bonk_vertex_pick();
             vertexPick->grey = grey;
@@ -1490,6 +1516,8 @@ public:
             const ToolDef &d = e.def;
             b->active = d.tool >= 0 ? d.tool == tool : textureOpen;
             if (d.cmd == CMD_TOOL_MANNEQUIN || d.cmd == CMD_TOOL_CAR) b->active = tool == 4 && bonk_place_kind() == (d.cmd == CMD_TOOL_CAR);
+            if (d.cmd == CMD_TOOL_SELECT) b->active = tool == 0 && bonk_sel_box_mode() == 0;
+            if (d.cmd == CMD_TOOL_VERTEX) b->active = tool == 2 && !bonk_vertex_pick();
             b->grey = grey;
             if (d.cmd == CMD_IGNORE_GROUPS || d.cmd == CMD_TOGGLE_BOX_TOUCH || d.cmd == CMD_TOGGLE_AXIS_LOCK) {
                 QString tip = QString::fromUtf8(d.name);
@@ -1546,6 +1574,7 @@ private:
     std::function<void()> lastSync;
     int mode = 0;
     ToolButton *vertexPick = nullptr;
+    ToolButton *selectBox = nullptr;
     QWidget *shapeBox = nullptr;
     QComboBox *shapeCombo = nullptr;
     QSlider *facesSlider = nullptr;
@@ -4431,6 +4460,10 @@ public:
 
     void command(int c) {
         handle(bonk_command(c));
+        if (c == CMD_TOGGLE_SEL_BOX_MODE && bonk_sel_box_mode() != 0) {
+            prefs.selBoxWait = bonk_sel_box_mode() == 2; // the same choice as Settings → Editing
+            prefs.save();
+        }
         if (c == CMD_TOGGLE_BOX_TOUCH || c == CMD_TOGGLE_AXIS_LOCK || c == CMD_TOGGLE_COLLISION_SOLID) {
             // remembered between sessions
             int o[4] = {0, 1, 1, 0};

@@ -376,6 +376,12 @@ pub extern "C" fn bonk_selected_group() -> c_int {
     })
 }
 
+/// The Select tool's mode: 0 point and click, 1 box select (instant), 2 box select (Enter).
+#[no_mangle]
+pub extern "C" fn bonk_sel_box_mode() -> c_int {
+    with_ed(|ed| if !ed.sel_box_only { 0 } else if ed.sel_box_wait { 2 } else { 1 })
+}
+
 /// Block tool shape (0 block, 1 cylinder, 2 wedge, 3 spike, 4 orb) and faces count.
 #[no_mangle]
 pub extern "C" fn bonk_set_block_shape(shape: c_int, faces: c_int) -> u32 {

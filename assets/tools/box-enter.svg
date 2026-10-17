@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <g fill="none" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">
+    <!-- a selection box with the Enter key's arrow: select + Enter -->
+    <rect x="6" y="6" width="52" height="52" stroke-dasharray="7 6"/>
+    <path d="M44 18 L44 38 L20 38 M28 30 L20 38 L28 46"/>
+  </g>
+</svg>

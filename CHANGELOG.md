@@ -2,6 +2,16 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.13.3
+
+- **The Select button is split in two.** The left half (or 1) is point and click: click selects,
+  drag moves, and a drag on empty space no longer draws a box. The right half is box select: every
+  drag draws a box, even one that starts on a brush, so it never grabs one by accident.
+- **Instant box select is live:** what the box touches is selected while you drag, and the box
+  stays up; drag its edges or move it and the selection follows. Delete, G, S, R, H and the mirror
+  keys work on what it caught. Click the right half again for select + Enter mode (the same as
+  Settings → Editing).
+
 ## 0.13.2
 
 - **Layers pane follows the views:** select a whole group in a 2D or 3D view and it's highlighted

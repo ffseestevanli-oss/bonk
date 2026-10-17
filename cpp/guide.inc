@@ -101,8 +101,8 @@ QList<GuidePage> guidePages(bool hammer) {
         p.keys = {{QStringLiteral("click"), QStringLiteral("Select a brush (its whole group, unless groups are ignored)")},
                   {QStringLiteral("Ctrl+click"), QStringLiteral("Add or remove a brush")},
                   {QStringLiteral("click again"), QStringLiteral("Switch between resize and rotate handles")},
-                  {QStringLiteral("drag"), QStringLiteral("On empty space in a 2D view: draw a selection box; letting go selects what it took")},
-                  {QStringLiteral("Ctrl+drag"), QStringLiteral("Selection box that adds to the selection")},
+                  {QStringLiteral("drag"), QStringLiteral("Select half: move what you grab. Box half: draw a selection box, even over brushes")},
+                  {QStringLiteral("Ctrl+drag"), QStringLiteral("Box half: a box that adds to the selection")},
                   {QStringLiteral("D"), QStringLiteral("Deselect (any view, unless you're flying)")},
                   {QStringLiteral("H"), QStringLiteral("Hide the selection for now; H with nothing selected shows it again")},
                   {QStringLiteral("Ctrl+D"), QStringLiteral("Deselect, anywhere")},
@@ -113,12 +113,16 @@ QList<GuidePage> guidePages(bool hammer) {
         p.html = QStringLiteral("<p>Deselecting can be undone with Ctrl+Z, so a stray D never loses a careful selection.</p>"
                                 "<p>H only hides things for now: hidden brushes can't be clicked, aren't saved as hidden, and still "
                                 "compile. Use a layer's Show box for something lasting.</p>");
-        p.subs = {{QStringLiteral("Selection box"), QStringLiteral("<p>Drag on empty space in a 2D view to draw a box. When you let go, what it caught "
-                                                                   "is selected, ready for G, S or R (Ctrl+drag adds). "
-                                                                   "The box takes every brush it touches; the <b>Box</b> button under Selection Options "
-                                                                   "switches it to only brushes fully inside.</p>"
-                                                                   "<p>Prefer the old way? Settings → Editing → <i>Selection box waits for Enter</i>: the box "
-                                                                   "stays up, hold <b>S</b> to resize it and <b>G</b> to move it, then Enter selects (Ctrl+Enter adds).</p>")},
+        p.subs = {{QStringLiteral("Selection box"), QStringLiteral("<p>The Select button has two halves. The left half (or 1) is <b>point and click</b>: "
+                                                                   "click to select, drag to move. The right half is <b>box select</b>: every drag draws a box, "
+                                                                   "even one that starts on a brush. Click the right half again to switch its mode:</p><ul>"
+                                                                   "<li><b>Instant</b> (lightning): what the box touches is selected as you drag, and the box stays "
+                                                                   "up: drag its edges or move it and the selection follows. Delete, G, S, R, H and the mirror keys "
+                                                                   "work on what it caught (the box steps aside).</li>"
+                                                                   "<li><b>Select + Enter</b> (arrow): the box waits; hold <b>S</b> to resize it and <b>G</b> to move it, "
+                                                                   "then Enter selects (Ctrl+Enter adds).</li></ul>"
+                                                                   "<p>The box takes every brush it touches; the <b>Box</b> button under Selection Options "
+                                                                   "switches it to only brushes fully inside.</p>")},
                   {QStringLiteral("Selection Options"), QStringLiteral("<p>Three toggles at the bottom of the tool panel: <b>Ignore Groups</b> (Ctrl+W), "
                                                                        "<b>Box: Touching / Inside</b>, and <b>Axis Lock</b> for G and Shift moves.</p>")},
                   {QStringLiteral("Resize handles"), QStringLiteral("<p>A selected brush shows square handles in the 2D views: drag one to resize "
