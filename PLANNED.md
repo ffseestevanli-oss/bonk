@@ -41,7 +41,6 @@ Shipped work is in [CHANGELOG.md](CHANGELOG.md).
   a banner "You are updating [project]…", and the Workshop types and tags
 
 ## Smaller follow-ups
-- Car buddy: match the HL2 jeep's exact bounding box if it can be confirmed
 - Collision edges: heavier when seen from far away, if they still blend together
 - Arch primitive (several brushes), if wanted
 
