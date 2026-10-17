@@ -1,6 +1,6 @@
 [package]
 name = "bonk"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2021"
 description = "Bonk! Model Prop-inator!: a Hammer-style brush modeler that builds Garry's Mod props on Linux"
 license = "GPL-3.0-or-later"

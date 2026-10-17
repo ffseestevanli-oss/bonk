@@ -358,6 +358,24 @@ pub extern "C" fn bonk_place_kind() -> c_int {
     with_ed(|ed| (ed.place == doc::Entity::Car) as c_int)
 }
 
+/// The group the selection is exactly (0 if none), for the Layers pane to
+/// highlight. Cached until the selection or the groups change.
+#[no_mangle]
+pub extern "C" fn bonk_selected_group() -> c_int {
+    thread_local! {
+        static CACHE: RefCell<(u64, Vec<u32>, c_int)> = const { RefCell::new((u64::MAX, Vec::new(), 0)) };
+    }
+    with_ed(|ed| {
+        CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.0 != ed.doc.rev || c.1 != ed.doc.selection {
+                *c = (ed.doc.rev, ed.doc.selection.clone(), ed.doc.selected_group().map(|g| g as c_int).unwrap_or(0));
+            }
+            c.2
+        })
+    })
+}
+
 /// Block tool shape (0 block, 1 cylinder, 2 wedge, 3 spike, 4 orb) and faces count.
 #[no_mangle]
 pub extern "C" fn bonk_set_block_shape(shape: c_int, faces: c_int) -> u32 {

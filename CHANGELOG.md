@@ -2,6 +2,14 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.13.2
+
+- **Layers pane follows the views:** select a whole group in a 2D or 3D view and it's highlighted
+  in the list (its parent groups open). Inside a layer you folded, the layer row lights up instead,
+  and stays folded.
+- **Folded layers and headings stay folded** when you work on another layer, toggle a Show box,
+  or anything else rebuilds the list.
+
 ## 0.13.1
 
 - **Fixed: a 2D view went dark while you held G, S, Shift or R, or panned.** The hold hint left

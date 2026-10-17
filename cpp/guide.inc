@@ -354,7 +354,8 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "heading with one layer under it names that layer too. The Show box hides a layer. "
                                 "Right-click → Own Origin gives a layer its own origin.</p>"
                                 "<p><b>Groups</b> appear under their layer: click to select (it stays highlighted), double-click or F2 to "
-                                "rename, right-click to duplicate or ungroup. A group on a hidden, ghosted or locked layer can't be "
+                                "rename, right-click to duplicate or ungroup. Selecting a whole group in a view highlights it here too. Folded "
+                                "layers and headings stay folded. A group on a hidden, ghosted or locked layer can't be "
                                 "selected; the status bar says so.</p>");
         p.see = {QStringLiteral("collision"), QStringLiteral("selecting")};
     }

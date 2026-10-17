@@ -608,6 +608,43 @@ impl Document {
         ix
     }
 
+    /// The group the selection is exactly (all of its brushes and nothing
+    /// else), outermost first; None if the selection isn't one whole group.
+    pub fn selected_group(&self) -> Option<u32> {
+        let first = self.brush(*self.selection.first()?)?;
+        let parents: HashMap<u32, Option<u32>> = self.groups.iter().map(|g| (g.id, g.parent)).collect();
+        let chain = |mut g: Option<u32>| {
+            let mut out = Vec::new();
+            while let Some(id) = g {
+                if out.len() > 64 || !parents.contains_key(&id) {
+                    break;
+                }
+                out.push(id);
+                g = parents[&id];
+            }
+            out
+        };
+        let cands = chain(first.group); // innermost … outermost
+        let sel: HashSet<u32> = self.selection.iter().copied().collect();
+        for &g in cands.iter().rev() {
+            let mut count = 0;
+            let mut ok = true;
+            for b in &self.brushes {
+                if chain(b.group).contains(&g) {
+                    count += 1;
+                    if !sel.contains(&b.id) {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok && count == sel.len() {
+                return Some(g);
+            }
+        }
+        None
+    }
+
     /// Grow a set of brushes to whole (outermost) groups.
     pub fn expand_to_groups(&self, ids: &[u32]) -> Vec<u32> {
         let ix = self.group_index();
@@ -1013,6 +1050,26 @@ fn hsv(h: f32, s: f32, v: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_group_is_the_whole_group_only() {
+        let mut d = Document::default();
+        let a = d.add_brush(v3(0.0, 0.0, 0.0), v3(8.0, 8.0, 8.0));
+        let b = d.add_brush(v3(16.0, 0.0, 0.0), v3(24.0, 8.0, 8.0));
+        let c = d.add_brush(v3(32.0, 0.0, 0.0), v3(40.0, 8.0, 8.0));
+        d.selection = vec![a, b];
+        let inner = d.group_selection().unwrap();
+        d.selection = vec![a, b, c];
+        let outer = d.group_selection().unwrap();
+        d.selection = vec![b, a];
+        assert_eq!(d.selected_group(), Some(inner));
+        d.selection = vec![a, b, c];
+        assert_eq!(d.selected_group(), Some(outer));
+        d.selection = vec![a];
+        assert_eq!(d.selected_group(), None);
+        d.selection = vec![c];
+        assert_eq!(d.selected_group(), None);
+    }
 
     #[test]
     fn undo_redo_roundtrip() {

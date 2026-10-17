@@ -192,6 +192,7 @@ const char *bonk_copy(const char *source, int cut);
 unsigned bonk_paste(const char *text, int at_mouse);
 const char *bonk_overlap_scan();
 unsigned bonk_select_ids(const char *ids);
+int bonk_selected_group();
 }
 
 #ifndef BONK_VERSION
@@ -1658,11 +1659,22 @@ public:
             if (changed) changed(F_R3D | F_R2D);
         });
         // groups start folded; remember the ones you open
+        // remember what you fold and unfold: layers, the Visual / Collision headings, groups
         QObject::connect(tree, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem *it) {
-            if (!rebuilding && it->data(1, Qt::UserRole + 3).toInt() == 2) openGroups.insert(it->data(1, Qt::UserRole).toInt());
+            if (rebuilding) return;
+            const int kind = it->data(1, Qt::UserRole + 3).toInt(), id = it->data(1, Qt::UserRole).toInt();
+            if (kind == 2) openGroups.insert(id);
+            else if (kind == 1) closedLayers.remove(id);
+            else closedHeads.remove(it->data(0, Qt::UserRole + 5).toInt());
+            // unfolded: the selected group inside may be showing now
+            QTimer::singleShot(0, this, [this] { shownGroup = -1; syncSelection(); });
         });
         QObject::connect(tree, &QTreeWidget::itemCollapsed, this, [this](QTreeWidgetItem *it) {
-            if (!rebuilding && it->data(1, Qt::UserRole + 3).toInt() == 2) openGroups.remove(it->data(1, Qt::UserRole).toInt());
+            if (rebuilding) return;
+            const int kind = it->data(1, Qt::UserRole + 3).toInt(), id = it->data(1, Qt::UserRole).toInt();
+            if (kind == 2) openGroups.remove(id);
+            else if (kind == 1) closedLayers.insert(id);
+            else closedHeads.insert(it->data(0, Qt::UserRole + 5).toInt());
         });
         QObject::connect(addVis, &QPushButton::clicked, this, [this] { op(0, 0); });
         QObject::connect(addCol, &QPushButton::clicked, this, [this] { op(1, 0); });
@@ -1761,6 +1773,50 @@ public:
         else if (kind == 2) renameGroup(id, name);
     }
 
+    /// Developer aids: print the highlighted row and what's expanded; fold a layer like a click would.
+    void debugCurrent() {
+        QTreeWidgetItem *c = tree->currentItem();
+        fprintf(stderr, "current: %s\n", c ? qPrintable(c->text(1).isEmpty() ? c->text(0) : c->text(1)) : "(none)");
+        for (QTreeWidgetItemIterator it(tree); *it; ++it)
+            if ((*it)->data(1, Qt::UserRole + 3).toInt() != 2) fprintf(stderr, "  %s %s\n", (*it)->isExpanded() ? "open  " : "folded", qPrintable((*it)->text(1).isEmpty() ? (*it)->text(0) : (*it)->text(1)));
+    }
+    void debugFold(int layerId) {
+        auto it = layerRows.find(layerId);
+        if (it != layerRows.end()) it->second->setExpanded(false);
+    }
+
+    /// A group picked in a view lights up here too (its parent groups open,
+    /// but layers and headings you folded stay folded).
+    void syncSelection() {
+        const int g = bonk_selected_group();
+        if (g == shownGroup) return;
+        shownGroup = g;
+        keepGroup = g;
+        const QSignalBlocker block(tree);
+        auto it = groupRows.find(g);
+        if (g && it != groupRows.end()) {
+            rebuilding = true; // expanding here isn't the user's choice: don't remember it as such…
+            for (QTreeWidgetItem *p = it->second->parent(); p && p->data(1, Qt::UserRole + 3).toInt() == 2; p = p->parent()) {
+                p->setExpanded(true);
+                openGroups.insert(p->data(1, Qt::UserRole).toInt()); // …but keep them open on rebuilds
+            }
+            rebuilding = false;
+            // highlighting a row inside something folded would unfold it: then the
+            // folded row it's in lights up instead
+            QTreeWidgetItem *target = it->second;
+            for (QTreeWidgetItem *p = it->second->parent(); p; p = p->parent())
+                if (!p->isExpanded()) target = p;
+            if (!(target->flags() & Qt::ItemIsSelectable)) target = nullptr; // a folded heading
+            tree->setCurrentItem(target);
+            if (target) tree->scrollToItem(target);
+        } else if (QTreeWidgetItem *cur = tree->currentItem(); cur && cur->data(1, Qt::UserRole + 3).toInt() == 2) {
+            // the selection isn't a whole group any more: back to its layer
+            QTreeWidgetItem *l = cur;
+            while (l && l->data(1, Qt::UserRole + 3).toInt() == 2) l = l->parent();
+            tree->setCurrentItem(l);
+        }
+    }
+
     void syncCollisionLook(bool solid) {
         lookBtn->setChecked(solid);
         lookBtn->setText(solid ? QStringLiteral("Solid") : QStringLiteral("Ghosted"));
@@ -1823,6 +1879,7 @@ public:
             heads[g]->setFirstColumnSpanned(true);
             heads[g]->setFont(0, groupFont);
             heads[g]->setFlags(Qt::ItemIsEnabled);
+            heads[g]->setData(0, Qt::UserRole + 5, g);
             if (g == 1) heads[g]->setForeground(0, QColor(255, 143, 41));
         }
         std::map<int, QTreeWidgetItem *> layerItems;
@@ -1880,10 +1937,12 @@ public:
             }
         };
         addChildren(0, nullptr);
-        for (QTreeWidgetItem *h : heads) h->setExpanded(true);
-        for (auto &li : layerItems) li.second->setExpanded(true);
+        for (int g = 0; g < 2; ++g) heads[g]->setExpanded(!closedHeads.contains(g));
+        for (auto &li : layerItems) li.second->setExpanded(!closedLayers.contains(li.first));
         for (auto &gi : groupItems) gi.second->setExpanded(openGroups.contains(gi.first));
-        // a group you clicked stays highlighted (not its layer)
+        groupRows = groupItems;
+        layerRows = layerItems;
+        // the selected group stays highlighted (not its layer): clicked here or picked in a view
         auto kg = keepGroup ? groupItems.find(keepGroup) : groupItems.end();
         if (kg != groupItems.end()) tree->setCurrentItem(kg->second);
         else if (sel) tree->setCurrentItem(sel);
@@ -1897,7 +1956,9 @@ private:
     QWidget *ghostRow;
     QSlider *ghost;
     QToolButton *lookBtn;
-    int keepGroup = 0;
+    int keepGroup = 0, shownGroup = -1;
+    QSet<int> closedLayers, closedHeads;
+    std::map<int, QTreeWidgetItem *> groupRows, layerRows;
     unsigned long long lastRev = 0;
     bool rebuilding = false;
     QSet<int> openGroups;
@@ -4152,7 +4213,10 @@ public:
         if (src && !captured) decorateCursor(src);
         status->setText(QString::fromUtf8(bonk_status()));
         updateTitle();
-        if (layers) layers->refresh();
+        if (layers) {
+            layers->refresh();
+            layers->syncSelection();
+        }
         if (picker) picker->refresh();
         if (budget) budget->poke();
         syncPin();
@@ -6001,6 +6065,7 @@ public:
     /// Returns false if the user canceled.
     bool maybeSave() {
         if (!bonk_is_dirty()) return true;
+        if (qEnvironmentVariableIsSet("BONK_SCREENSHOT")) return true; // developer screenshots: never stop to ask
         auto r = QMessageBox::warning(this, QStringLiteral("Unsaved changes"),
                                       QStringLiteral("This model has unsaved changes. Save them first?"),
                                       QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
@@ -6743,6 +6808,9 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                 } else if (c == QStringLiteral("copy")) w.copySelection(false);
                 else if (c == QStringLiteral("paste") || c == QStringLiteral("pastem")) w.pasteClipboard(c.endsWith(QLatin1Char('m')));
                 else if (c == QStringLiteral("overlaps")) w.findOverlaps();
+                else if (c.startsWith(QStringLiteral("select:"))) { QByteArray b = c.mid(7).toUtf8(); w.handle(bonk_select_ids(b.constData())); }
+                else if (c == QStringLiteral("current")) w.layers->debugCurrent();
+                else if (c.startsWith(QStringLiteral("fold:"))) w.layers->debugFold(c.mid(5).toInt());
                 else if (c.startsWith(QStringLiteral("clipfile:"))) { // clipfile:path: put a file's text on the clipboard
                     QFile cf(c.mid(9));
                     if (cf.open(QIODevice::ReadOnly)) QApplication::clipboard()->setText(QString::fromUtf8(cf.readAll()));
