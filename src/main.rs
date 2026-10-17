@@ -7,6 +7,7 @@
 
 mod collision;
 mod doc;
+mod variants;
 mod editor;
 mod export;
 mod geom;
@@ -530,6 +531,50 @@ pub extern "C" fn bonk_thumb_grid(on: c_int) {
     THUMB_GRID.with(|g| g.set(on != 0));
 }
 
+/// "name=option;…" (option "" = None) → bodygroup choices.
+fn parse_choices(t: &str) -> Vec<(String, String)> {
+    t.split(';').filter_map(|p| p.split_once('=')).map(|(a, b)| (a.to_string(), b.to_string())).collect()
+}
+
+/// The model as it compiles with these choices (see variants::compiled_view).
+fn preview_doc(skin: c_int, choices: *const c_char, lod: c_int) -> doc::Document {
+    let c = parse_choices(&path_arg(choices).unwrap_or_default());
+    with_ed(|ed| variants::compiled_view(&ed.doc, skin.max(0) as usize, &c, lod.max(0) as usize))
+}
+
+/// View → Model Preview: draw the model as compiled (skin, bodygroup choices, LOD)
+/// into the bound framebuffer, like a spawn icon. Returns triangles drawn, or -1.
+#[no_mangle]
+pub extern "C" fn bonk_render_preview(view: c_int, skin: c_int, choices: *const c_char, lod: c_int, yaw: f32, pitch: f32, dist: f32, tx: f32, ty: f32, tz: f32, fov: f32, w: c_int, h: c_int, grid: c_int) -> c_int {
+    let d = preview_doc(skin, choices, lod);
+    let target = v3(tx, ty, tz);
+    let (sy, cy) = yaw.to_radians().sin_cos();
+    let (sp, cp) = pitch.to_radians().sin_cos();
+    let eye = target + v3(cy * cp, sy * cp, sp) * dist.max(1.0);
+    let tris: usize = d.brushes.iter().flat_map(|b| b.faces.iter()).filter(|f| f.material != geom::NODRAW).map(|f| f.idx.len().saturating_sub(2)).sum();
+    let ok = RENDERERS.with(|rs| {
+        if let Some(r) = rs.borrow()[vid(view)].as_ref() {
+            unsafe { r.render_thumb(&d, eye, target, fov.clamp(5.0, 120.0), w as f32, h as f32, grid != 0) };
+            true
+        } else {
+            false
+        }
+    });
+    if ok { tris as c_int } else { -1 }
+}
+
+/// Frame the previewed model: out = [target x, y, z, distance]. Returns 0, or -1 (nothing to show).
+#[no_mangle]
+pub extern "C" fn bonk_preview_fit(skin: c_int, choices: *const c_char, lod: c_int, yaw: f32, pitch: f32, fov: f32, aspect: f32, out: *mut f32) -> c_int {
+    let d = preview_doc(skin, choices, lod);
+    let pts: Vec<V3> = d.brushes.iter().flat_map(|b| b.faces.iter().filter(|f| f.material != geom::NODRAW).flat_map(move |f| f.idx.iter().map(move |&i| b.verts[i]))).collect();
+    let Some((t, dist)) = thumb_fit(&pts, yaw, pitch, fov, aspect) else { return -1 };
+    if !out.is_null() {
+        unsafe { std::ptr::copy_nonoverlapping([t.x, t.y, t.z, dist].as_ptr(), out, 4) };
+    }
+    0
+}
+
 /// Bonk Pixel, the low-resolution interface font (a TrueType file), built into the binary.
 #[no_mangle]
 pub extern "C" fn bonk_pixel_font(len: *mut c_int) -> *const u8 {
@@ -648,7 +693,16 @@ pub extern "C" fn bonk_render_thumb(view: c_int, path: *const c_char, yaw: f32, 
 pub extern "C" fn bonk_set_block_shape(shape: c_int, faces: c_int) -> u32 {
     with_ed(|ed| {
         ed.block_shape = shapes::Shape::from_index(shape);
-        ed.block_faces = faces.clamp(3, 32) as u32;
+        ed.block_faces = faces.clamp(2, 32) as u32;
+        editor::flags::ALL
+    })
+}
+
+/// Arch shape: the ring's thickness in units.
+#[no_mangle]
+pub extern "C" fn bonk_set_arch_thickness(t: f32) -> u32 {
+    with_ed(|ed| {
+        ed.arch_thickness = t.clamp(1.0, 4096.0);
         editor::flags::ALL
     })
 }
@@ -850,11 +904,20 @@ pub extern "C" fn bonk_export_smd(reference: *const c_char, phys: *const c_char,
         } else {
             export::physics_smd(ed, phys_mode == 1)
         };
-        (export::reference_smd(ed), phys)
+        let v = export::variant_export(ed);
+        ((v.reference.clone(), v.tris, v.untextured, v.smds), phys)
     });
-    if let Err(e) = std::fs::write(&rp, r.0) {
+    if let Err(e) = std::fs::write(&rp, &r.0) {
         set_error(&format!("couldn't write {}: {}", rp, e));
         return -1;
+    }
+    // bodygroup options and LODs go beside it
+    let dir = std::path::Path::new(&rp).parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    for (name, text) in &r.3 {
+        if let Err(e) = std::fs::write(dir.join(name), text) {
+            set_error(&format!("couldn't write {}: {}", name, e));
+            return -1;
+        }
     }
     if !pp.is_empty() && p.1 > 0 {
         if let Err(e) = std::fs::write(&pp, p.0) {
@@ -880,6 +943,186 @@ pub extern "C" fn bonk_collision_pieces() -> c_int {
 pub extern "C" fn bonk_used_materials() -> *const c_char {
     let s = with_ed(|ed| export::used_materials(ed).into_iter().map(|m| m.0).collect::<Vec<_>>().join("\n"));
     ret_str(s)
+}
+
+/// The QC and materials the model's variants need, as lines:
+/// "sequence\t<smd>", "alias\t<copy>\t<original>", "hidden" (the skins use the
+/// invisible material), then "qc" and the QC lines after it.
+#[no_mangle]
+pub extern "C" fn bonk_variant_export_info() -> *const c_char {
+    let t = with_ed(|ed| {
+        let v = export::variant_export(ed);
+        let mut o = format!("sequence\t{}\n", v.sequence);
+        for (a, b) in &v.aliases {
+            o += &format!("alias\t{a}\t{b}\n");
+        }
+        if v.hidden {
+            o += "hidden\n";
+        }
+        o += "qc\n";
+        o += &v.qc;
+        o
+    });
+    ret_str(t)
+}
+
+// ------------------------------------------------------------------ variants
+
+/// The model's variants as lines (tab-separated):
+/// "skin\t<index>\t<name>\t<swaps>\t<hidden>" (index 1…), "active\t<index>",
+/// "swap\t<skin>\t<from>\t<to>", "bg\t<name>\t<blank 0/1>\t<shown option>",
+/// "opt\t<bodygroup>\t<group id>\t<option name>", "lod\t<distance>\t<detail>",
+/// "group\t<id>\t<name>\t<bodygroup or empty>" for the selected group.
+#[no_mangle]
+pub extern "C" fn bonk_variants_info() -> *const c_char {
+    let t = with_ed(|ed| {
+        let d = &ed.doc;
+        let v = &d.variants;
+        let mut o = String::new();
+        for (i, s) in v.skins.iter().enumerate() {
+            o += &format!("skin\t{}\t{}\t{}\t{}\n", i + 1, s.name, s.swaps.len(), s.hidden.len());
+            for (a, b) in &s.swaps {
+                o += &format!("swap\t{}\t{a}\t{b}\n", i + 1);
+            }
+        }
+        o += &format!("active\t{}\n", v.skin);
+        for bg in d.bodygroups() {
+            let shown = match d.shown_option(&bg) {
+                Some(g) => bg.options.iter().find(|x| x.0 == g).map(|x| x.1.clone()).unwrap_or_default(),
+                None => String::new(),
+            };
+            o += &format!("bg\t{}\t{}\t{}\n", bg.name, bg.blank as u8, shown);
+            for (g, n) in &bg.options {
+                o += &format!("opt\t{}\t{g}\t{n}\n", bg.name);
+            }
+        }
+        for l in &v.lods {
+            o += &format!("lod\t{}\t{}\n", l.distance, l.detail);
+        }
+        if let Some(g) = d.selected_group().and_then(|g| d.groups.iter().find(|x| x.id == g)) {
+            o += &format!("group\t{}\t{}\t{}\n", g.id, g.name, g.bodygroup.clone().unwrap_or_default());
+        }
+        o
+    });
+    ret_str(t)
+}
+
+/// Skins: op 0 add (copy of `index`), 1 remove `index`, 2 make `index` active,
+/// 3 rename `index` to `text`, 4 hide the selection in the active skin, 5 show it,
+/// 6 drop the swap of material `text` from skin `index`.
+#[no_mangle]
+pub extern "C" fn bonk_skin_op(op: c_int, index: c_int, text: *const c_char) -> u32 {
+    let t = path_arg(text).unwrap_or_default();
+    with_ed(|ed| {
+        let i = index.max(0) as usize;
+        match op {
+            0 => {
+                let n = ed.doc.add_skin(i);
+                ed.message = Some(format!("Skin {n} added: paint faces to swap their materials in it"));
+            }
+            1 => ed.doc.remove_skin(i),
+            2 => {
+                ed.doc.variants.skin = i.min(ed.doc.variants.skins.len());
+                ed.doc.rev += 1;
+            }
+            3 => {
+                if let Some(s) = i.checked_sub(1).and_then(|k| ed.doc.variants.skins.get(k)).cloned() {
+                    if !t.trim().is_empty() && s.name != t.trim() {
+                        ed.doc.checkpoint();
+                        ed.doc.variants.skins[i - 1].name = t.trim().to_string();
+                    }
+                }
+            }
+            4 | 5 => {
+                let ids = ed.doc.selection.clone();
+                if ids.is_empty() {
+                    ed.message = Some("Select the brushes to hide in this skin first".into());
+                } else if ed.doc.skin_hide(&ids, op == 4) {
+                    if op == 4 {
+                        ed.doc.selection.clear();
+                    }
+                    ed.message = Some(format!("{} brush{} {} in this skin", ids.len(), if ids.len() == 1 { "" } else { "es" }, if op == 4 { "hidden" } else { "shown" }));
+                } else {
+                    ed.message = Some("Pick a skin other than skin 0 to hide brushes in".into());
+                }
+            }
+            6 => {
+                if let Some(k) = i.checked_sub(1).filter(|k| *k < ed.doc.variants.skins.len()) {
+                    ed.doc.checkpoint();
+                    ed.doc.variants.skins[k].swaps.retain(|(a, _)| *a != t);
+                }
+            }
+            7 => {
+                // show every brush the active skin hides
+                if let Some(k) = ed.doc.variants.skin.checked_sub(1).filter(|k| *k < ed.doc.variants.skins.len()) {
+                    ed.doc.checkpoint();
+                    ed.doc.variants.skins[k].hidden.clear();
+                }
+            }
+            _ => {}
+        }
+        editor::flags::ALL
+    })
+}
+
+/// Bodygroups: op 0 mark group `id` as an option of bodygroup `text` ("" unmarks),
+/// 1 add the None option to bodygroup `text`, 2 remove it, 3 show option `text2` of bodygroup `text`.
+#[no_mangle]
+pub extern "C" fn bonk_bodygroup_op(op: c_int, id: c_int, text: *const c_char, text2: *const c_char) -> u32 {
+    let a = path_arg(text).unwrap_or_default();
+    let b = path_arg(text2).unwrap_or_default();
+    with_ed(|ed| {
+        match op {
+            0 => {
+                ed.doc.set_bodygroup(id.max(0) as u32, &a);
+                ed.message = Some(if a.trim().is_empty() { "No longer a bodygroup option".into() } else { format!("Now an option of the bodygroup {}", a.trim()) });
+            }
+            1 | 2 => ed.doc.set_bodygroup_blank(&a, op == 1),
+            3 => ed.doc.show_option(&a, &b),
+            _ => {}
+        }
+        editor::flags::ALL
+    })
+}
+
+/// LODs as "distance detail" pairs separated by ';' (replaces them all).
+#[no_mangle]
+pub extern "C" fn bonk_set_lods(text: *const c_char) -> u32 {
+    let t = path_arg(text).unwrap_or_default();
+    with_ed(|ed| {
+        let lods: Vec<variants::Lod> = t
+            .split(';')
+            .filter_map(|p| {
+                let mut it = p.split_whitespace().filter_map(|x| x.parse::<f32>().ok());
+                Some(variants::Lod { distance: it.next()?, detail: it.next()? })
+            })
+            .collect();
+        if lods != ed.doc.variants.lods {
+            ed.doc.checkpoint();
+            ed.doc.variants.lods = lods;
+        }
+        editor::flags::ALL
+    })
+}
+
+/// Triangles LOD `i` (1…) keeps of the visual model, and of the whole: out = [kept, all].
+#[no_mangle]
+pub extern "C" fn bonk_lod_tris(detail: f32, out: *mut c_int) {
+    let v = with_ed(|ed| {
+        let mut all = 0usize;
+        let mut kept = 0usize;
+        for b in ed.doc.brushes.iter().filter(|b| b.entity.is_none() && !ed.doc.is_collision(b)) {
+            let t: usize = b.faces.iter().filter(|f| f.material != geom::NODRAW).map(|f| f.idx.len().saturating_sub(2)).sum();
+            all += t;
+            if doc::Document::lod_keeps(b, detail) {
+                kept += t;
+            }
+        }
+        [kept as c_int, all as c_int]
+    });
+    if !out.is_null() {
+        unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, 2) };
+    }
 }
 
 /// Current grid size in units.

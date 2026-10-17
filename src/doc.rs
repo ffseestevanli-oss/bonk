@@ -278,6 +278,8 @@ pub struct Group {
     pub id: u32,
     pub name: String,
     pub parent: Option<u32>,
+    /// An option of this bodygroup (players switch between a bodygroup's options)
+    pub bodygroup: Option<String>,
 }
 
 pub fn default_layers() -> Vec<Layer> {
@@ -295,6 +297,7 @@ struct Snapshot {
     active_layer: u32,
     origin: V3,
     groups: Vec<Group>,
+    variants: crate::variants::Variants,
 }
 
 pub struct Document {
@@ -314,6 +317,8 @@ pub struct Document {
     /// Material properties this model overrides: (material, serialized
     /// properties). The texture's own .bonkmat applies otherwise.
     pub mat_overrides: Vec<(String, String)>,
+    /// Skins, bodygroup "None" options and LODs (bodygroup options are marked on groups)
+    pub variants: crate::variants::Variants,
     /// Unsaved changes since the last save/load
     pub dirty: bool,
     /// Bumped whenever layers or the brush → layer mapping may have changed
@@ -344,6 +349,7 @@ impl Document {
             model_path: String::new(),
             mass: 0.0,
             mat_overrides: Vec::new(),
+            variants: Default::default(),
             dirty: false,
             rev: 1,
             next_id: 1,
@@ -361,6 +367,7 @@ impl Document {
             active_layer: self.active_layer,
             origin: self.origin,
             groups: self.groups.clone(),
+            variants: self.variants.clone(),
         }
     }
 
@@ -380,6 +387,11 @@ impl Document {
         self.active_layer = s.active_layer;
         self.origin = s.origin;
         self.groups = s.groups;
+        // which skin and bodygroup options the views show is view state too
+        let (skin, shown) = (self.variants.skin, std::mem::take(&mut self.variants.shown));
+        self.variants = s.variants;
+        self.variants.skin = skin.min(self.variants.skins.len());
+        self.variants.shown = shown;
         self.rev += 1;
     }
 
@@ -463,7 +475,7 @@ impl Document {
             let nid = self.next_group_id();
             let parent = src.parent.map(|p| gmap.iter().find(|m| m.0 == p).map(|m| m.1).unwrap_or(p));
             let name = if keep_names { src.name.clone() } else { self.numbered_name(&src.name) };
-            self.groups.push(Group { id: nid, name, parent });
+            self.groups.push(Group { id: nid, name, parent, bodygroup: None });
             gmap.push((g, nid));
         }
         let mut out = Vec::new();
@@ -500,7 +512,7 @@ impl Document {
                 if ready {
                     let nid = self.next_group_id();
                     let parent = g.parent.and_then(|p| gmap.iter().find(|m| m.0 == p).map(|m| m.1));
-                    self.groups.push(Group { id: nid, name: g.name.clone(), parent });
+                    self.groups.push(Group { id: nid, name: g.name.clone(), parent, bodygroup: g.bodygroup.clone() });
                     gmap.push((g.id, nid));
                 } else {
                     rest.push(g);
@@ -674,14 +686,28 @@ impl Document {
 
     /// Ctrl+G: group the selection. Groups already in it become sub-groups.
     pub fn group_selection(&mut self) -> Option<u32> {
+        self.group_selection_named(None, true)
+    }
+
+    /// Group the selection as `name` without an undo step of its own (it's part of another change).
+    pub fn group_selection_as(&mut self, name: &str) -> Option<u32> {
+        self.group_selection_named(Some(name), false)
+    }
+
+    fn group_selection_named(&mut self, name: Option<&str>, checkpoint: bool) -> Option<u32> {
         let sel: Vec<u32> = self.selection.iter().copied().filter(|&id| self.brush(id).is_some_and(|b| b.entity.is_none())).collect();
         if sel.is_empty() {
             return None;
         }
-        self.checkpoint();
+        if checkpoint {
+            self.checkpoint();
+        }
         let gid = self.next_group_id();
-        let n = (1..).find(|n| !self.groups.iter().any(|g| g.name == format!("Group {n}"))).unwrap();
-        self.groups.push(Group { id: gid, name: format!("Group {n}"), parent: None });
+        let name = match name {
+            Some(n) => n.to_string(),
+            None => format!("Group {}", (1..).find(|n| !self.groups.iter().any(|g| g.name == format!("Group {n}"))).unwrap()),
+        };
+        self.groups.push(Group { id: gid, name, parent: None, bodygroup: None });
         for id in sel {
             match self.top_group(id) {
                 Some(t) if t != gid => {
@@ -805,6 +831,7 @@ impl Document {
         self.model_path.clear();
         self.mat_overrides.clear();
         self.groups.clear();
+        self.variants = Default::default();
         self.selection.clear();
         self.undo.clear();
         self.redo.clear();

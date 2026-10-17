@@ -2,6 +2,37 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 1.0 Beta 1 — "Variants"
+
+Bonk leaves alpha: everything planned for 1.0 is in.
+
+### Skins
+- The **Variants** tab (beside Layers, the Texture Picker and Prefabs). **+ Skin** adds a skin; while
+  it's picked, the views show it and **painting swaps materials in it** (every face with that
+  material, as Source skins work). Swaps are listed; Delete undoes one.
+- **Skins can hide brushes**: Hide Selection / Show Selection / Show All. Exported as copies of
+  those brushes' materials that the skin swaps for an invisible one (`bonk_hidden`, `$no_draw`).
+- Written as `$texturegroup "skinfamilies"`; swapped-in textures are converted and get VMTs too.
+
+### Bodygroups
+- Mark groups as options of a bodygroup (**Make Group an Option…**), named after the group; add a
+  **None** option when you want one. Click an option to show it while you work (the others hide).
+- Written as `$bodygroup` blocks, one SMD per option; brushes in no option stay the model's body.
+
+### Levels of detail
+- **+ LOD**: a switch distance (`$lod`) and a size under which brushes are dropped, with the
+  triangles each keeps. Every body and option gets its LOD version (`replacemodel`).
+
+### Model Preview (View → Model Preview, F7)
+- The model as it compiles, with a skin, each bodygroup's option and a LOD to choose; drag to
+  turn, right-drag to move, wheel to zoom, floor grid. It follows your edits.
+
+### Also
+- **Arch** shape for the Block tool: a half ring of brushes (Segments, Thickness), grouped.
+- Collision outlines far from the camera are heavier while you edit collision, so pieces stay
+  apart when you look at a whole house.
+- Version 1.0.0-beta.1.
+
 ## 0.18.0 — "Workshop"
 
 - **File → Manage Workshop…** publishes the project's addon to the Steam Workshop. It checks that

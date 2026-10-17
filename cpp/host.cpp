@@ -78,6 +78,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStackedWidget>
+#include <QTableWidget>
 #include <QStyledItemDelegate>
 #include <QOpenGLWidget>
 #include <QPainter>
@@ -129,6 +130,13 @@ unsigned bonk_focus_lost(int view);
 unsigned bonk_tick(float dt);
 unsigned bonk_command(int cmd);
 int bonk_tool();
+int bonk_render_preview(int view, int skin, const char *choices, int lod, float yaw, float pitch, float dist, float tx, float ty, float tz, float fov, int w, int h, int grid);
+int bonk_preview_fit(int skin, const char *choices, int lod, float yaw, float pitch, float fov, float aspect, float *out);
+const char *bonk_variants_info();
+unsigned bonk_skin_op(int op, int index, const char *text);
+unsigned bonk_bodygroup_op(int op, int id, const char *text, const char *text2);
+unsigned bonk_set_lods(const char *text);
+void bonk_lod_tris(float detail, int *out);
 void bonk_thumb_grid(int on);
 const char *bonk_prefab_text(const char *source);
 float bonk_selection_lift();
@@ -193,6 +201,7 @@ void bonk_set_model_path(const char *path);
 int bonk_export_smd(const char *reference, const char *phys, int phys_mode, int *out);
 int bonk_collision_pieces();
 const char *bonk_used_materials();
+const char *bonk_variant_export_info();
 const char *bonk_vmf_scan(const char *path);
 int bonk_vmf_import(const char *path, const char *skip);
 const char *bonk_vmf_report();
@@ -209,6 +218,7 @@ void bonk_set_sel_box_wait(int on);
 void bonk_set_fov(float deg);
 int bonk_vertex_pick();
 unsigned bonk_set_block_shape(int shape, int faces);
+unsigned bonk_set_arch_thickness(float t);
 void bonk_block_shape(int *out);
 int bonk_place_kind();
 const char *bonk_copy(const char *source, int cut);
@@ -1681,7 +1691,7 @@ public:
             sv->setSpacing(gCompact ? 2 : 4);
             sv->addWidget(new SectionHeader(QStringLiteral("Shape")));
             shapeCombo = new QComboBox;
-            for (const char *n : {"Block", "Cylinder", "Wedge", "Spike", "Orb"}) shapeCombo->addItem(QString::fromLatin1(n));
+            for (const char *n : {"Block", "Cylinder", "Wedge", "Spike", "Orb", "Arch"}) shapeCombo->addItem(QString::fromLatin1(n));
             shapeCombo->setToolTip(QStringLiteral("What the Block tool makes. Round shapes stand along the depth of the view you draw in:\n"
                                                   "drawn in the top view a cylinder stands up, in the front or side view it lies down.\n"
                                                   "Right-drag (Quick Draw) makes one a single grid unit deep."));
@@ -1689,13 +1699,24 @@ public:
             auto *fr = new QHBoxLayout;
             facesLabel = new QLabel;
             facesSlider = new QSlider(Qt::Horizontal);
-            facesSlider->setRange(3, 32);
+            facesSlider->setRange(2, 32);
             facesSlider->setToolTip(QStringLiteral("How many sides round shapes get (orbs use 4–16)"));
             fr->addWidget(facesLabel);
             fr->addWidget(facesSlider, 1);
             sv->addLayout(fr);
+            archRow = new QWidget;
+            auto *ar = new QHBoxLayout(archRow);
+            ar->setContentsMargins(0, 0, 0, 0);
+            ar->addWidget(new QLabel(QStringLiteral("Thickness")));
+            archThick = new QSpinBox;
+            archThick->setRange(1, 1024);
+            archThick->setSuffix(QStringLiteral(" u"));
+            archThick->setToolTip(QStringLiteral("How thick the arch's ring is, in units"));
+            ar->addWidget(archThick, 1);
+            sv->addWidget(archRow);
             QSettings st;
-            const int sh = std::clamp(st.value("tools/blockShape", 0).toInt(), 0, 4);
+            archThick->setValue(std::clamp(st.value("tools/archThickness", 16).toInt(), 1, 1024));
+            const int sh = std::clamp(st.value("tools/blockShape", 0).toInt(), 0, 5);
             const int fc = std::clamp(st.value("tools/blockFaces", 8).toInt(), 3, 32);
             shapeCombo->setCurrentIndex(sh);
             facesSlider->setValue(fc);
@@ -1704,16 +1725,20 @@ public:
                 QSettings st2;
                 st2.setValue("tools/blockShape", sh2);
                 st2.setValue("tools/blockFaces", fc2);
+                st2.setValue("tools/archThickness", archThick->value());
+                bonk_set_arch_thickness(float(archThick->value()));
                 const unsigned f = bonk_set_block_shape(sh2, fc2);
                 int out[3] = {0, 0, 0};
                 bonk_block_shape(out);
-                facesLabel->setText(QStringLiteral("Faces %1").arg(out[2]));
-                facesLabel->setEnabled(sh2 == 1 || sh2 == 3 || sh2 == 4);
+                facesLabel->setText(sh2 == 5 ? QStringLiteral("Segments %1").arg(out[2]) : QStringLiteral("Faces %1").arg(out[2]));
+                facesLabel->setEnabled(sh2 == 1 || sh2 == 3 || sh2 == 4 || sh2 == 5);
+                archRow->setVisible(sh2 == 5);
                 facesSlider->setEnabled(facesLabel->isEnabled());
                 if (repaint) repaint(f);
             };
             QObject::connect(shapeCombo, &QComboBox::currentIndexChanged, this, apply);
             QObject::connect(facesSlider, &QSlider::valueChanged, this, apply);
+            QObject::connect(archThick, &QSpinBox::valueChanged, this, apply);
             apply();
         }
         v->addWidget(shapeBox);
@@ -1819,6 +1844,8 @@ private:
     QWidget *shapeBox = nullptr;
     QComboBox *shapeCombo = nullptr;
     QSlider *facesSlider = nullptr;
+    QWidget *archRow = nullptr;
+    QSpinBox *archThick = nullptr;
     QLabel *facesLabel = nullptr;
 
     /// Icons follow the pane's width (3 per row); lists have a fixed height.
@@ -4843,6 +4870,7 @@ private:
 #include "spawnlist.inc"
 #include "prefabs.inc"
 #include "workshop.inc"
+#include "variants.inc"
 
 // ------------------------------------------------------------------ main window
 
@@ -4937,6 +4965,9 @@ public:
     Project project;
     QDockWidget *toolsDock = nullptr, *pickerDock = nullptr, *layersDock = nullptr, *budgetDock = nullptr, *prefabsDock = nullptr;
     PrefabsPane *prefabs = nullptr;
+    VariantsPane *variants = nullptr;
+    ModelPreview *previewWin = nullptr;
+    QDockWidget *variantsDock = nullptr;
     BudgetBar *budget = nullptr;
     QByteArray defaultLayout;
     QMenu *recentMenu = nullptr, *recentModelsMenu = nullptr;
@@ -5125,6 +5156,48 @@ public:
 
     ThumbRenderer thumbRenderer() {
         return [this](const QString &f, const ThumbCam &c, int w, int h) { return renderThumb(f, c, w, h); };
+    }
+
+    /// View → Model Preview: the model as compiled (skin, bodygroups, LOD), off screen.
+    QImage renderPreview(int skin, const QString &choices, int lod, const ThumbCam &cam, int w, int h, bool grid, int *tris) {
+        Viewport *v = views[0];
+        if (tris) *tris = 0;
+        if (!v->context() || !v->isValid()) return QImage();
+        v->makeCurrent();
+        const double up = std::min(2.0, 2048.0 / std::max(w, h));
+        const int sw = std::max(1, int(w * up)), sh = std::max(1, int(h * up));
+        QOpenGLFramebufferObjectFormat fmt;
+        fmt.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+        QImage out;
+        {
+            QOpenGLFramebufferObject fbo(sw, sh, fmt);
+            if (fbo.isValid() && fbo.bind()) {
+                v->context()->functions()->glViewport(0, 0, sw, sh);
+                const QByteArray c = choices.toUtf8();
+                const int n = bonk_render_preview(0, skin, c.constData(), lod, float(cam.yaw), float(cam.pitch), float(std::max(1.0, cam.dist)),
+                                                  float(cam.tx), float(cam.ty), float(cam.tz), float(cam.fov), sw, sh, grid);
+                if (n >= 0) {
+                    out = fbo.toImage(true).convertToFormat(QImage::Format_ARGB32);
+                    if (tris) *tris = n;
+                }
+                fbo.release();
+            }
+        }
+        v->doneCurrent();
+        return out.isNull() ? out : out.scaled(w, h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    }
+
+    /// View → Model Preview…
+    void openPreview() {
+        if (!previewWin) {
+            previewWin = new ModelPreview(this);
+            previewWin->render = [this](int skin, const QString &c, int lod, const ThumbCam &cam, int w, int h, bool grid, int *tris) {
+                return renderPreview(skin, c, lod, cam, w, h, grid, tris);
+            };
+        }
+        previewWin->show();
+        previewWin->raise();
+        previewWin->reload(true);
     }
 
     /// Tools → Spawnlist Editor…
@@ -6598,6 +6671,28 @@ public:
             const QString path = project.addonDir() + QLatin1Char('/') + matDir + QLatin1Char('/') + flatName(key) + QStringLiteral(".vmt");
             if (!writeVmt(path, text, written)) kept << QDir(project.addonDir()).relativeFilePath(path);
         }
+        // variants: copies of materials (brushes a skin hides) and the invisible one
+        QString variantQc, sequenceSmd = QStringLiteral("reference.smd");
+        {
+            const QString info = QString::fromUtf8(bonk_variant_export_info());
+            const int qcAt = info.indexOf(QStringLiteral("qc\n"));
+            variantQc = qcAt >= 0 ? info.mid(qcAt + 3) : QString();
+            for (const QString &l : info.left(qcAt >= 0 ? qcAt : info.size()).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+                const QStringList f = l.split(QLatin1Char('\t'));
+                if (f.value(0) == QStringLiteral("sequence") && !f.value(1).isEmpty()) sequenceSmd = f.value(1);
+                else if (f.value(0) == QStringLiteral("alias")) {
+                    const QString copy = f.value(1), orig = f.value(2);
+                    const QString path = project.addonDir() + QLatin1Char('/') + matDir + QLatin1Char('/') + flatName(copy) + QStringLiteral(".vmt");
+                    if (!writeVmt(path, propsFor(orig).vmt(orig, project.texturePool), written)) kept << QDir(project.addonDir()).relativeFilePath(path);
+                } else if (f.value(0) == QStringLiteral("hidden")) {
+                    const QString path = project.addonDir() + QLatin1Char('/') + matDir + QStringLiteral("/bonk_hidden.vmt");
+                    writeVmt(path, QStringLiteral("// Written by Bonk!: what a skin shows in place of a brush it hides.\n"
+                                                  "\"VertexLitGeneric\"\n{\n\t\"$basetexture\" \"tools/toolsnodraw\"\n\t\"$no_draw\" \"1\"\n"
+                                                  "\t\"$translucent\" \"1\"\n\t\"$alpha\" \"0\"\n}\n"),
+                             written);
+                }
+            }
+        }
         {
             QFile rf(record);
             if (rf.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
@@ -6625,8 +6720,8 @@ public:
         qc += QStringLiteral("$staticprop\n");
         qc += QStringLiteral("$surfaceprop \"%1\"\n").arg(surfaceprop.isEmpty() ? QStringLiteral("default") : surfaceprop);
         qc += QStringLiteral("$cdmaterials \"%1/\"\n").arg(cd);
-        qc += QStringLiteral("$body \"body\" \"reference.smd\"\n");
-        qc += QStringLiteral("$sequence \"idle\" \"reference.smd\" fps 30\n");
+        qc += variantQc.isEmpty() ? QStringLiteral("$body \"body\" \"reference.smd\"\n") : variantQc; // bodygroups, skins, LODs
+        qc += QStringLiteral("$sequence \"idle\" \"%1\" fps 30\n").arg(sequenceSmd);
         if (withPhys)
             qc += QStringLiteral("$collisionmodel \"physics.smd\"\n{\n\t$concave\n\t$maxconvexpieces %1\n\t%2\n}\n")
                       .arg(std::max(20, out[1]))
@@ -7721,6 +7816,10 @@ MainWindow::MainWindow() {
     prefabs->projectRoot = [this] { return projectPrefabDir(project); };
     prefabs->projectName = [this] { return project.name; };
     prefabsDock = dock(QStringLiteral("Prefabs"), "prefabs", prefabs);
+    variants = new VariantsPane;
+    variants->changed = [this](unsigned f) { handle(f); };
+    variants->openPreview = [this] { openPreview(); };
+    variantsDock = dock(QStringLiteral("Variants"), "variants", variants);
     budget = new BudgetBar;
     budget->changed = [this](unsigned f) { handle(f); };
     budgetDock = dock(QStringLiteral("Budget"), "budget", budget);
@@ -7734,8 +7833,10 @@ MainWindow::MainWindow() {
     addDockWidget(Qt::RightDockWidgetArea, pickerDock);
     addDockWidget(Qt::BottomDockWidgetArea, budgetDock); // under the viewports
     addDockWidget(Qt::RightDockWidgetArea, prefabsDock);
+    addDockWidget(Qt::RightDockWidgetArea, variantsDock);
     tabifyDockWidget(layersDock, pickerDock);
     tabifyDockWidget(pickerDock, prefabsDock);
+    tabifyDockWidget(prefabsDock, variantsDock);
     pickerDock->raise();
     const int sideW = gCompact ? lowOr(150, 124) : 190, rightW = gCompact ? lowOr(220, 190) : 270;
     resizeDocks({toolsDock, pickerDock}, {sideW, rightW}, Qt::Horizontal);
@@ -7900,6 +8001,8 @@ MainWindow::MainWindow() {
         unlock->setCheckable(true);
         unlock->setChecked(prefs.fovUnlocked);
         fn(view, QStringLiteral("Reset Field of View"), QKeySequence(), [this] { fovSpin->setValue(75); });
+        view->addSeparator();
+        fn(view, QStringLiteral("&Model Preview…"), QKeySequence(Qt::Key_F7), [this] { openPreview(); });
     }
 
     QMenu *tools = menuBar()->addMenu(QStringLiteral("&Tools"));
@@ -7935,11 +8038,11 @@ MainWindow::MainWindow() {
     applyToolKeys();
 
     QMenu *window = menuBar()->addMenu(QStringLiteral("&Window"));
-    for (QDockWidget *d : {toolsDock, pickerDock, layersDock, prefabsDock, budgetDock}) window->addAction(d->toggleViewAction());
+    for (QDockWidget *d : {toolsDock, pickerDock, layersDock, prefabsDock, variantsDock, budgetDock}) window->addAction(d->toggleViewAction());
     window->addSeparator();
     fn(window, QStringLiteral("&Reset Layout"), QKeySequence(), [this] {
         restoreState(defaultLayout, kLayoutVersion);
-        for (QDockWidget *d : {toolsDock, pickerDock, layersDock, prefabsDock, budgetDock}) d->show();
+        for (QDockWidget *d : {toolsDock, pickerDock, layersDock, prefabsDock, variantsDock, budgetDock}) d->show();
         pickerDock->raise();
         resizeDocks({toolsDock, pickerDock}, {gCompact ? lowOr(150, 124) : 190, gCompact ? lowOr(220, 190) : 270}, Qt::Horizontal);
     });
@@ -7980,6 +8083,12 @@ MainWindow::MainWindow() {
             pickerDock->raise();
         }
         st.setValue("window/prefabsPlaced", true);
+        if (restored && !st.value("window/variantsPlaced", false).toBool()) { // and the Variants tab beside it
+            tabifyDockWidget(prefabsDock, variantsDock);
+            variantsDock->show();
+            pickerDock->raise();
+        }
+        st.setValue("window/variantsPlaced", true);
     }
     rebuildRecentMenu();
     library.setProject(&project);
@@ -8162,6 +8271,16 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                 else if (c == QStringLiteral("workshop")) w.manageWorkshop();
                 else if (c.startsWith(QStringLiteral("wsthumb:"))) { QString e; saveWorkshopJpg(QImage(c.mid(8)), WorkshopProject::thumbPath(w.project), &e); }
                 else if (c == QStringLiteral("prefabs")) { w.prefabsDock->show(); w.prefabsDock->raise(); }
+                else if (c.startsWith(QStringLiteral("skinop:"))) { // skinop:<op>:<index>:<text>
+                    const QStringList a = c.split(QLatin1Char(':'));
+                    const QByteArray t = a.value(3).toUtf8();
+                    w.handle(bonk_skin_op(a.value(1).toInt(), a.value(2).toInt(), t.constData()));
+                } else if (c.startsWith(QStringLiteral("bgop:"))) { // bgop:<op>:<group id>:<text>:<text2>
+                    const QStringList a = c.split(QLatin1Char(':'));
+                    const QByteArray t = a.value(3).toUtf8(), t2 = a.value(4).toUtf8();
+                    w.handle(bonk_bodygroup_op(a.value(1).toInt(), a.value(2).toInt(), t.constData(), t2.constData()));
+                } else if (c.startsWith(QStringLiteral("lods:"))) { const QByteArray t = c.mid(5).toUtf8(); w.handle(bonk_set_lods(t.constData())); }
+                else if (c == QStringLiteral("variants")) { w.variantsDock->show(); w.variantsDock->raise(); w.variants->refresh(true); }
                 else if (c.startsWith(QStringLiteral("placefab:"))) { // placefab:<name>:<view>:<x>:<y>
                     const QStringList a = c.split(QLatin1Char(':'));
                     for (const QString &root : {sharedPrefabDir(), projectPrefabDir(w.project)})

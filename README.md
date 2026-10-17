@@ -10,6 +10,8 @@
   Garry's Mod's own studiomdl through Proton.
 </p>
 
+<p align="center"><b>Beta:</b> 1.0 Beta 1. Everything planned for 1.0 is in; tell us what breaks.</p>
+
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue"></a>
   <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux%20%7C%20Steam%20Deck-informational">
@@ -168,7 +170,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the pieces fit together and how t
 - [x] Workshop publishing: your addons, new submissions and updates, thumbnails from a model
 - [x] Shader work: shader picker (incl. MonitorScreen), more texture slots, live VMT editing
 - [x] Animated, scrolling and pulsing materials; texture find / replace; paint by dragging
-- [ ] Skins, bodygroups, LODs and an in-editor model preview
+- [x] Skins (material swaps, hidden brushes), bodygroups, LODs and a model preview
 - [ ] Flathub release
 
 Every release is listed in [CHANGELOG.md](CHANGELOG.md).

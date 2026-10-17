@@ -408,6 +408,8 @@ pub struct Editor {
     pub vertex_pick: bool,
     /// What the Block tool makes, and how many sides round shapes get
     pub block_shape: Shape,
+    /// Arch shape: how thick the ring is
+    pub arch_thickness: f32,
     pub block_faces: u32,
     /// (depth axis, horizontal axis) of the view the block box was drawn in
     pub block_axis: (usize, usize),
@@ -537,6 +539,7 @@ impl Editor {
             block_box: None,
             vertex_pick: false,
             block_shape: Shape::Block,
+            arch_thickness: 16.0,
             block_faces: 8,
             block_axis: (2, 0),
             sel_mode: HandleMode::Scale,
@@ -893,12 +896,12 @@ impl Editor {
 
     /// Drawn in the views: layer visible, and mannequins shown.
     pub fn drawable(&self, b: &Brush) -> bool {
-        self.doc.layer_visible(b) && (b.entity.is_none() || self.show_entities) && !self.hidden.contains(&b.id)
+        self.doc.layer_visible(b) && (b.entity.is_none() || self.show_entities) && !self.hidden.contains(&b.id) && !self.doc.variant_hides(b)
     }
 
     /// Can be clicked / selected / edited.
     pub fn pickable(&self, b: &Brush) -> bool {
-        self.doc.layer_editable(b) && (b.entity.is_none() || self.show_entities) && !self.ghosted(b) && !self.hidden.contains(&b.id)
+        self.doc.layer_editable(b) && (b.entity.is_none() || self.show_entities) && !self.ghosted(b) && !self.hidden.contains(&b.id) && !self.doc.variant_hides(b)
     }
 
     /// Editing a collision layer: everything that isn't collision is a ghost
@@ -1749,6 +1752,9 @@ impl Editor {
     fn apply_material_to(&mut self, t: &[(u32, usize)]) -> usize {
         let material = self.current_material.clone();
         let material = material.as_str();
+        if self.skin_paint(t, material) {
+            return t.len();
+        }
         self.doc.checkpoint();
         for &(id, f) in t {
             if let Some(b) = self.doc.brush_mut(id) {
@@ -1760,6 +1766,38 @@ impl Editor {
         let name = if material.is_empty() { "No material" } else { material_display(material) };
         self.message = Some(format!("{} applied to {} face{}", name, t.len(), if t.len() == 1 { "" } else { "s" }));
         t.len()
+    }
+
+    /// Painting while a skin other than skin 0 is active: every face with the
+    /// target faces' material shows `material` in this skin (Source skins swap
+    /// whole materials). True when it was handled.
+    fn skin_paint(&mut self, t: &[(u32, usize)], material: &str) -> bool {
+        if self.doc.active_skin().is_none() {
+            return false;
+        }
+        self.doc.checkpoint();
+        self.skin_paint_nocheck(t, material);
+        true
+    }
+
+    fn skin_paint_nocheck(&mut self, t: &[(u32, usize)], material: &str) {
+        let mut bases: Vec<String> = Vec::new();
+        for &(id, f) in t {
+            if let Some(face) = self.doc.brush(id).and_then(|b| b.faces.get(f)) {
+                if face.material != geom::NODRAW && !bases.contains(&face.material) {
+                    bases.push(face.material.clone());
+                }
+            }
+        }
+        for b in &bases {
+            self.doc.skin_swap(b, material);
+        }
+        let skin = self.doc.active_skin().map(|s| s.name.clone()).unwrap_or_default();
+        self.message = Some(match bases.as_slice() {
+            [] => "Nodraw faces can't change in a skin".into(),
+            [one] => format!("{skin}: {} shows as {} (every face with it)", material_display(one), material_display(material)),
+            many => format!("{skin}: {} materials show as {}", many.len(), material_display(material)),
+        });
     }
 
     // ------------------------------------------------------------------ face textures
@@ -1852,10 +1890,18 @@ impl Editor {
         } else {
             vec![k]
         };
+        let material = self.current_material.clone();
+        if self.doc.active_skin().is_some() {
+            // in a skin, painting swaps the face's material for this skin (alignment stays)
+            if checkpoint {
+                self.doc.checkpoint();
+            }
+            self.skin_paint_nocheck(&targets, &material);
+            return flags::ALL;
+        }
         if checkpoint {
             self.doc.checkpoint();
         }
-        let material = self.current_material.clone();
         for &t in &targets {
             let tex = match src {
                 Some(s) if wrap => self.wrap_onto(s, t),
@@ -4107,12 +4153,16 @@ impl Editor {
     /// The 2D view a hold-key action (S sizing, Shift clone, R rotate) is
     /// steering right now, so the host can pin the cursor there.
     /// The pending block as the shape it will become (None for a plain block).
-    pub fn block_preview(&self) -> Option<geom::Hull> {
+    pub fn block_preview(&self) -> Option<Vec<geom::Hull>> {
         let (lo, hi) = self.block_box?;
         if self.block_shape == Shape::Block || self.tool != Tool::Block {
             return None;
         }
-        geom::hull(&shapes::points(self.block_shape, lo, hi, self.block_axis.0, self.block_axis.1, self.block_faces))
+        let hs: Vec<geom::Hull> = shapes::pieces(self.block_shape, lo, hi, self.block_axis.0, self.block_axis.1, self.block_faces, self.arch_thickness)
+            .iter()
+            .filter_map(|p| geom::hull(p))
+            .collect();
+        (!hs.is_empty()).then_some(hs)
     }
 
     /// What a held key is doing right now, for the hint in the corner of the
@@ -4501,19 +4551,24 @@ impl Editor {
                 if self.doc.layer(active).is_some_and(|l| !l.visible) {
                     self.doc.set_layer_flags(active, true, false);
                 }
-                let id = if self.block_shape == Shape::Block {
-                    self.doc.add_brush(lo, hi)
+                let ids: Vec<u32> = if self.block_shape == Shape::Block {
+                    vec![self.doc.add_brush(lo, hi)]
                 } else {
-                    let pts = shapes::points(self.block_shape, lo, hi, self.block_axis.0, self.block_axis.1, self.block_faces);
-                    match self.doc.add_hull_brush(&pts) {
-                        Some(id) => id,
-                        None => {
-                            self.message = Some("That shape is too thin to make".into());
-                            return flags::ALL;
-                        }
+                    let ps = shapes::pieces(self.block_shape, lo, hi, self.block_axis.0, self.block_axis.1, self.block_faces, self.arch_thickness);
+                    let ids: Vec<u32> = ps.iter().filter_map(|p| self.doc.add_hull_brush(p)).collect();
+                    if ids.is_empty() {
+                        self.message = Some("That shape is too thin to make".into());
+                        return flags::ALL;
                     }
+                    ids
                 };
-                self.doc.selection = vec![id];
+                self.doc.selection = ids.clone();
+                if ids.len() > 1 {
+                    // an arch's segments stay together
+                    let n = (1..).find(|n| !self.doc.groups.iter().any(|x| x.name == format!("Arch {n}"))).unwrap();
+                    self.doc.group_selection_as(&format!("Arch {n}"));
+                    self.message = Some(format!("Arch of {} brushes (grouped)", ids.len()));
+                }
                 self.sel_mode = HandleMode::Scale;
                 self.work = (lo, hi);
                 self.block_box = None;

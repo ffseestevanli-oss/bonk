@@ -80,6 +80,30 @@ pub fn write(ed: &Editor) -> String {
     for (m, props) in &ed.doc.mat_overrides {
         kv(&mut o, 1, "material_override", &format!("{}|{}", m, props));
     }
+    let v = &ed.doc.variants;
+    for s in &v.skins {
+        o.push_str("\t\"skin\"\n\t{\n");
+        kv(&mut o, 2, "name", &s.name);
+        for (a, b) in &s.swaps {
+            kv(&mut o, 2, "swap", &format!("{a}|{b}"));
+        }
+        if !s.hidden.is_empty() {
+            kv(&mut o, 2, "hidden", &s.hidden.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" "));
+        }
+        o.push_str("\t}\n");
+    }
+    for b in &v.blank {
+        kv(&mut o, 1, "bodygroup_none", b);
+    }
+    for l in &v.lods {
+        kv(&mut o, 1, "lod", &format!("{} {}", num(l.distance), num(l.detail)));
+    }
+    if v.skin > 0 {
+        kv(&mut o, 1, "active_skin", &v.skin.to_string());
+    }
+    for (b, opt) in &v.shown {
+        kv(&mut o, 1, "bodygroup_shown", &format!("{b}|{opt}"));
+    }
     kv(&mut o, 1, "active_layer", &ed.doc.active_layer.to_string());
     for l in &ed.doc.layers {
         o.push_str("\t\"layer\"\n\t{\n");
@@ -138,6 +162,9 @@ fn write_group(o: &mut String, g: &Group) {
     kv(o, 2, "name", &g.name);
     if let Some(p) = g.parent {
         kv(o, 2, "parent", &p.to_string());
+    }
+    if let Some(b) = &g.bodygroup {
+        kv(o, 2, "bodygroup", b);
     }
     o.push_str("\t}\n");
 }
@@ -302,6 +329,7 @@ pub struct Loaded {
     pub mass: f32,
     pub mat_overrides: Vec<(String, String)>,
     pub groups: Vec<Group>,
+    pub variants: crate::variants::Variants,
     /// Brushes whose stored faces didn't match their vertices and were rebuilt
     pub repaired: usize,
 }
@@ -334,6 +362,7 @@ pub fn read(text: &str) -> Result<Loaded, String> {
         mass: 0.0,
         mat_overrides: Vec::new(),
         groups: Vec::new(),
+        variants: Default::default(),
         repaired: 0,
     };
     for (k, v) in body {
@@ -371,6 +400,38 @@ pub fn read(text: &str) -> Result<Loaded, String> {
                 }
             }
             ("active_layer", Val::Str(s)) => out.active_layer = s.trim().parse().unwrap_or(0),
+            ("skin", Val::Block(items)) => {
+                let mut sk = crate::variants::Skin::default();
+                for (k, v) in items {
+                    let Val::Str(s) = v else { continue };
+                    match k.as_str() {
+                        "name" => sk.name = s.trim().to_string(),
+                        "swap" => {
+                            if let Some((a, b)) = s.split_once('|') {
+                                sk.swaps.push((a.trim().to_string(), b.trim().to_string()));
+                            }
+                        }
+                        "hidden" => sk.hidden = s.split_whitespace().filter_map(|x| x.parse().ok()).collect(),
+                        _ => {}
+                    }
+                }
+                if sk.name.is_empty() {
+                    sk.name = format!("Skin {}", out.variants.skins.len() + 1);
+                }
+                out.variants.skins.push(sk);
+            }
+            ("bodygroup_none", Val::Str(s)) => out.variants.blank.push(s.trim().to_string()),
+            ("lod", Val::Str(s)) => {
+                if let Ok(v) = floats(&s, 2, "lod") {
+                    out.variants.lods.push(crate::variants::Lod { distance: v[0], detail: v[1] });
+                }
+            }
+            ("active_skin", Val::Str(s)) => out.variants.skin = s.trim().parse().unwrap_or(0),
+            ("bodygroup_shown", Val::Str(s)) => {
+                if let Some((a, b)) = s.split_once('|') {
+                    out.variants.shown.push((a.trim().to_string(), b.trim().to_string()));
+                }
+            }
             ("layer", Val::Block(items)) => {
                 let mut l = Layer { id: 0, name: String::new(), kind: LayerKind::Visual, visible: true, locked: false, origin: None };
                 for (k, v) in items {
@@ -393,13 +454,14 @@ pub fn read(text: &str) -> Result<Loaded, String> {
                 }
             }
             ("group", Val::Block(items)) => {
-                let mut g = Group { id: 0, name: String::new(), parent: None };
+                let mut g = Group { id: 0, name: String::new(), parent: None, bodygroup: None };
                 for (k, v) in items {
                     let Val::Str(s) = v else { continue };
                     match k.as_str() {
                         "id" => g.id = s.trim().parse().unwrap_or(0),
                         "name" => g.name = s.trim().to_string(),
                         "parent" => g.parent = s.trim().parse().ok(),
+                        "bodygroup" => g.bodygroup = Some(s.trim().to_string()).filter(|b| !b.is_empty()),
                         _ => {}
                     }
                 }
@@ -538,6 +600,8 @@ pub fn apply(ed: &mut Editor, l: Loaded) -> usize {
     ed.doc.mat_overrides = l.mat_overrides;
     ed.doc.groups = l.groups;
     ed.doc.prune_groups();
+    ed.doc.variants = l.variants;
+    ed.doc.prune_variants();
     if let Some(v) = l.show_entities {
         ed.show_entities = v;
     }

@@ -17,6 +17,8 @@ pub enum Shape {
     Spike,
     /// An ellipsoid, poles on the depth axis
     Orb,
+    /// A half-ring of brushes in the view's plane (an arch), standing on the box's bottom
+    Arch,
 }
 
 impl Shape {
@@ -26,6 +28,7 @@ impl Shape {
             2 => Shape::Wedge,
             3 => Shape::Spike,
             4 => Shape::Orb,
+            5 => Shape::Arch,
             _ => Shape::Block,
         }
     }
@@ -37,6 +40,7 @@ impl Shape {
             Shape::Wedge => 2,
             Shape::Spike => 3,
             Shape::Orb => 4,
+            Shape::Arch => 5,
         }
     }
 
@@ -45,9 +49,44 @@ impl Shape {
     pub fn clamp_faces(self, n: u32) -> u32 {
         match self {
             Shape::Orb => n.clamp(4, 16),
+            Shape::Arch => n.clamp(2, 32),
             _ => n.clamp(3, 32),
         }
     }
+}
+
+/// The brushes `shape` makes filling (lo, hi): one for every shape but the
+/// arch, which is `faces` segments around a half ring `thickness` thick, in
+/// the plane of the view's horizontal (`across`) and the remaining axis,
+/// running through the depth (`axis`).
+pub fn pieces(shape: Shape, lo: V3, hi: V3, axis: usize, across: usize, faces: u32, thickness: f32) -> Vec<Vec<V3>> {
+    if shape != Shape::Arch {
+        return vec![points(shape, lo, hi, axis, across, faces)];
+    }
+    let (lo, hi) = (lo.min(hi), lo.max(hi));
+    let n = shape.clamp_faces(faces) as usize;
+    let h = if across == axis { (axis + 1) % 3 } else { across };
+    let up = 3 - axis - h;
+    let (ch, rx) = ((lo.get(h) + hi.get(h)) * 0.5, (hi.get(h) - lo.get(h)) * 0.5);
+    let (base, ry) = (lo.get(up), hi.get(up) - lo.get(up));
+    let t = thickness.max(1.0).min(rx * 0.95).min(ry * 0.95);
+    let at = |a: f32, r: (f32, f32)| (ch + r.0 * a.cos(), base + r.1 * a.sin());
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let (a0, a1) = (PI * (1.0 - i as f32 / n as f32), PI * (1.0 - (i + 1) as f32 / n as f32));
+        let mut pts = Vec::with_capacity(8);
+        for (ph, pv) in [at(a0, (rx, ry)), at(a1, (rx, ry)), at(a1, (rx - t, ry - t)), at(a0, (rx - t, ry - t))] {
+            for d in [lo.get(axis), hi.get(axis)] {
+                let mut p = V3::default();
+                p.set(h, ph);
+                p.set(up, pv);
+                p.set(axis, d);
+                pts.push(p);
+            }
+        }
+        out.push(pts);
+    }
+    out
 }
 
 /// The corner points of `shape` filling (lo, hi). `axis` is the axis the
@@ -79,7 +118,7 @@ pub fn points(shape: Shape, lo: V3, hi: V3, axis: usize, across: usize, faces: u
         (cu + ru * t.cos(), cw + rw * t.sin())
     };
     match shape {
-        Shape::Block => (0..8)
+        Shape::Block | Shape::Arch => (0..8)
             .map(|i| v3(if i & 1 != 0 { hi.x } else { lo.x }, if i & 2 != 0 { hi.y } else { lo.y }, if i & 4 != 0 { hi.z } else { lo.z }))
             .collect(),
         Shape::Cylinder => {
@@ -174,5 +213,26 @@ mod tests {
         // a cylinder drawn in the front view (depth = X) lies along X
         let h = geom::hull(&points(Shape::Cylinder, lo, hi, 0, 1, 8)).unwrap();
         assert_eq!(h.faces.iter().filter(|f| f.normal.x.abs() > 0.99).count(), 2);
+    }
+
+    #[test]
+    fn an_arch_is_a_half_ring_of_convex_brushes() {
+        let (lo, hi) = (v3(0.0, 0.0, 0.0), v3(128.0, 16.0, 96.0));
+        // drawn in the front view: depth = Y, across = X, so the arch rises in Z
+        let ps = pieces(Shape::Arch, lo, hi, 1, 0, 6, 16.0);
+        assert_eq!(ps.len(), 6);
+        for p in &ps {
+            let h = geom::hull(p).expect("each segment is a solid");
+            assert_eq!(h.faces.len(), 6);
+            for v in &h.verts {
+                assert!(v.x >= -0.01 && v.x <= 128.01 && v.z >= -0.01 && v.z <= 96.01 && (v.y == 0.0 || v.y == 16.0));
+            }
+        }
+        // its feet stand on the bottom, its crown touches the top
+        let all: Vec<V3> = ps.iter().flatten().copied().collect();
+        assert!(all.iter().any(|v| v.z.abs() < 0.01 && v.x.abs() < 0.01));
+        assert!(all.iter().any(|v| (v.z - 96.0).abs() < 0.01));
+        // the other shapes are one brush
+        assert_eq!(pieces(Shape::Cylinder, lo, hi, 2, 0, 8, 16.0).len(), 1);
     }
 }

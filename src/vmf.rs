@@ -492,7 +492,7 @@ pub fn import(text: &str, skip_visgroups: &[u32]) -> Result<(Document, Report), 
     for (i, (vid, parent)) in vmf_groups.iter().enumerate() {
         let id = gmap.iter().find(|x| x.0 == *vid).unwrap().1;
         let parent = parent.and_then(|p| gmap.iter().find(|x| x.0 == p).map(|x| x.1));
-        groups.push(Group { id, name: format!("Group {}", i + 1), parent });
+        groups.push(Group { id, name: format!("Group {}", i + 1), parent, bodygroup: None });
     }
     let mut ids = Vec::with_capacity(built.len());
     let mut entity_of: Vec<Option<u32>> = vec![None; built.len()];
@@ -504,7 +504,7 @@ pub fn import(text: &str, skip_visgroups: &[u32]) -> Result<(Document, Report), 
         next_gid += 1;
         // the entity's own group sits inside the Hammer group its first solid was in
         let parent = built[members[0]].1.and_then(|g| gmap.iter().find(|x| x.0 == g).map(|x| x.1));
-        groups.push(Group { id: gid, name: format!("Entity {}", k + 1), parent });
+        groups.push(Group { id: gid, name: format!("Entity {}", k + 1), parent, bodygroup: None });
         for &m in members {
             entity_of[m] = Some(gid);
         }

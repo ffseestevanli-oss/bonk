@@ -37,21 +37,29 @@ fn tri_ok(a: V3, b: V3, c: V3) -> bool {
     (b - a).cross(c - a).len() > 1e-6
 }
 
-/// The reference (visual) SMD.
+/// The reference (visual) SMD: every visual brush (bodygroups and skins aside).
+/// Compiling uses `variant_export`; this is the plain one (tests, bonk-special).
+#[allow(dead_code)]
 pub fn reference_smd(ed: &Editor) -> (String, usize, usize) {
+    smd_of(ed, ed.doc.brushes.iter().filter(|b| b.entity.is_none() && !ed.doc.is_collision(b)), &|_, m| m.to_string())
+}
+
+/// A visual SMD from these brushes; `name` gives each face's material name
+/// (the brush, the material as painted).
+fn smd_of<'a>(ed: &Editor, brushes: impl Iterator<Item = &'a Brush>, name: &dyn Fn(&Brush, &str) -> String) -> (String, usize, usize) {
     let mut o = String::new();
     header(&mut o);
     let origin = ed.doc.origin;
     let mut tris = 0;
     let mut untextured = 0;
-    for b in ed.doc.brushes.iter().filter(|b| b.entity.is_none() && !ed.doc.is_collision(b)) {
+    for b in brushes {
         for f in b.faces.iter().filter(|f| f.material != geom::NODRAW) {
             if f.material.is_empty() {
                 untextured += 1;
             }
             let (tw, th) = texstore::size(&f.material).map(|(w, h)| (w as f32, h as f32)).unwrap_or((512.0, 512.0));
             let tm = f.tex.or_default_for(f.normal);
-            let mat = flat_material(&f.material);
+            let mat = flat_material(&name(b, &f.material));
             for k in 1..f.idx.len().saturating_sub(1) {
                 let (a, bb, c) = (b.verts[f.idx[0]], b.verts[f.idx[k]], b.verts[f.idx[k + 1]]);
                 if !tri_ok(a, bb, c) {
@@ -70,6 +78,163 @@ pub fn reference_smd(ed: &Editor) -> (String, usize, usize) {
     }
     o.push_str("end\n");
     (o, tris, untextured)
+}
+
+/// The material that hides faces in a skin (a VMT with $no_draw).
+pub const HIDDEN_MATERIAL: &str = "bonk_hidden";
+
+/// Everything the model's variants add to a compile.
+#[derive(Debug, Default)]
+pub struct VariantExport {
+    /// The base body (reference.smd): visual brushes in no bodygroup option
+    pub reference: String,
+    pub tris: usize,
+    pub untextured: usize,
+    /// Extra SMDs: bodygroup options and LODs (file name, text)
+    pub smds: Vec<(String, String)>,
+    /// QC lines in place of the plain "$body": bodygroups, $texturegroup, $lod
+    pub qc: String,
+    /// The SMD's sequence source (reference.smd, or a bodygroup's first option when the base body is empty)
+    pub sequence: String,
+    /// Materials that are copies of another (for brushes a skin hides): (copy, original)
+    pub aliases: Vec<(String, String)>,
+    /// The skins use the invisible material
+    pub hidden: bool,
+}
+
+/// A name usable in a file name.
+fn slug(s: &str) -> String {
+    let o: String = s.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+    let o = o.trim_matches('_').to_string();
+    if o.is_empty() { "part".into() } else { o }
+}
+
+fn quote(s: &str) -> String {
+    s.replace('"', "'")
+}
+
+/// The variant-aware export: reference.smd, bodygroup and LOD SMDs, and the QC for them.
+pub fn variant_export(ed: &Editor) -> VariantExport {
+    let doc = &ed.doc;
+    let v = &doc.variants;
+    let visual: Vec<&Brush> = doc.brushes.iter().filter(|b| b.entity.is_none() && !doc.is_collision(b)).collect();
+    // which skins hide each brush (bit k-1 = skin k)
+    let mask = |b: &Brush| -> u32 {
+        v.skins.iter().enumerate().filter(|(_, s)| s.hidden.contains(&b.id)).fold(0u32, |m, (i, _)| m | (1 << i.min(31)))
+    };
+    let name = |b: &Brush, m: &str| -> String {
+        let k = mask(b);
+        if k == 0 { m.to_string() } else { format!("{m}__h{k:x}") }
+    };
+    let mut out = VariantExport::default();
+    // bodygroups
+    let bgs = doc.bodygroups();
+    let in_option = |b: &Brush| doc.option_group_of(b);
+    let base: Vec<&Brush> = visual.iter().copied().filter(|b| in_option(b).is_none()).collect();
+    let (r, tris, un) = smd_of(ed, base.iter().copied(), &name);
+    out.reference = r;
+    out.tris = tris;
+    out.untextured = un;
+    let mut bodies: Vec<(String, Vec<&Brush>)> = Vec::new(); // smd file → its brushes (for LODs)
+    let mut qc = String::new();
+    if !base.is_empty() || bgs.is_empty() {
+        qc.push_str("$body \"body\" \"reference.smd\"\n");
+        bodies.push(("reference.smd".into(), base.clone()));
+        out.sequence = "reference.smd".into();
+    }
+    for bg in &bgs {
+        let _ = writeln!(qc, "$bodygroup \"{}\"\n{{", quote(&bg.name));
+        for (gid, opt) in &bg.options {
+            let file = format!("bg_{}_{}_{}.smd", slug(&bg.name), slug(opt), gid);
+            let members: Vec<&Brush> = visual.iter().copied().filter(|b| in_option(b) == Some(*gid)).collect();
+            let (text, t, u) = smd_of(ed, members.iter().copied(), &name);
+            out.tris += t;
+            out.untextured += u;
+            let _ = writeln!(qc, "\tstudio \"{file}\"");
+            if out.sequence.is_empty() {
+                out.sequence = file.clone();
+            }
+            out.smds.push((file.clone(), text));
+            bodies.push((file, members));
+        }
+        if bg.blank {
+            qc.push_str("\tblank\n");
+        }
+        qc.push_str("}\n");
+    }
+    // skins: a column for each material that differs in some skin
+    if !v.skins.is_empty() {
+        let mut cols: Vec<String> = Vec::new(); // material names as in the SMD (aliases included)
+        for b in &visual {
+            for f in b.faces.iter().filter(|f| f.material != geom::NODRAW) {
+                let n = name(b, &f.material);
+                if !cols.contains(&n) {
+                    cols.push(n);
+                }
+            }
+        }
+        let real = |n: &str| -> (String, u32) {
+            match n.rsplit_once("__h") {
+                Some((m, k)) if u32::from_str_radix(k, 16).is_ok() => (m.to_string(), u32::from_str_radix(k, 16).unwrap()),
+                _ => (n.to_string(), 0),
+            }
+        };
+        let cell = |n: &str, skin: usize| -> String {
+            if skin == 0 {
+                return flat_material(n);
+            }
+            let (m, k) = real(n);
+            if k & (1 << (skin - 1).min(31)) != 0 {
+                return HIDDEN_MATERIAL.into();
+            }
+            let to = v.skins[skin - 1].swap(&m);
+            if to == geom::NODRAW {
+                HIDDEN_MATERIAL.into()
+            } else if to == m {
+                flat_material(n) // unchanged in this skin
+            } else {
+                flat_material(to)
+            }
+        };
+        let varying: Vec<&String> = cols.iter().filter(|c| (1..=v.skins.len()).any(|s| cell(c, s) != cell(c, 0))).collect();
+        if !varying.is_empty() {
+            qc.push_str("$texturegroup \"skinfamilies\"\n{\n");
+            for s in 0..=v.skins.len() {
+                let row: Vec<String> = varying.iter().map(|c| format!("\"{}\"", cell(c, s))).collect();
+                let _ = writeln!(qc, "\t{{ {} }}", row.join(" "));
+                if s > 0 && row.iter().any(|r| r.contains(HIDDEN_MATERIAL)) {
+                    out.hidden = true;
+                }
+            }
+            qc.push_str("}\n");
+        }
+        for c in &cols {
+            let (m, k) = real(c);
+            if k != 0 {
+                out.aliases.push((c.clone(), m));
+            }
+        }
+    }
+    // LODs: each body without the small brushes
+    let mut lods = v.lods.clone();
+    lods.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    for (i, lod) in lods.iter().enumerate() {
+        let _ = writeln!(qc, "$lod {}\n{{", lod.distance.max(1.0).round() as i64);
+        for (file, members) in &bodies {
+            let kept: Vec<&Brush> = members.iter().copied().filter(|b| crate::doc::Document::lod_keeps(b, lod.detail)).collect();
+            if kept.is_empty() {
+                let _ = writeln!(qc, "\treplacemodel \"{file}\" blank");
+                continue;
+            }
+            let lf = format!("{}_lod{}.smd", file.trim_end_matches(".smd"), i + 1);
+            let (text, _, _) = smd_of(ed, kept.iter().copied(), &name);
+            let _ = writeln!(qc, "\treplacemodel \"{file}\" \"{lf}\"");
+            out.smds.push((lf, text));
+        }
+        qc.push_str("}\n");
+    }
+    out.qc = qc;
+    out
 }
 
 /// The physics SMD: one convex piece per collision brush. With
@@ -142,6 +307,14 @@ pub fn used_materials(ed: &Editor) -> Vec<(String, usize)> {
         }
     }
     out.sort_by(|a, b| b.1.cmp(&a.1));
+    // what skins swap in (once each)
+    for sk in &ed.doc.variants.skins {
+        for (_, to) in &sk.swaps {
+            if to != geom::NODRAW && !out.iter().any(|m| &m.0 == to) {
+                out.push((to.clone(), 0));
+            }
+        }
+    }
     out
 }
 
@@ -206,5 +379,59 @@ mod tests {
             let c = (p(&t[1]) - p(&t[0])).cross(p(&t[2]) - p(&t[0]));
             assert!(c.dot(n) > 0.0, "triangle winds inward: {:?}", t);
         }
+    }
+
+    #[test]
+    fn variants_make_bodygroups_skins_and_lods() {
+        let mut e = Editor::new();
+        let house = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(256.0, 256.0, 128.0));
+        let sign = e.doc.add_brush(v3(0.0, -8.0, 96.0), v3(16.0, 0.0, 112.0)); // small: LODs drop it
+        let closed = e.doc.add_brush(v3(100.0, -4.0, 0.0), v3(156.0, 0.0, 100.0));
+        let open = e.doc.add_brush(v3(96.0, -60.0, 0.0), v3(100.0, 0.0, 100.0));
+        for (id, m) in [(house, "walls/brick"), (sign, "signs/shop"), (closed, "doors/wood"), (open, "doors/wood")] {
+            for f in &mut e.doc.brush_mut(id).unwrap().faces {
+                f.material = m.into();
+            }
+        }
+        e.doc.selection = vec![closed];
+        let g1 = e.doc.group_selection().unwrap();
+        e.doc.rename_group(g1, "Closed");
+        e.doc.selection = vec![open];
+        let g2 = e.doc.group_selection().unwrap();
+        e.doc.rename_group(g2, "Open");
+        e.doc.set_bodygroup(g1, "Door");
+        e.doc.set_bodygroup(g2, "Door");
+        e.doc.set_bodygroup_blank("Door", true);
+        // skin 1: plaster walls; skin 2: no sign
+        e.doc.add_skin(0);
+        e.doc.skin_swap("walls/brick", "walls/plaster");
+        e.doc.add_skin(0);
+        e.doc.skin_hide(&[sign], true);
+        e.doc.variants.lods.push(crate::variants::Lod { distance: 40.0, detail: 32.0 });
+        let v = variant_export(&e);
+        // the base body has the house and the sign, not the door options
+        assert!(v.reference.contains("walls_brick") && v.reference.contains("signs_shop__h2"));
+        assert!(!v.reference.contains("doors_wood"));
+        assert_eq!(v.sequence, "reference.smd");
+        assert!(v.qc.contains("$body \"body\" \"reference.smd\""));
+        assert!(v.qc.contains(&format!("$bodygroup \"Door\"\n{{\n\tstudio \"bg_door_closed_{g1}.smd\"\n\tstudio \"bg_door_open_{g2}.smd\"\n\tblank\n}}")), "{}", v.qc);
+        assert!(v.smds.iter().any(|(n, t)| n == &format!("bg_door_open_{g2}.smd") && t.contains("doors_wood")));
+        // skins: brick swaps in skin 1; the sign's copy hides in skin 2
+        assert!(v.qc.contains("$texturegroup \"skinfamilies\""), "{}", v.qc);
+        assert!(v.qc.contains("{ \"walls_brick\" \"signs_shop__h2\" }"), "{}", v.qc);
+        assert!(v.qc.contains("{ \"walls_plaster\" \"signs_shop__h2\" }"), "{}", v.qc);
+        assert!(v.qc.contains("{ \"walls_brick\" \"bonk_hidden\" }"), "{}", v.qc);
+        assert!(v.hidden);
+        assert_eq!(v.aliases, vec![("signs/shop__h2".to_string(), "signs/shop".to_string())]);
+        // LOD: the sign drops out of the base body, the door options stay
+        assert!(v.qc.contains("$lod 40\n{\n\treplacemodel \"reference.smd\" \"reference_lod1.smd\""), "{}", v.qc);
+        let lod = &v.smds.iter().find(|(n, _)| n == "reference_lod1.smd").unwrap().1;
+        assert!(lod.contains("walls_brick") && !lod.contains("signs_shop"));
+        // swap targets are compiled too
+        assert!(used_materials(&e).iter().any(|m| m.0 == "walls/plaster"));
+        // no variants: the plain body, nothing else
+        let plain = variant_export(&Editor::new());
+        assert_eq!(plain.qc, "$body \"body\" \"reference.smd\"\n");
+        assert!(plain.smds.is_empty() && plain.aliases.is_empty());
     }
 }

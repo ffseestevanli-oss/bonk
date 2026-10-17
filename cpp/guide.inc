@@ -78,7 +78,7 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("drawing"), QStringLiteral("selecting"), QStringLiteral("cheat")};
     }
     {
-        GuidePage &p = page(QStringLiteral("drawing"), MK, QStringLiteral("Drawing & shapes"), QStringLiteral("block draw quick draw right-drag shape primitive cylinder wedge spike cone orb sphere faces sides"));
+        GuidePage &p = page(QStringLiteral("drawing"), MK, QStringLiteral("Drawing & shapes"), QStringLiteral("block draw quick draw right-drag shape primitive cylinder wedge spike cone orb sphere arch faces sides segments thickness"));
         p.keys = {{QStringLiteral("2"), QStringLiteral("Block tool")},
                   {QStringLiteral("drag"), QStringLiteral("Draw a box in a 2D view; Enter makes it")},
                   {QStringLiteral("right-drag"), QStringLiteral("Quick Draw: a block one grid unit deep, made as soon as you let go")},
@@ -93,6 +93,10 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "<p><b>Quick Draw</b> makes walls and floors fast: right-drag in a 2D view and the block is made at once, "
                                 "one grid unit deep. In the top view it sits on the floor, or on top of what's selected; in the front and side "
                                 "views it starts where the Block tool would. It comes out selected, ready for G, S or R.</p>"
+                                "<p><b>Arch</b> makes several brushes: a half ring filling the box, its feet on the box's bottom and its crown "
+                                "at the top, in the plane of the view you draw in (drawn in the front view it's a doorway arch; in the top "
+                                "view, a curved wall). <b>Segments</b> sets how many brushes, <b>Thickness</b> how thick the ring is. They "
+                                "come out grouped as \"Arch 1\".</p>"
                                 "<p>New brushes are nodraw until you paint them.</p>");
         p.see = {QStringLiteral("grid"), QStringLiteral("vertices"), QStringLiteral("face")};
     }
@@ -367,6 +371,34 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("compiling"), QStringLiteral("textures")};
     }
     {
+        GuidePage &p = page(QStringLiteral("variants"), GD, QStringLiteral("Skins, bodygroups & LODs"),
+                            QStringLiteral("variants skin skins texturegroup bodygroup bodygroups option none lod lods level of detail preview model preview hide"));
+        p.keys = {{QStringLiteral("F7"), QStringLiteral("Model Preview")}};
+        p.html = QStringLiteral("<p>The <b>Variants</b> tab (beside Layers, the Texture Picker and Prefabs) makes one model into several: skins "
+                                "players pick in game, bodygroups they switch, and simpler versions for a distance.</p>");
+        p.subs = {{QStringLiteral("Skins"), QStringLiteral("<p>Skin 0 is the model as painted. <b>+ Skin</b> adds one (a copy of the skin picked). "
+                                                           "While a skin is picked, the views show it, and <b>painting swaps materials in that "
+                                                           "skin</b>: every face with that material shows the new one, since Source skins swap "
+                                                           "whole materials. The swaps are listed; select one and press Delete to undo it.</p>"
+                                                           "<p>A skin can also <b>hide brushes</b>: select them and press <b>Hide Selection</b> "
+                                                           "(Show Selection and Show All bring them back). Bonk exports them with their own "
+                                                           "copies of their materials, which that skin swaps for an invisible one.</p>")},
+                  {QStringLiteral("Bodygroups"), QStringLiteral("<p>Group the brushes for each choice (Ctrl+G), select a group and press "
+                                                                "<b>Make Group an Option…</b>, naming the bodygroup (Door, say). Each group "
+                                                                "marked with the same bodygroup is one of its options, named after the group. "
+                                                                "<b>+ None Option</b> lets players show nothing. Click an option in the list "
+                                                                "to show it in the views; the others are hidden while you work. Brushes in no "
+                                                                "option are the model's body, always there.</p>")},
+                  {QStringLiteral("Levels of detail"), QStringLiteral("<p><b>+ LOD</b> adds a simpler version: <b>Switch at</b> is studiomdl's "
+                                                                      "$lod distance (bigger is farther; 30 and 60 are usual), <b>Drop under</b> "
+                                                                      "leaves out brushes smaller than that many units across. The list shows "
+                                                                      "how many triangles each keeps.</p>")},
+                  {QStringLiteral("Model Preview"), QStringLiteral("<p><b>View → Model Preview</b> (F7) shows the model as it compiles: "
+                                                                   "pick a skin, each bodygroup's option and a LOD; drag to turn it, "
+                                                                   "right-drag to move, wheel to zoom. It updates as you edit.</p>")}};
+        p.see = {QStringLiteral("groups"), QStringLiteral("face"), QStringLiteral("compiling")};
+    }
+    {
         GuidePage &p = page(QStringLiteral("prefabs"), GD, QStringLiteral("Prefabs"),
                             QStringLiteral("prefab prefabs reuse library furniture save selection drop drag place keep height floor shared project"));
         p.html = QStringLiteral("<p>A prefab is a set of brushes you've saved to use again: a window, a shelf, a whole room. Select the "
@@ -422,7 +454,9 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "they make one convex brush together, otherwise a hull around them (Settings → Editing can make Ctrl+J "
                                 "exact only). Handy for cutting collision pieces down.</p>"
                                 "<p>No collision layer when you compile? Bonk offers to <b>Generate</b> one (complex or simplified) from the visual brushes, "
-                                "or to compile without physics.</p>");
+                                "or to compile without physics.</p>"
+                                "<p>While you edit collision, its brushes get thick two-tone outlines; far from the camera they're heavier still, "
+                                "so pieces don't blend together when you look at a whole house.</p>");
         p.see = {QStringLiteral("budget"), QStringLiteral("compiling")};
     }
     {

@@ -184,8 +184,14 @@ struct Flat {
     /// collision outlines while editing collision: drawn thick, dark under bright, depth-tested
     col_dark: Vec<f32>,
     col_bright: Vec<f32>,
+    /// the same, for edges far from the camera: drawn heavier so they don't blend together
+    col_far_dark: Vec<f32>,
+    col_far_bright: Vec<f32>,
     overlay: Vec<f32>,
 }
+
+/// Collision edges this far from the camera (units) get heavier outlines.
+const FAR_EDGE: f32 = 768.0;
 
 fn push_v(buf: &mut Vec<f32>, p: [f32; 3], c: [f32; 4]) {
     buf.extend_from_slice(&p);
@@ -686,12 +692,14 @@ impl Renderer {
         // Pending block box
         if let Some((lo, hi)) = ed.block_box {
             let c = if light { [0.05, 0.05, 0.05] } else { BLOCK_BOX };
-            if let Some(h) = ed.block_preview() {
+            if let Some(hs) = ed.block_preview() {
                 // the shape it will become, inside a faint box
                 rect2(&mut f.overlay, lo.get(ha), lo.get(va), hi.get(ha), hi.get(va), rgb(c, 0.35));
-                for fc in &h.faces {
-                    for i in 0..fc.idx.len() {
-                        line(&mut f.overlay, p2(h.verts[fc.idx[i]]), p2(h.verts[fc.idx[(i + 1) % fc.idx.len()]]), rgb(c, 1.0));
+                for h in &hs {
+                    for fc in &h.faces {
+                        for i in 0..fc.idx.len() {
+                            line(&mut f.overlay, p2(h.verts[fc.idx[i]]), p2(h.verts[fc.idx[(i + 1) % fc.idx.len()]]), rgb(c, 1.0));
+                        }
                     }
                 }
             } else {
@@ -1026,8 +1034,10 @@ impl Renderer {
                     col = mix(col, [1.0, 0.25, 0.25], 0.75);
                 }
                 // A project texture: draw the image, world-aligned like Hammer.
-                if !collision && !nodraw && !fc.material.is_empty() {
-                    if let (Some(tex), Some((tw, th))) = (self.texture(&fc.material), texstore::size(&fc.material)) {
+                // in a skin, the swapped material shows, laid out as the painted one (as in game)
+                let shown = ed.doc.skin_material(&fc.material);
+                if !collision && !nodraw && !fc.material.is_empty() && shown != geom::NODRAW {
+                    if let (Some(tex), Some((tw, th))) = (self.texture(shown), texstore::size(&fc.material).or_else(|| texstore::size(shown))) {
                         let mut tint = [1.0f32, 1.0, 1.0];
                         if sel {
                             tint = mix(tint, SELECTED, 0.45);
@@ -1035,7 +1045,7 @@ impl Renderer {
                         if fsel {
                             tint = mix(tint, [1.0, 0.25, 0.25], 0.6);
                         }
-                        let buf = &mut textured.entry(fc.material.clone()).or_insert_with(|| (tex, Vec::new())).1;
+                        let buf = &mut textured.entry(shown.to_string()).or_insert_with(|| (tex, Vec::new())).1;
                         let tm = fc.tex.or_default_for(fc.normal);
                         for k in 1..fc.idx.len().saturating_sub(1) {
                             for vi in [fc.idx[0], fc.idx[k], fc.idx[k + 1]] {
@@ -1079,6 +1089,10 @@ impl Renderer {
                     let bright = if solid { mix(br.color, [1.0, 1.0, 1.0], 0.55) } else { [1.0, 0.93, 0.8] };
                     line3(&mut f.col_dark, a, b, [0.04, 0.03, 0.02, 0.95]);
                     line3(&mut f.col_bright, a, b, rgb(bright, 1.0));
+                    if ((a + b) * 0.5 - ed.cam.pos).len() > FAR_EDGE {
+                        line3(&mut f.col_far_dark, a, b, [0.04, 0.03, 0.02, 0.95]);
+                        line3(&mut f.col_far_bright, a, b, rgb(bright, 1.0));
+                    }
                     continue;
                 }
                 let target = if sel || (collision && !solid) { &mut f.overlay } else { &mut f.edges };
@@ -1086,10 +1100,12 @@ impl Renderer {
             }
         }
         if let Some((lo, hi)) = ed.block_box {
-            if let Some(h) = ed.block_preview() {
-                for fc in &h.faces {
-                    for i in 0..fc.idx.len() {
-                        line3(&mut f.overlay, h.verts[fc.idx[i]], h.verts[fc.idx[(i + 1) % fc.idx.len()]], [1.0, 1.0, 0.3, 1.0]);
+            if let Some(hs) = ed.block_preview() {
+                for h in &hs {
+                    for fc in &h.faces {
+                        for i in 0..fc.idx.len() {
+                            line3(&mut f.overlay, h.verts[fc.idx[i]], h.verts[fc.idx[(i + 1) % fc.idx.len()]], [1.0, 1.0, 0.3, 1.0]);
+                        }
                     }
                 }
             } else {
@@ -1175,9 +1191,16 @@ impl Renderer {
             for (dx, dy) in [(-1.5, 0.0), (1.5, 0.0), (0.0, -1.5), (0.0, 1.5), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
                 self.draw_flat(&nudge(dx, dy), &f.col_dark, gl::LINES);
             }
+            // far away: a wider dark border (about 5px), so neighbors stay apart
+            for (dx, dy) in [(-2.5, 0.0), (2.5, 0.0), (0.0, -2.5), (0.0, 2.5), (-2.0, -2.0), (2.0, 2.0), (-2.0, 2.0), (2.0, -2.0)] {
+                self.draw_flat(&nudge(dx, dy), &f.col_far_dark, gl::LINES);
+            }
             (g.DepthMask)(1);
             for (dx, dy) in [(0.0, 0.0), (0.5, 0.0), (0.0, 0.5), (0.5, 0.5)] {
                 self.draw_flat(&nudge(dx, dy), &f.col_bright, gl::LINES);
+            }
+            for (dx, dy) in [(-0.75, 0.0), (0.75, 0.0), (0.0, -0.75), (0.0, 0.75)] {
+                self.draw_flat(&nudge(dx, dy), &f.col_far_bright, gl::LINES);
             }
         }
         // translucent collision hulls and textures: don't write depth so what's behind shows
