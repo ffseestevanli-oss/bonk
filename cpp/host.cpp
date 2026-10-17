@@ -4971,6 +4971,10 @@ public:
             d.select(a.value(0).toInt(), a.value(1, QStringLiteral("-1")).toInt());
         }
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_DROP")) d.devDrop(qEnvironmentVariable("BONK_SPAWNLIST_DROP"));
+        if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_TREEMOVE")) {
+            const QStringList m = qEnvironmentVariable("BONK_SPAWNLIST_TREEMOVE").split(QLatin1Char(','));
+            d.devTreeMove(m.value(0).toInt(), m.value(1).toInt(), m.value(2).toInt());
+        }
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_ENTER")) { // developer aid: press Enter in the dialog
             d.show();
             QWidget *f = d.focusWidget() ? d.focusWidget() : &d;

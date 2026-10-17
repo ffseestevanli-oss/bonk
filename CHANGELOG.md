@@ -2,6 +2,11 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.16.4
+
+- **Fix:** dragging categories in the Spawnlist Editor only moved them on screen; the spawnlist
+  kept the old nesting, so the next change (and the game) put them back. Drags now stick.
+
 ## 0.16.3
 
 - **Fix:** in the Spawnlist Editor, pressing Enter after typing (renaming a category, a header)

@@ -693,6 +693,8 @@ private:
 class CategoryTree : public QTreeWidget {
 public:
     std::function<void(const QList<int> &rows, QTreeWidgetItem *to, bool copy)> itemsDropped;
+    /// After a category was dragged to a new place in the tree.
+    std::function<void()> categoriesMoved;
 
 protected:
     void dragEnterEvent(QDragEnterEvent *e) override {
@@ -712,7 +714,11 @@ protected:
         QTreeWidget::dragLeaveEvent(e);
     }
     void dropEvent(QDropEvent *e) override {
-        if (!e->mimeData()->hasFormat(kSpawnRowsMime)) return QTreeWidget::dropEvent(e);
+        if (!e->mimeData()->hasFormat(kSpawnRowsMime)) {
+            QTreeWidget::dropEvent(e);
+            if (categoriesMoved) QTimer::singleShot(0, this, [this] { categoriesMoved(); });
+            return;
+        }
         QTreeWidgetItem *it = itemAt(e->position().toPoint());
         setHover(nullptr);
         if (!it) return e->ignore();
@@ -820,7 +826,9 @@ public:
             if (SpawnCategory *c = catOf(it)) c->name = it->text(0);
             changed();
         });
-        QObject::connect(tree->model(), &QAbstractItemModel::rowsMoved, this, [this] { QTimer::singleShot(0, this, [this] { rebuildFromTree(); }); });
+        // a category dragged in the tree: Qt moves the row as remove + insert (never "rowsMoved"),
+        // so the tree tells us after its own drop, and the data follows the tree
+        tree->categoriesMoved = [this] { rebuildFromTree(); };
         QObject::connect(earlier, &QPushButton::clicked, this, [this] { moveItems(-1); });
         QObject::connect(later, &QPushButton::clicked, this, [this] { moveItems(1); });
         QObject::connect(page, &QListWidget::currentRowChanged, this, [this] { showItem(); });
@@ -850,6 +858,19 @@ public:
             b->setDefault(false);
         }
         resize(1180, 700);
+    }
+
+    /// Developer aid: move the tree's item number `from` under item number `to` (-1 = top level) at `at`,
+    /// the way a drag does, then let the dialog catch up.
+    void devTreeMove(int from, int to, int at) {
+        QList<QTreeWidgetItem *> all;
+        for (QTreeWidgetItemIterator it(tree); *it; ++it) all << *it;
+        QTreeWidgetItem *f = all.value(from), *t = to < 0 ? nullptr : all.value(to);
+        if (!f) return;
+        QTreeWidgetItem *taken = f->parent() ? f->parent()->takeChild(f->parent()->indexOfChild(f)) : tree->takeTopLevelItem(tree->indexOfTopLevelItem(f));
+        if (t) t->insertChild(std::min(at, t->childCount()), taken);
+        else tree->insertTopLevelItem(std::min(at, tree->topLevelItemCount()), taken);
+        if (tree->categoriesMoved) tree->categoriesMoved();
     }
 
     /// Developer aid: "page:<rows>:<at>" or "cat:<rows>:<tree index>", rows like 0+2; a trailing ":c" copies.
