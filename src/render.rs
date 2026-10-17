@@ -833,7 +833,7 @@ impl Renderer {
     /// A spawn icon: the model's visible faces only (nodraw, collision and
     /// buddies left out), on a transparent background, from `eye` looking at
     /// `target`. Draws into whatever framebuffer is bound (the caller sets the viewport).
-    pub unsafe fn render_thumb(&self, doc: &crate::doc::Document, eye: V3, target: V3, fov: f32, w: f32, h: f32) {
+    pub unsafe fn render_thumb(&self, doc: &crate::doc::Document, eye: V3, target: V3, fov: f32, w: f32, h: f32, grid: bool) {
         let g = &self.gl;
         (g.ClearColor)(0.0, 0.0, 0.0, 0.0);
         (g.Clear)(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
@@ -841,6 +841,8 @@ impl Renderer {
         (g.DepthFunc)(gl::LEQUAL);
         (g.Enable)(gl::BLEND);
         (g.BlendFunc)(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+        // coverage adds up in the alpha channel (the picture goes over a background later)
+        (g.BlendFuncSeparate)(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
         let fwd = (target - eye).norm();
         let up = if fwd.z.abs() > 0.999 { v3(0.0, 1.0, 0.0) } else { v3(0.0, 0.0, 1.0) };
         let proj = M4::perspective(fov.to_radians(), w / h.max(1.0), 1.0, 65536.0);
@@ -880,6 +882,33 @@ impl Renderer {
                 self.draw_lit_tex(&mvp, data, *tex, a, None);
             }
         }
+        if grid {
+            // a floor grid around the model's footprint, at z = 0, fading out
+            let (mut lo, mut hi) = (v3(f32::MAX, f32::MAX, 0.0), v3(f32::MIN, f32::MIN, 0.0));
+            for br in doc.brushes.iter().filter(|b| b.entity.is_none() && !doc.is_collision(b)) {
+                let (a, b) = br.bounds();
+                lo = lo.min(a);
+                hi = hi.max(b);
+            }
+            if lo.x <= hi.x {
+                let size = (hi.x - lo.x).max(hi.y - lo.y).max(64.0);
+                let step = [16.0f32, 32.0, 64.0, 128.0, 256.0].into_iter().find(|s| size / s <= 16.0).unwrap_or(512.0);
+                let (cx, cy) = ((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5);
+                let reach = size * 0.9 + step * 2.0;
+                let n = (reach / step).ceil() as i32;
+                let (x0, y0) = ((cx / step).round() * step, (cy / step).round() * step);
+                let mut lines = Vec::new();
+                for i in -n..=n {
+                    let fade = 1.0 - (i.abs() as f32 / (n as f32 + 1.0));
+                    let c = [1.0, 1.0, 1.0, 0.35 * fade];
+                    let x = x0 + i as f32 * step;
+                    let y = y0 + i as f32 * step;
+                    line(&mut lines, [x, y0 - n as f32 * step, 0.05], [x, y0 + n as f32 * step, 0.05], c);
+                    line(&mut lines, [x0 - n as f32 * step, y, 0.05], [x0 + n as f32 * step, y, 0.05], c);
+                }
+                self.draw_flat(&mvp, &lines, gl::LINES);
+            }
+        }
         (g.DepthMask)(0);
         for (name, (tex, data)) in textured.iter() {
             let a = texstore::alpha(name);
@@ -888,6 +917,7 @@ impl Renderer {
             }
         }
         (g.DepthMask)(1);
+        (g.BlendFunc)(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
     }
 
     pub unsafe fn render_3d(&self, ed: &Editor) {

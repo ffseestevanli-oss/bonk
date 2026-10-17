@@ -519,6 +519,17 @@ pub extern "C" fn bonk_model_bounds(path: *const c_char, out: *mut f32) -> c_int
     0
 }
 
+thread_local! {
+    /// Thumbnails get a floor grid under the model (the Workshop thumbnail snapper).
+    static THUMB_GRID: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Draw a floor grid under the model in thumbnails from now on (1) or not (0).
+#[no_mangle]
+pub extern "C" fn bonk_thumb_grid(on: c_int) {
+    THUMB_GRID.with(|g| g.set(on != 0));
+}
+
 /// Bonk Pixel, the low-resolution interface font (a TrueType file), built into the binary.
 #[no_mangle]
 pub extern "C" fn bonk_pixel_font(len: *mut c_int) -> *const u8 {
@@ -622,7 +633,7 @@ pub extern "C" fn bonk_render_thumb(view: c_int, path: *const c_char, yaw: f32, 
     let ok = with_thumb_model(&p, |ed| {
         RENDERERS.with(|rs| {
             if let Some(r) = rs.borrow()[vid(view)].as_ref() {
-                unsafe { r.render_thumb(&ed.doc, eye, target, fov.clamp(5.0, 120.0), w as f32, h as f32) };
+                unsafe { r.render_thumb(&ed.doc, eye, target, fov.clamp(5.0, 120.0), w as f32, h as f32, THUMB_GRID.with(|g| g.get())) };
                 true
             } else {
                 false

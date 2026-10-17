@@ -59,8 +59,11 @@ or Propper.
   Flatpak Steam.
 - **To build Bonk:** Rust and Qt 6 (see below).
 
-Bonk only touches the Garry's Mod folder for two things: running its `studiomdl.exe`, and writing
-`garrysmod/addons/<project>` when you choose File → Export to GMod Addons Folder.
+Bonk only touches the Garry's Mod folder for three things: running its `studiomdl.exe`, writing
+`garrysmod/addons/<project>` when you choose File → Export to GMod Addons Folder, and running its
+`gmad` / `gmpublish` when you publish from File → Manage Workshop. Your Steam profile is only used
+by gmpublish, to list and upload your Workshop addons; Bonk asks before using it, and fetches your
+addons' thumbnails and dates from Steam's public Workshop lookup.
 
 ## Building
 
@@ -162,7 +165,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the pieces fit together and how t
 - [x] Simplified collision, joining brushes, mass presets, compiler choice
 - [x] Spawnlist Editor: spawn menu categories, category icons, framed spawn icons, written into the addon
 - [x] Prefabs, settings in tabs, a low-resolution mode with Bonk's own pixel font
-- [ ] Workshop publishing
+- [x] Workshop publishing: your addons, new submissions and updates, thumbnails from a model
 - [x] Shader work: shader picker (incl. MonitorScreen), more texture slots, live VMT editing
 - [x] Animated, scrolling and pulsing materials; texture find / replace; paint by dragging
 - [ ] Skins, bodygroups, LODs and an in-editor model preview

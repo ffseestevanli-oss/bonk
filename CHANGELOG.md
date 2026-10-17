@@ -2,6 +2,30 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.18.0 — "Workshop"
+
+- **File → Manage Workshop…** publishes the project's addon to the Steam Workshop. It checks that
+  Steam is running and signed in, and the first time asks before using your Steam profile (OK /
+  No, with "Don't ask again").
+- **Your addons** on the left: thumbnail, name, ID and last update, from `gmpublish list` and
+  Steam's public Workshop lookup (cached, so the list shows straight away next time). Duplicates
+  are hidden; a filter and Refresh.
+- **New submission:** thumbnail, title, description, type (Model) and up to two tags, written into
+  `addon.json`. **Update:** pick an addon (the project's own is picked for you), with a banner
+  saying which, change notes, and optionally a new thumbnail.
+- **Before publishing:** compiled models, a compile newer than the models, addon.json, the
+  spawnlist, and files the Workshop won't take.
+- **Publishing window:** checks, packs with gmad, uploads with gmpublish, each step ticking off,
+  with their output, Copy Workshop Link and Open in Steam. The project remembers its Workshop ID
+  (in `Workshop/workshop.json`).
+- **Snap from Model…:** a 512 × 512 Workshop thumbnail with the spawn icon camera, on a background
+  color, with an optional floor grid; Use Spawn Icon Angle. Choose Image… converts any picture to
+  the baseline 4:2:0 JPG the Workshop wants.
+- gmad / gmpublish: Garry's Mod's Linux builds when it has them, else the Windows ones through
+  Proton. This is the third (and last) thing Bonk uses the Garry's Mod folder for.
+- **Low Resolution** now always uses Bonk Pixel (the system-font option is gone).
+- Spawn icons with see-through textures come out right (alpha no longer fades twice).
+
 ## 0.17.0 — "Interface"
 
 ### Prefabs

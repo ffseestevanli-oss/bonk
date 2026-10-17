@@ -42,6 +42,9 @@
 #include <QStandardPaths>
 #include <QLocale>
 #include <QProgressDialog>
+#include <QProgressBar>
+#include <QPointer>
+#include <QImageWriter>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QGridLayout>
@@ -126,6 +129,7 @@ unsigned bonk_focus_lost(int view);
 unsigned bonk_tick(float dt);
 unsigned bonk_command(int cmd);
 int bonk_tool();
+void bonk_thumb_grid(int on);
 const char *bonk_prefab_text(const char *source);
 float bonk_selection_lift();
 unsigned bonk_place_prefab(const char *text, int view, float x, float y, int keep, float lift);
@@ -233,8 +237,8 @@ namespace {
 const char *kAppName = "Bonk! Model Prop-inator!";
 /// Compact UI (screens under 1440p unless Settings says otherwise)
 bool gCompact = false;
-/// Low-resolution mode (Settings → Appearance → Compact (Low Resolution)): small text without
-/// smoothing, in the system font or Bonk Pixel, gLowPx pixels tall.
+/// Low-resolution mode (Settings → Appearance → Compact (Low Resolution)): Bonk Pixel,
+/// unsmoothed, gLowPx pixels tall.
 bool gLowRes = false, gPixelFont = false;
 int gLowPx = 6;
 QString gPixelFamily; // "Bonk Pixel", once registered
@@ -350,8 +354,7 @@ struct Prefs {
     bool fovUnlocked = false;    // allow more than 120°
     bool askResize = true;       // ask to shrink oversized textures when they're added
     int density = 0;             // 0 auto (compact under 1440p), 1 compact (low resolution), 2 regular
-    int lowFont = 1;             // low resolution: 0 the system font without smoothing, 1 Bonk Pixel
-    int lowPx = 6;               // low resolution: text size in px (Bonk Pixel: 6, 12 or 18)
+    int lowPx = 6;               // low resolution: Bonk Pixel's size in px (6, 12 or 18)
     int settingsTab = 0;         // the Settings tab last open
     // Nodraw look
     int ndStyle = 0;             // 0 solid, 1 RGB cycle, 2 rainbow flow
@@ -397,7 +400,6 @@ struct Prefs {
         fov = qBound(30, s.value("view/fov", 75).toInt(), fovUnlocked ? 170 : 120);
         askResize = s.value("textures/askResize", true).toBool();
         density = s.value("view/density", 0).toInt();
-        lowFont = s.value("view/lowFont", 1).toInt();
         lowPx = s.value("view/lowPx", 6).toInt();
         settingsTab = s.value("view/settingsTab", 0).toInt();
         ndStyle = s.value("nodraw/style", 0).toInt();
@@ -452,7 +454,6 @@ struct Prefs {
         s.setValue("view/fovUnlocked", fovUnlocked);
         s.setValue("textures/askResize", askResize);
         s.setValue("view/density", density);
-        s.setValue("view/lowFont", lowFont);
         s.setValue("view/lowPx", lowPx);
         s.setValue("view/settingsTab", settingsTab);
         s.setValue("nodraw/style", ndStyle);
@@ -604,8 +605,8 @@ QString tildePath(const QString &p) {
 // ------------------------------------------------------------------ Garry's Mod & Proton
 
 /// Where Steam, Garry's Mod, its studiomdl and Proton live. Bonk only uses the
-/// GMod folder to run bin/studiomdl.exe and, when asked, to write
-/// garrysmod/addons/<project>.
+/// GMod folder to run bin/studiomdl.exe, when asked to write
+/// garrysmod/addons/<project>, and to run gmad / gmpublish from Manage Workshop.
 struct SteamFind {
     QString steamRoot;
     QStringList libraries;
@@ -920,12 +921,8 @@ public:
         density->setToolTip(QStringLiteral("Takes effect the next time Bonk starts.\n"
                                            "Compact (Low Resolution): small, unsmoothed text and tighter panels, for small screens."));
         uf->addRow(QStringLiteral("Size"), density);
-        lowFont = new QComboBox;
-        lowFont->addItem(QStringLiteral("System font, no smoothing"));
-        lowFont->addItem(QStringLiteral("Bonk Pixel"));
-        lowFont->setToolTip(QStringLiteral("Bonk Pixel is Bonk's own pixel font: crisp at 6, 12 and 18 px."));
         lowPx = new QComboBox;
-        uf->addRow(QStringLiteral("Font"), lowFont);
+        lowPx->setToolTip(QStringLiteral("Low Resolution uses Bonk Pixel, Bonk's own pixel font: crisp at 6, 12 and 18 px."));
         uf->addRow(QStringLiteral("Text size"), lowPx);
         lowPreview = new QLabel;
         lowPreview->setToolTip(QStringLiteral("Actual size, then magnified ×2"));
@@ -999,8 +996,9 @@ public:
         sf.detect();
         gmodPath = new QLineEdit;
         gmodPath->setPlaceholderText(sf.gmodDir.isEmpty() ? QStringLiteral("Not found: choose the GarrysMod folder") : QStringLiteral("Found: ") + tildePath(sf.gmodDir));
-        gmodPath->setToolTip(QStringLiteral("Bonk only uses this folder for two things: running its bin/studiomdl.exe,\n"
-                                            "and File → Export to GMod Addons Folder (garrysmod/addons/<project>)."));
+        gmodPath->setToolTip(QStringLiteral("Bonk only uses this folder for three things: running its bin/studiomdl.exe,\n"
+                                            "File → Export to GMod Addons Folder (garrysmod/addons/<project>),\n"
+                                            "and gmad / gmpublish when you publish from File → Manage Workshop."));
         auto *browse = new QPushButton(QStringLiteral("Browse…"));
         auto *gRow = new QHBoxLayout;
         gRow->addWidget(gmodPath, 1);
@@ -1138,12 +1136,6 @@ public:
             ndFlowLabel->setText(QStringLiteral("%1 px").arg(v));
             if (!syncing) { p.ndFlow = v; changed(); }
         });
-        QObject::connect(lowFont, &QComboBox::currentIndexChanged, this, [this](int i) {
-            if (syncing) return;
-            p.lowFont = i;
-            showLow();
-            changed();
-        });
         QObject::connect(lowPx, &QComboBox::currentIndexChanged, this, [this] {
             if (syncing) return;
             p.lowPx = lowPx->currentData().toInt();
@@ -1217,7 +1209,7 @@ private:
     Prefs original;
     std::function<void()> changed;
     QTabWidget *tabs;
-    QComboBox *toolLayout, *density, *ndStyle, *lowFont, *lowPx;
+    QComboBox *toolLayout, *density, *ndStyle, *lowPx;
     QLabel *lowPreview, *ndWidthLabel, *ndFlowLabel;
     QPushButton *ndColor;
     QSlider *ndIntensity, *ndSpeed, *ndWidth, *ndFlow;
@@ -1246,8 +1238,7 @@ private:
     /// The low-resolution choices: sizes that suit the font, and a preview of it.
     void showLow(int px = -1) {
         if (px < 0) px = p.lowPx;
-        const bool low = density->currentIndex() == 1, pixel = lowFont->currentIndex() == 1;
-        lowFont->setEnabled(low);
+        const bool low = density->currentIndex() == 1, pixel = !gPixelFamily.isEmpty();
         lowPx->setEnabled(low);
         const bool was = syncing;
         syncing = true;
@@ -1310,7 +1301,7 @@ private:
         ndWidthLabel->setText(QStringLiteral("%1 px").arg(ndWidth->value()));
         ndFlow->setValue(std::clamp(v.ndFlow, 12, 600));
         ndFlowLabel->setText(QStringLiteral("%1 px").arg(ndFlow->value()));
-        lowFont->setCurrentIndex(std::clamp(v.lowFont, 0, 1));
+
         ndSpeed->setValue(v.ndSpeed);
         nd2d->setChecked(v.nd2d);
         showNd();
@@ -4851,6 +4842,7 @@ private:
 #include "importer.inc"
 #include "spawnlist.inc"
 #include "prefabs.inc"
+#include "workshop.inc"
 
 // ------------------------------------------------------------------ main window
 
@@ -5355,6 +5347,84 @@ public:
                                      .arg(shared ? QStringLiteral(" (shared)") : QStringLiteral(" in this project"))
                                      .arg(copied ? QStringLiteral(" with %1 texture%2").arg(copied).arg(copied == 1 ? QString() : QStringLiteral("s")) : QString()),
                                  6000);
+    }
+
+    // ---------------------------------------------------------------- workshop
+
+    /// File → Manage Workshop…: Steam check, then the Workshop window.
+    void manageWorkshop() {
+        if (!project.isOpen()) {
+            QMessageBox::information(this, QStringLiteral("Manage Workshop"), QStringLiteral("Open a project first: it's the project's addon that gets published."));
+            return;
+        }
+        const bool dev = qEnvironmentVariableIsSet("BONK_SCREENSHOT");
+        SteamFind sf;
+        sf.detect();
+        SteamStatus st;
+        st.detect(sf);
+        if (dev && qEnvironmentVariableIsSet("BONK_WORKSHOP_PERSONA")) { // developer aid
+            st.running = true;
+            st.persona = qEnvironmentVariable("BONK_WORKSHOP_PERSONA");
+        }
+        if (!st.running && !st.unsure) {
+            QMessageBox box(QMessageBox::Information, QStringLiteral("Manage Workshop"),
+                            QStringLiteral("Steam isn't running. Start Steam and sign in, then open Manage Workshop again."), QMessageBox::Close, this);
+            QPushButton *startBtn = box.addButton(QStringLiteral("Start Steam"), QMessageBox::AcceptRole);
+            box.exec();
+            if (box.clickedButton() == startBtn) QDesktopServices::openUrl(QUrl(QStringLiteral("steam://open/main")));
+            return;
+        }
+        QSettings s;
+        if (!s.value("workshop/agreed", false).toBool() || qEnvironmentVariableIsSet("BONK_WORKSHOP_ASK")) {
+            QMessageBox box(this);
+            box.setWindowTitle(QStringLiteral("Manage Workshop"));
+            box.setIcon(QMessageBox::Question);
+            box.setText(QStringLiteral("<b>Use your Steam profile for the Workshop?</b>"));
+            box.setInformativeText(QStringLiteral("%1<br><br>Bonk only uses your Steam profile to list your Workshop addons and to upload the ones "
+                                                  "you publish from here. It doesn't read anything else, and it never sees your password: "
+                                                  "Garry's Mod's own gmpublish talks to Steam.")
+                                       .arg(st.persona.isEmpty() ? QStringLiteral("Steam is running.")
+                                                                 : QStringLiteral("Steam is running and signed in as <b>%1</b>.").arg(st.persona.toHtmlEscaped())));
+            auto *dontAsk = new QCheckBox(QStringLiteral("Don't ask again"));
+            box.setCheckBox(dontAsk);
+            box.setStandardButtons(QMessageBox::Ok | QMessageBox::No);
+            box.setDefaultButton(QMessageBox::Ok);
+            if (dev) {
+                box.show();
+                QApplication::processEvents();
+                box.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".ask.png"));
+                box.hide();
+            } else {
+                if (box.exec() != QMessageBox::Ok) return;
+                if (dontAsk->isChecked()) s.setValue("workshop/agreed", true);
+            }
+        }
+        WorkshopDialog d(this, project, sf, st, thumbRenderer(), [](bool on) { bonk_thumb_grid(on); }, [] { return true; });
+        d.status = [this](const QString &m) { statusBar()->showMessage(m, 8000); };
+        if (dev) {
+            if (qEnvironmentVariableIsSet("BONK_WORKSHOP_FAKE")) { // "list output file,details json file"
+                const QStringList f = qEnvironmentVariable("BONK_WORKSHOP_FAKE").split(QLatin1Char(','));
+                QFile a(f.value(0)), b(f.value(1));
+                a.open(QIODevice::ReadOnly);
+                b.open(QIODevice::ReadOnly);
+                d.fakeList(QString::fromUtf8(a.readAll()), b.readAll());
+            }
+            d.show();
+            if (qEnvironmentVariableIsSet("BONK_WORKSHOP_SELECT")) d.devSelect(qEnvironmentVariable("BONK_WORKSHOP_SELECT"));
+            if (qEnvironmentVariableIsSet("BONK_WORKSHOP_SNAP")) d.devSnap(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".snap.png"));
+            for (int i = 0; i < 5; ++i) QApplication::processEvents();
+            d.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".dialog.png"));
+            if (qEnvironmentVariableIsSet("BONK_WORKSHOP_PUBLISH")) {
+                d.devPublish(qEnvironmentVariable("BONK_WORKSHOP_PUBLISH"));
+                QElapsedTimer t;
+                t.start();
+                while (t.elapsed() < 6000) QApplication::processEvents(QEventLoop::AllEvents, 50);
+                for (QWidget *top : QApplication::topLevelWidgets())
+                    if (top->isVisible() && top->windowTitle().startsWith(QStringLiteral("Publishing"))) top->grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".publish.png"));
+            }
+            return;
+        }
+        d.exec();
     }
 
     /// A prefab file dropped on view `view` at `at`.
@@ -7719,6 +7789,7 @@ MainWindow::MainWindow() {
     file->addSeparator();
     fn(file, QStringLiteral("&Compile Model"), QKeySequence(Qt::Key_F9), [this] { compileModel(); });
     fn(file, QStringLiteral("&Export to GMod Addons Folder…"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_E), [this] { exportToGMod(false); });
+    fn(file, QStringLiteral("Manage &Workshop…"), QKeySequence(), [this] { manageWorkshop(); });
     fn(file, QStringLiteral("Start &Garry's Mod"), QKeySequence(), [this] { startGmod(); })
         ->setToolTip(QStringLiteral("Through Steam. Settings can start it after every export."));
     fn(file, QStringLiteral("Open A&ddon Folder"), QKeySequence(), [this] {
@@ -7973,9 +8044,7 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
         const int physH = sc ? int(sc->geometry().height() * sc->devicePixelRatio()) : 1080;
         gCompact = d == 1 || (d == 0 && physH < 1440);
         gLowRes = d == 1;
-        int lowFont = st.value("view/lowFont", 1).toInt();
         gLowPx = st.value("view/lowPx", 6).toInt();
-        if (qEnvironmentVariableIsSet("BONK_LOWFONT")) lowFont = qEnvironmentVariable("BONK_LOWFONT") == QStringLiteral("system") ? 0 : 1;
         if (qEnvironmentVariableIsSet("BONK_LOWPX")) gLowPx = qEnvironmentVariable("BONK_LOWPX").toInt();
         {
             int n = 0;
@@ -7986,7 +8055,7 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
         }
         if (gLowRes) {
             QFont f = QApplication::font();
-            if (lowFont == 1 && !gPixelFamily.isEmpty()) {
+            if (!gPixelFamily.isEmpty()) {
                 gPixelFont = true;
                 f = QFont(gPixelFamily);
                 f.setHintingPreference(QFont::PreferNoHinting);
@@ -8090,6 +8159,8 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                 else if (c == QStringLiteral("overlaps")) w.findOverlaps();
                 else if (c.startsWith(QStringLiteral("mass:"))) bonk_set_mass(c.mid(5).toFloat());
                 else if (c == QStringLiteral("savefab")) w.savePrefab();
+                else if (c == QStringLiteral("workshop")) w.manageWorkshop();
+                else if (c.startsWith(QStringLiteral("wsthumb:"))) { QString e; saveWorkshopJpg(QImage(c.mid(8)), WorkshopProject::thumbPath(w.project), &e); }
                 else if (c == QStringLiteral("prefabs")) { w.prefabsDock->show(); w.prefabsDock->raise(); }
                 else if (c.startsWith(QStringLiteral("placefab:"))) { // placefab:<name>:<view>:<x>:<y>
                     const QStringList a = c.split(QLatin1Char(':'));

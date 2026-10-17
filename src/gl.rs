@@ -20,6 +20,7 @@ pub const POLYGON_OFFSET_FILL: u32 = 0x8037;
 pub const LEQUAL: u32 = 0x0203;
 pub const SRC_ALPHA: u32 = 0x0302;
 pub const ONE_MINUS_SRC_ALPHA: u32 = 0x0303;
+pub const ONE: u32 = 1;
 pub const FLOAT: u32 = 0x1406;
 pub const FALSE: u8 = 0;
 pub const ARRAY_BUFFER: u32 = 0x8892;
@@ -74,6 +75,7 @@ gl_fns! {
     DepthFunc: "glDepthFunc" => fn(u32);
     DepthMask: "glDepthMask" => fn(u8);
     BlendFunc: "glBlendFunc" => fn(u32, u32);
+    BlendFuncSeparate: "glBlendFuncSeparate" => fn(u32, u32, u32, u32);
     PolygonOffset: "glPolygonOffset" => fn(f32, f32);
     CreateShader: "glCreateShader" => fn(u32) -> u32;
     ShaderSource: "glShaderSource" => fn(u32, i32, *const *const c_char, *const i32);

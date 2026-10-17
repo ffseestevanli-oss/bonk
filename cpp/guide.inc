@@ -449,8 +449,9 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "so you can try it in game. It asks before replacing an earlier export. Settings can export after every compile, "
                                 "and start Garry's Mod after exporting (also File → Start Garry's Mod) so you can test right away.</p>");
         p.subs = {{QStringLiteral("Garry's Mod folder"), QStringLiteral("<p>Bonk finds Garry's Mod through Steam's library folders (Flatpak Steam too). It "
-                                                                        "only uses that folder for two things: running bin/studiomdl.exe, and writing "
-                                                                        "garrysmod/addons/&lt;project&gt; when you export. Settings → Garry's Mod can point "
+                                                                        "only uses that folder for three things: running bin/studiomdl.exe, writing "
+                                                                        "garrysmod/addons/&lt;project&gt; when you export, and running gmad / "
+                                                                        "gmpublish when you publish from Manage Workshop. Settings → Garry's Mod can point "
                                                                         "it elsewhere.</p>")},
                   {QStringLiteral("Proton"), QStringLiteral("<p>Bonk uses the newest stable Proton Steam has installed, with its own prefix in "
                                                             "~/.local/share/bonk/proton (the first compile sets it up, which takes a minute). "
@@ -463,7 +464,35 @@ QList<GuidePage> guidePages(bool hammer) {
                                                                    "log for everything. Too many collision pieces or vertices show up in the Budget bar first.</p>")},
                   {QStringLiteral("Which way it faces"), QStringLiteral("<p>The side of the model facing <b>south</b> in the top view (toward the "
                                                                         "bottom of the screen) is the side that faces you when you spawn the prop.</p>")}};
-        p.see = {QStringLiteral("budget"), QStringLiteral("material"), QStringLiteral("collision"), QStringLiteral("spawnlist")};
+        p.see = {QStringLiteral("budget"), QStringLiteral("material"), QStringLiteral("collision"), QStringLiteral("spawnlist"), QStringLiteral("workshop")};
+    }
+    {
+        GuidePage &p = page(QStringLiteral("workshop"), GD, QStringLiteral("Publishing to the Workshop"),
+                            QStringLiteral("workshop publish upload steam gmpublish gmad gma update thumbnail tags type change notes"));
+        p.html = QStringLiteral("<p><b>File → Manage Workshop…</b> publishes the project's addon to the Steam Workshop. Steam has to be "
+                                "running and signed in; the first time, Bonk asks before using your Steam profile, which it only uses to "
+                                "list your Workshop addons and to upload the ones you publish from here.</p>"
+                                "<p>Your addons are on the left, with their thumbnails and when they were last updated. On the right:</p>"
+                                "<ul><li><b>New submission</b>: a thumbnail, the title and description, the type (Model) and up to two tags. "
+                                "<b>Publish to Workshop</b> packs the addon with gmad and uploads it with gmpublish; the project remembers "
+                                "its Workshop ID.</li>"
+                                "<li><b>Update</b>: click an addon on the left (the project's own is picked for you). Write change notes, and "
+                                "tick <i>Replace the thumbnail too</i> to send a new one. Title, description, type and tags are changed on "
+                                "the Workshop page.</li></ul>"
+                                "<p>New items start out hidden on the Workshop: make yours public from its page when you're ready.</p>");
+        p.subs = {{QStringLiteral("Thumbnails"), QStringLiteral("<p>The Workshop wants a 512 × 512 JPG. <b>Choose Image…</b> converts any PNG or "
+                                                                "JPG; <b>Snap from Model…</b> takes a picture of one of the project's models with "
+                                                                "the spawn icon camera (drag to turn, right-drag to move, wheel to zoom), on a "
+                                                                "background color, with a floor grid if you like. <b>Use Spawn Icon Angle</b> "
+                                                                "reuses the angle from the Spawnlist Editor. It's kept as Workshop/thumbnail.jpg "
+                                                                "in the project.</p>")},
+                  {QStringLiteral("Before publishing"), QStringLiteral("<p>Bonk checks the addon first: compiled models, a compile newer than "
+                                                                       "the models, addon.json, the spawnlist, and files the Workshop doesn't "
+                                                                       "accept (those are left out).</p>")},
+                  {QStringLiteral("The tools"), QStringLiteral("<p>gmad and gmpublish come with Garry's Mod. Bonk uses its Linux builds when "
+                                                               "it has them, otherwise the Windows ones through Proton, like studiomdl. The "
+                                                               "publishing window shows their output.</p>")}};
+        p.see = {QStringLiteral("compiling"), QStringLiteral("spawnlist")};
     }
     {
         GuidePage &p = page(QStringLiteral("spawnlist"), GD, QStringLiteral("Spawnlists & spawn icons"),
@@ -514,10 +543,9 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "everything back.</p>");
         p.subs = {{QStringLiteral("Interface size"), QStringLiteral("<p>Appearance → Interface size. Auto makes the interface compact on screens under "
                                                                     "1440p and regular above. <b>Compact (Low Resolution)</b> goes further for small "
-                                                                    "screens: tighter panels and small text without smoothing, so every letter lands on "
-                                                                    "whole pixels. Pick the font: your system font (6 to 11 px) or <b>Bonk Pixel</b>, "
-                                                                    "Bonk's own pixel font, crisp at 6, 12 or 18 px. The preview shows it at actual size "
-                                                                    "and magnified. Takes effect after a restart.</p>")},
+                                                                    "screens: tighter panels and <b>Bonk Pixel</b>, Bonk's own pixel font, so every letter "
+                                                                    "lands on whole pixels. Pick its size: 6, 12 or 18 px. The preview shows it at "
+                                                                    "actual size and magnified. Takes effect after a restart.</p>")},
                   {QStringLiteral("Nodraw look"), QStringLiteral("<p>Nodraw faces get stripes: a solid color, an RGB cycle, or a rainbow flow, with "
                                                                  "intensity and speed. <b>Stripe length</b> sets how long each stripe is, and the gap "
                                                                  "after it, so longer bars come with longer gaps. <b>Rainbow flow length</b> sets how far "
