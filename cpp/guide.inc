@@ -452,8 +452,9 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "category; <b>+ Spawnlist</b> adds another top-level list, if you want more than one. Drag categories to "
                                 "reorder or nest them; double-click to rename.</p>"
                                 "<p>The middle pane is the category's page, laid out as in game. <b>Add Models…</b> picks from the project's "
-                                "models, <b>Add Header</b> adds a line like \"Beds - Full\". ◀ ▶ (or Ctrl+←/→) move the selection, Delete "
-                                "removes it.</p>");
+                                "models, <b>Add Header</b> adds a line like \"Beds - Full\". Drag tiles and headers to rearrange them, or "
+                                "drop them on a category on the left to move them there (hold Ctrl to copy). ◀ ▶ (or Ctrl+←/→) "
+                                "move the selection too; Delete removes it.</p>");
         p.subs = {{QStringLiteral("Spawn icons"), QStringLiteral("<p>Click a model to frame its icon: drag to turn it, right-drag (or Shift+drag) to "
                                                                  "move it in the frame, wheel to zoom. <b>Fit</b> frames the whole model snugly from "
                                                                  "the current angle; <b>Use for Whole Category</b> gives every model in the category "

@@ -475,9 +475,20 @@ private:
 /// The category's page, laid out like GMod's spawn menu: tiles flowing left to
 /// right, headers on lines of their own. Tiles are drawn at 3/4 of their size
 /// in the spawn menu (smaller still past 256).
+/// What a dragged set of page entries carries: their rows on the page.
+const QString kSpawnRowsMime = QStringLiteral("application/x-bonk-spawnlist-rows");
+
+QList<int> rowsFromMime(const QMimeData *m) {
+    QList<int> rows;
+    for (const QString &r : QString::fromLatin1(m->data(kSpawnRowsMime)).split(QLatin1Char(','), Qt::SkipEmptyParts)) rows << r.toInt();
+    return rows;
+}
+
 class SpawnPage : public QListWidget {
 public:
     static constexpr int HeaderRole = Qt::UserRole + 1, SizeRole = Qt::UserRole + 2;
+    /// Rows dropped back on the page before `index` (Ctrl = copies).
+    std::function<void(const QList<int> &rows, int index, bool copy)> dropped;
 
     SpawnPage() {
         setViewMode(QListView::IconMode);
@@ -488,7 +499,11 @@ public:
         setSpacing(3);
         setUniformItemSizes(false);
         setSelectionMode(QAbstractItemView::ExtendedSelection);
-        setDragDropMode(QAbstractItemView::NoDragDrop);
+        setDragEnabled(true);
+        setAcceptDrops(true);
+        viewport()->setAcceptDrops(true);
+        setDragDropMode(QAbstractItemView::DragDrop);
+        setDefaultDropAction(Qt::MoveAction);
         setItemDelegate(new Delegate(this));
         setStyleSheet(QStringLiteral("QListWidget { background: #3b3b40; }"));
     }
@@ -510,7 +525,115 @@ public:
         if (any) doItemsLayout();
     }
 
+    /// Where a drop at `pos` would go: the row it would be inserted before.
+    int insertionAt(QPoint pos) const {
+        int at = 0;
+        for (int i = 0; i < count(); ++i) {
+            const QRect r = visualItemRect(item(i));
+            if (r.contains(pos)) {
+                const bool header = item(i)->data(HeaderRole).toBool();
+                const bool after = header ? pos.y() > r.center().y() : pos.x() > r.center().x();
+                return after ? i + 1 : i;
+            }
+            // reading order: rows above, or earlier on the same row
+            if (r.bottom() < pos.y() || (r.top() <= pos.y() && r.right() < pos.x())) at = i + 1;
+        }
+        return at;
+    }
+
 protected:
+    void startDrag(Qt::DropActions) override {
+        QList<int> rows;
+        for (QListWidgetItem *it : selectedItems()) rows << row(it);
+        if (rows.isEmpty()) return;
+        std::sort(rows.begin(), rows.end());
+        QStringList parts;
+        for (int r : rows) parts << QString::number(r);
+        auto *mime = new QMimeData;
+        mime->setData(kSpawnRowsMime, parts.join(QLatin1Char(',')).toLatin1());
+        auto *drag = new QDrag(this);
+        drag->setMimeData(mime);
+        // the picture: the first tile (or the header's text), with a count for more
+        QListWidgetItem *first = item(rows.first());
+        QPixmap pm;
+        if (first->data(HeaderRole).toBool()) {
+            pm = QPixmap(QSize(160, 26) * devicePixelRatioF());
+            pm.setDevicePixelRatio(devicePixelRatioF());
+            pm.fill(QColor(59, 59, 64, 220));
+            QPainter p(&pm);
+            p.setPen(Qt::white);
+            QFont f = font();
+            f.setBold(true);
+            p.setFont(f);
+            p.drawText(QRect(6, 0, 154, 26), Qt::AlignVCenter, first->text());
+        } else {
+            pm = first->icon().pixmap(tile(first->data(SizeRole).toSize()));
+        }
+        if (rows.size() > 1) {
+            QPainter p(&pm);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setBrush(palette().highlight());
+            p.setPen(Qt::NoPen);
+            const QRectF b(pm.width() / pm.devicePixelRatio() - 24, 2, 22, 18);
+            p.drawRoundedRect(b, 9, 9);
+            p.setPen(Qt::white);
+            p.drawText(b, Qt::AlignCenter, QString::number(rows.size()));
+        }
+        drag->setPixmap(pm);
+        drag->setHotSpot(QPoint(12, 12));
+        drag->exec(Qt::MoveAction | Qt::CopyAction, Qt::MoveAction);
+        dropLine = -1;
+        viewport()->update();
+    }
+    void dragEnterEvent(QDragEnterEvent *e) override {
+        if (e->source() == this && e->mimeData()->hasFormat(kSpawnRowsMime)) e->acceptProposedAction();
+        else e->ignore();
+    }
+    void dragMoveEvent(QDragMoveEvent *e) override {
+        if (e->source() != this || !e->mimeData()->hasFormat(kSpawnRowsMime)) return e->ignore();
+        e->setDropAction((e->modifiers() & Qt::ControlModifier) ? Qt::CopyAction : Qt::MoveAction);
+        e->accept();
+        dropLine = insertionAt(e->position().toPoint());
+        viewport()->update();
+    }
+    void dragLeaveEvent(QDragLeaveEvent *e) override {
+        dropLine = -1;
+        viewport()->update();
+        QListWidget::dragLeaveEvent(e);
+    }
+    void dropEvent(QDropEvent *e) override {
+        dropLine = -1;
+        viewport()->update();
+        if (e->source() != this || !e->mimeData()->hasFormat(kSpawnRowsMime)) return e->ignore();
+        const bool copy = e->modifiers() & Qt::ControlModifier;
+        const int at = insertionAt(e->position().toPoint());
+        const QList<int> rows = rowsFromMime(e->mimeData());
+        // the page is rebuilt by the callback: Qt must not remove the rows itself
+        e->setDropAction(Qt::CopyAction);
+        e->accept();
+        if (dropped) QTimer::singleShot(0, this, [this, rows, at, copy] { dropped(rows, at, copy); });
+    }
+    void paintEvent(QPaintEvent *e) override {
+        QListWidget::paintEvent(e);
+        if (dropLine < 0) return;
+        // a bar where the drop goes: before the tile at dropLine, or after the last one
+        QRect r;
+        bool vertical = true;
+        if (dropLine < count()) {
+            r = visualItemRect(item(dropLine));
+            if (item(dropLine)->data(HeaderRole).toBool()) vertical = false;
+        } else if (count() > 0) {
+            r = visualItemRect(item(count() - 1));
+            vertical = !item(count() - 1)->data(HeaderRole).toBool();
+            r.moveLeft(vertical ? r.right() + 4 : r.left());
+            if (!vertical) r.moveTop(r.bottom() + 4);
+        }
+        QPainter p(viewport());
+        p.setPen(Qt::NoPen);
+        p.setBrush(palette().highlight());
+        if (vertical) p.drawRoundedRect(QRect(r.left() - 3, r.top(), 3, r.height()), 1, 1);
+        else p.drawRoundedRect(QRect(r.left(), r.top() - 3, r.width(), 3), 1, 1);
+    }
     void resizeEvent(QResizeEvent *e) override {
         QListWidget::resizeEvent(e);
         QTimer::singleShot(0, this, [this] { fitHeaders(); }); // once the viewport has its new size
@@ -521,6 +644,8 @@ protected:
     }
 
 private:
+    int dropLine = -1;
+
     class Delegate : public QStyledItemDelegate {
     public:
         using QStyledItemDelegate::QStyledItemDelegate;
@@ -563,6 +688,51 @@ private:
     };
 };
 
+/// The category tree: categories drag about inside it, and page entries
+/// dropped on a category move there (Ctrl copies).
+class CategoryTree : public QTreeWidget {
+public:
+    std::function<void(const QList<int> &rows, QTreeWidgetItem *to, bool copy)> itemsDropped;
+
+protected:
+    void dragEnterEvent(QDragEnterEvent *e) override {
+        if (e->mimeData()->hasFormat(kSpawnRowsMime)) e->acceptProposedAction();
+        else QTreeWidget::dragEnterEvent(e);
+    }
+    void dragMoveEvent(QDragMoveEvent *e) override {
+        if (!e->mimeData()->hasFormat(kSpawnRowsMime)) return QTreeWidget::dragMoveEvent(e);
+        QTreeWidgetItem *it = itemAt(e->position().toPoint());
+        setHover(it);
+        if (!it) return e->ignore();
+        e->setDropAction((e->modifiers() & Qt::ControlModifier) ? Qt::CopyAction : Qt::MoveAction);
+        e->accept();
+    }
+    void dragLeaveEvent(QDragLeaveEvent *e) override {
+        setHover(nullptr);
+        QTreeWidget::dragLeaveEvent(e);
+    }
+    void dropEvent(QDropEvent *e) override {
+        if (!e->mimeData()->hasFormat(kSpawnRowsMime)) return QTreeWidget::dropEvent(e);
+        QTreeWidgetItem *it = itemAt(e->position().toPoint());
+        setHover(nullptr);
+        if (!it) return e->ignore();
+        const bool copy = e->modifiers() & Qt::ControlModifier;
+        const QList<int> rows = rowsFromMime(e->mimeData());
+        e->setDropAction(Qt::CopyAction); // the dialog moves the data itself
+        e->accept();
+        if (itemsDropped) QTimer::singleShot(0, this, [this, rows, it, copy] { itemsDropped(rows, it, copy); });
+    }
+
+private:
+    QTreeWidgetItem *hover = nullptr;
+    void setHover(QTreeWidgetItem *it) {
+        if (it == hover) return;
+        if (hover) hover->setBackground(0, QBrush());
+        hover = it;
+        if (hover) hover->setBackground(0, palette().highlight().color().lighter(160));
+    }
+};
+
 class SpawnlistDialog : public QDialog {
 public:
     SpawnlistDialog(QWidget *parent, const Project &pj, ThumbRenderer render, std::function<void(const QString &)> wrote)
@@ -579,11 +749,11 @@ public:
         // --- categories
         auto *left = new QVBoxLayout;
         left->addWidget(new QLabel(QStringLiteral("<b>Categories</b>")));
-        tree = new QTreeWidget;
+        tree = new CategoryTree;
         tree->setHeaderHidden(true);
         tree->setIconSize(QSize(16, 16));
         tree->setDragDropMode(QAbstractItemView::InternalMove);
-        tree->setToolTip(QStringLiteral("Drag to reorder or nest. Double-click to rename."));
+        tree->setToolTip(QStringLiteral("Drag to reorder or nest. Double-click to rename.\nDrop tiles from the page on a category to move them there (Ctrl copies)."));
         left->addWidget(tree, 1);
         auto *cb = new QGridLayout;
         auto *addCat = new QPushButton(QStringLiteral("+ Spawnlist"));
@@ -601,7 +771,10 @@ public:
         pageTitle = new QLabel;
         mid->addWidget(pageTitle);
         page = new SpawnPage;
-        page->setToolTip(QStringLiteral("As in the spawn menu. Ctrl+←/→ (or the arrows below) move the selection; Delete removes."));
+        page->setToolTip(QStringLiteral("As in the spawn menu. Drag to rearrange, or onto a category on the left to move there (Ctrl copies).\n"
+                                        "Ctrl+←/→ (or the arrows below) also move the selection; Delete removes."));
+        page->dropped = [this](const QList<int> &rows, int at, bool copy) { dropOnPage(rows, at, copy); };
+        tree->itemsDropped = [this](const QList<int> &rows, QTreeWidgetItem *to, bool copy) { dropOnCategory(rows, to, copy); };
         mid->addWidget(page, 1);
         auto *pb = new QHBoxLayout;
         auto *earlier = new QPushButton(QStringLiteral("◀"));
@@ -674,6 +847,20 @@ public:
         resize(1180, 700);
     }
 
+    /// Developer aid: "page:<rows>:<at>" or "cat:<rows>:<tree index>", rows like 0+2; a trailing ":c" copies.
+    void devDrop(const QString &spec) {
+        const QStringList a = spec.split(QLatin1Char(':'));
+        QList<int> rows;
+        for (const QString &r : a.value(1).split(QLatin1Char('+'), Qt::SkipEmptyParts)) rows << r.toInt();
+        const bool copy = a.value(3) == QStringLiteral("c");
+        if (a.value(0) == QStringLiteral("page")) dropOnPage(rows, a.value(2).toInt(), copy);
+        else {
+            QTreeWidgetItemIterator it(tree);
+            for (int i = 0; *it && i < a.value(2).toInt(); ++it, ++i) {}
+            if (*it) dropOnCategory(rows, *it, copy);
+        }
+    }
+
     /// Developer aid: open on a category / item.
     void select(int cat, int item) {
         QTreeWidgetItemIterator it(tree);
@@ -700,7 +887,7 @@ private:
     ThumbRenderer render;
     std::function<void(const QString &)> wrote;
     Spawnlists data;
-    QTreeWidget *tree;
+    CategoryTree *tree;
     SpawnPage *page;
     QLabel *pageTitle;
     QStackedWidget *stack;
@@ -815,6 +1002,65 @@ private:
         syncing = false;
         stack->setCurrentIndex(0);
         loadIconPane();
+    }
+
+    /// Select these rows on the page (after a rebuild).
+    void selectRows(const QList<int> &rows) {
+        syncing = true;
+        page->clearSelection();
+        for (int r : rows)
+            if (r >= 0 && r < page->count()) page->item(r)->setSelected(true);
+        if (!rows.isEmpty()) page->setCurrentRow(rows.first(), QItemSelectionModel::Current);
+        syncing = false;
+        showItem();
+    }
+
+    /// Page entries dragged to before row `at` of the same page.
+    void dropOnPage(QList<int> rows, int at, bool copy) {
+        SpawnCategory *c = current();
+        if (!c || rows.isEmpty()) return;
+        std::sort(rows.begin(), rows.end());
+        QList<SpawnItem> moving;
+        for (int r : rows)
+            if (r >= 0 && r < c->items.size()) moving << c->items[r];
+        if (!copy) {
+            for (int i = rows.size() - 1; i >= 0; --i) {
+                if (rows[i] < 0 || rows[i] >= c->items.size()) continue;
+                if (rows[i] < at) --at;
+                c->items.removeAt(rows[i]);
+            }
+        }
+        at = std::clamp(at, 0, int(c->items.size()));
+        QList<int> placed;
+        for (int i = 0; i < moving.size(); ++i) {
+            c->items.insert(at + i, moving[i]);
+            placed << at + i;
+        }
+        changed();
+        showCategory();
+        selectRows(placed);
+    }
+
+    /// Page entries dropped on a category in the tree: moved (or copied) to the end of its page.
+    void dropOnCategory(QList<int> rows, QTreeWidgetItem *to, bool copy) {
+        SpawnCategory *from = current(), *dest = catOf(to);
+        if (!from || !dest || rows.isEmpty()) return;
+        if (dest == from) {
+            if (copy) dropOnPage(rows, from->items.size(), true);
+            return;
+        }
+        std::sort(rows.begin(), rows.end());
+        for (int r : rows)
+            if (r >= 0 && r < from->items.size()) dest->items << from->items[r];
+        if (!copy)
+            for (int i = rows.size() - 1; i >= 0; --i)
+                if (rows[i] >= 0 && rows[i] < from->items.size()) from->items.removeAt(rows[i]);
+        changed();
+        showCategory();
+        pageTitle->setText(QStringLiteral("<b>%1</b> &nbsp;<span style='color:gray'>%2 %3 to %4</span>")
+                               .arg(from->name.toHtmlEscaped(), copy ? QStringLiteral("Copied") : QStringLiteral("Moved"))
+                               .arg(rows.size() == 1 ? QStringLiteral("1 entry") : QStringLiteral("%1 entries").arg(rows.size()))
+                               .arg(dest->name.toHtmlEscaped()));
     }
 
     /// Move the selected entries one place earlier (-1) or later (+1).

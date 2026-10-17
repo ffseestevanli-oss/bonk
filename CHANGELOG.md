@@ -2,6 +2,12 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.16.2
+
+- **Drag and drop in the Spawnlist Editor:** drag tiles and headers around the page to rearrange
+  them (a bar shows where they'll land), or drop them on a category on the left to move them
+  there. Hold Ctrl to copy instead. Works on several selected entries at once.
+
 ## 0.16.1
 
 - **Any tile shape:** spawn icons can be wide or tall, not just square: presets (128 × 64,

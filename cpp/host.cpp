@@ -46,6 +46,7 @@
 #include <QUrl>
 #include <QGridLayout>
 #include <QMimeData>
+#include <QDrag>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMenu>
@@ -4969,6 +4970,7 @@ public:
             const QStringList a = qEnvironmentVariable("BONK_SPAWNLIST_SELECT").split(QLatin1Char(','));
             d.select(a.value(0).toInt(), a.value(1, QStringLiteral("-1")).toInt());
         }
+        if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_DROP")) d.devDrop(qEnvironmentVariable("BONK_SPAWNLIST_DROP"));
         if (qEnvironmentVariableIsSet("BONK_SCREENSHOT")) {
             d.show();
             for (int i = 0; i < 5; ++i) QApplication::processEvents(); // let deferred layouts run
