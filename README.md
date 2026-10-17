@@ -39,8 +39,8 @@ or Propper.
   become the VMT: shaders, surface type, transparency, phong, normal / detail / mask maps,
   reflections, and scrolling, pulsing or animated materials that play in the 3D view.
 - **Built-in VTF conversion:** drop PNG or JPG files in and Bonk writes the VTFs itself.
-- **Collision models:** a separate collision layer you shape yourself (or one generated from the
-  visual brushes), with a live Budget bar for studiomdl's limits.
+- **Collision models:** a separate collision layer you shape yourself, or one generated from the
+  visual brushes (complete, or simplified automatically), with a live Budget bar and mass presets.
 - **One-click compiling:** SMD + QC + VMT + VTF, then Garry's Mod's `studiomdl.exe` through
   Proton, into a ready-to-upload addon folder. File → Export to GMod Addons Folder drops it
   straight into the game.
@@ -159,10 +159,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the pieces fit together and how t
 - [x] VMF import with materials from folders or Workshop `.gma` files
 - [x] Hold-key editing everywhere: G grab with axis lock, H hide, mirror, 3D nudging, FOV
 - [x] Modeling power: Quick Draw, primitives, multi-vertex editing, copy between models, overlap check
-- [ ] Simplified collision, mass presets, Workshop publishing
+- [x] Simplified collision, joining brushes, mass presets, compiler choice
+- [ ] Workshop publishing
 - [x] Shader work: shader picker (incl. MonitorScreen), more texture slots, live VMT editing
 - [x] Animated, scrolling and pulsing materials; texture find / replace; paint by dragging
-- [ ] Optional Hammer++ / StudioMDL-CE compiler
 - [ ] Skins, bodygroups, LODs and an in-editor model preview
 - [ ] Flathub release
 

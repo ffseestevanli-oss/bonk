@@ -371,6 +371,11 @@ pub mod cmd {
     pub const TOOL_CAR: i32 = 39;
     /// The Select button's right half: box select (again: instant ↔ Enter)
     pub const TOGGLE_SEL_BOX_MODE: i32 = 40;
+    /// Ctrl+J: join the selected brushes (hull, or exact only, as Settings says)
+    pub const JOIN: i32 = 41;
+    /// Edit → Join Brushes (Hull) / (Exact)
+    pub const JOIN_HULL: i32 = 42;
+    pub const JOIN_EXACT: i32 = 43;
 }
 
 #[derive(Default)]
@@ -472,6 +477,10 @@ pub struct Editor {
     /// "Dropped here" ripple: (bounds, start time)
     pub ripple: Option<((V3, V3), f32)>,
     mat_anim_acc: f32,
+    /// Detail size for simplified collision made while compiling
+    pub simplify_detail: f32,
+    /// Ctrl+J only joins when the result is exactly the same shape (Settings → Editing)
+    pub join_exact_only: bool,
     /// A hold (G / R) started in the 3D view: nothing to pin the cursor to
     hold_in_3d: bool,
     /// How visible ghosted (non-collision) brushes are while editing collision, 0..1
@@ -562,6 +571,8 @@ impl Editor {
             fov: FOV_DEG,
             ripple: None,
             mat_anim_acc: 0.0,
+            simplify_detail: 8.0,
+            join_exact_only: false,
             hold_in_3d: false,
             ghost_opacity: 0.25,
             nodraw_2d: false,
@@ -2951,6 +2962,60 @@ impl Editor {
         Ok(n)
     }
 
+    /// Join the selected brushes into one convex brush: exactly their shape when
+    /// they make one together, else (unless `exact_only`) a hull around them.
+    /// Faces keep the materials of the faces they came from.
+    fn join_selection(&mut self, exact_only: bool) -> u32 {
+        let sel: Vec<Brush> = self.doc.selected_brushes().into_iter().filter(|b| b.entity.is_none()).collect();
+        if sel.len() < 2 {
+            self.message = Some("Select two or more brushes to join".into());
+            return flags::ALL;
+        }
+        let refs: Vec<&Brush> = sel.iter().collect();
+        let exact = crate::collision::union_is_convex(&refs);
+        let was_exact = exact.is_some();
+        let joined = match exact {
+            Some(b) => b,
+            None if exact_only => {
+                self.message = Some("These don't make one convex shape: Edit → Join Brushes (Hull) wraps them in one".into());
+                return flags::ALL;
+            }
+            None => {
+                let pts: Vec<V3> = sel.iter().flat_map(|b| b.verts.iter().copied()).collect();
+                match crate::collision::hull_brush(&pts) {
+                    Some(b) => b,
+                    None => return flags::ALL,
+                }
+            }
+        };
+        let first = &sel[0];
+        let mut nb = joined;
+        nb.id = first.id;
+        nb.color = first.color;
+        nb.layer = first.layer;
+        nb.group = first.group;
+        nb.entity = None;
+        nb.rot = [0.0; 3];
+        let old: Vec<crate::geom::Face> = sel.iter().flat_map(|b| b.faces.iter().cloned()).collect();
+        for f in nb.faces.iter_mut() {
+            f.material = geom::NODRAW.to_string();
+        }
+        carry_materials(&old, &mut nb.faces);
+        self.doc.checkpoint();
+        let gone: Vec<u32> = sel[1..].iter().map(|b| b.id).collect();
+        self.doc.brushes.retain(|b| !gone.contains(&b.id));
+        if let Some(b) = self.doc.brush_mut(first.id) {
+            *b = nb;
+        }
+        self.doc.selection = vec![first.id];
+        self.doc.prune_groups();
+        self.vsel.clear();
+        self.fsel.clear();
+        let n = sel.len();
+        self.message = Some(format!("Joined {n} brushes {}", if was_exact { "(same shape)" } else { "into one hull around them" }));
+        flags::ALL
+    }
+
     /// Center of the selected vertices.
     fn vsel_center(&self) -> Option<V3> {
         if self.vsel.is_empty() {
@@ -4217,6 +4282,10 @@ impl Editor {
                     }
                 };
                 return self.mirror_selection(axis);
+            }
+            cmd::JOIN | cmd::JOIN_HULL | cmd::JOIN_EXACT => {
+                let exact_only = c == cmd::JOIN_EXACT || (c == cmd::JOIN && self.join_exact_only);
+                return self.join_selection(exact_only);
             }
             cmd::TOGGLE_SEL_BOX_MODE => {
                 if self.tool != Tool::Select || !self.sel_box_only {
@@ -5617,6 +5686,31 @@ mod tests {
         e.mouse_press(0, 0.0, 0.0, button::RIGHT, 0);
         e.mouse_release(0, 0.0, 0.0, button::RIGHT);
         assert!(top(&e, a));
+    }
+
+    #[test]
+    fn join_brushes_exact_hull_and_exact_only() {
+        let mut e = editor();
+        let a = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0));
+        let b = e.doc.add_brush(v3(32.0, 0.0, 0.0), v3(64.0, 32.0, 32.0));
+        e.doc.brush_mut(b).unwrap().faces.iter_mut().for_each(|f| f.material = "walls/brick".into());
+        e.doc.selection = vec![a, b];
+        e.command(cmd::JOIN);
+        assert_eq!(e.doc.brushes.len(), 1);
+        let j = &e.doc.brushes[0];
+        assert_eq!(j.bounds(), (v3(0.0, 0.0, 0.0), v3(64.0, 32.0, 32.0)));
+        assert_eq!(j.faces.len(), 6);
+        assert!(j.faces.iter().any(|f| f.normal.x > 0.9 && f.material == "walls/brick"), "the +X face came from B");
+        e.command(cmd::UNDO);
+        assert_eq!(e.doc.brushes.len(), 2);
+        // an L: exact only refuses, hull wraps
+        let c = e.doc.add_brush(v3(0.0, 32.0, 0.0), v3(32.0, 64.0, 32.0));
+        e.doc.selection = vec![b, c];
+        e.join_exact_only = true;
+        e.command(cmd::JOIN);
+        assert_eq!(e.doc.brushes.len(), 3, "exact only: nothing joined");
+        e.command(cmd::JOIN_HULL);
+        assert_eq!(e.doc.brushes.len(), 2);
     }
 
     #[test]

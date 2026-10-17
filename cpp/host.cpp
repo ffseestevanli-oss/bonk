@@ -198,6 +198,12 @@ unsigned bonk_select_ids(const char *ids);
 int bonk_selected_group();
 int bonk_sel_box_mode();
 int bonk_select_faces_with(const char *material);
+int bonk_new_collision(int mode, float detail);
+int bonk_simplify_count(float detail, int *out);
+void bonk_set_simplify_detail(float d);
+void bonk_set_join_exact(int on);
+float bonk_mass();
+void bonk_set_mass(float kg);
 int bonk_replace_material(const char *find, const char *with, int selected_only);
 const char *bonk_selected_face_materials();
 }
@@ -222,7 +228,8 @@ enum Cmd {
     CMD_TOOL_MANNEQUIN, CMD_TOOL_ORIGIN, CMD_TOOL_FACE, CMD_ORIGIN_TO_SEL_BOTTOM, CMD_ORIGIN_TO_SEL_CENTER, CMD_TOGGLE_MANNEQUINS,
     CMD_GROUP, CMD_UNGROUP, CMD_IGNORE_GROUPS, CMD_TOGGLE_NODRAW_2D, CMD_DESELECT, CMD_TOGGLE_EDGES_3D,
     CMD_BISECT_MODE_DELETE_LARGER, CMD_HIDE_TOGGLE, CMD_MIRROR_H, CMD_MIRROR_V, CMD_TOGGLE_AXIS_LOCK, CMD_TOGGLE_BOX_TOUCH,
-    CMD_TOGGLE_COLLISION_SOLID, CMD_TOGGLE_VERTEX_PICK, CMD_TOOL_CAR, CMD_TOGGLE_SEL_BOX_MODE
+    CMD_TOGGLE_COLLISION_SOLID, CMD_TOGGLE_VERTEX_PICK, CMD_TOOL_CAR, CMD_TOGGLE_SEL_BOX_MODE,
+    CMD_JOIN, CMD_JOIN_HULL, CMD_JOIN_EXACT
 };
 
 const char *kViewNames[4] = {"camera", "top (x/y)", "front (y/z)", "side (x/z)"};
@@ -298,7 +305,11 @@ struct Prefs {
     int ndSpeed = 25;            // percent of 1 cycle/second
     bool nd2d = false;           // nodraw stripes in the 2D views
     // Budget limits (GMod studiomdl defaults)
-    int budTris = 10922, budVerts = 65536, budMats = 64, budPieces = 20;
+    int budTris = 10922, budVerts = 65536, budMats = 64, budPieces = 1200; // pieces: the bar turns yellow above it
+    bool joinExactOnly = false;  // Ctrl+J only joins when the shape stays exactly the same
+    double simplifyDetail = 8.0; // simplified collision: what counts as a detail (units)
+    bool launchGmod = false;     // start Garry's Mod after exporting
+    QString studiomdl;           // a custom studiomdl.exe (empty = Garry's Mod's own)
     bool startScreen = true;     // show the start screen when Bonk opens
     // Garry's Mod
     QString gmodPath;            // empty = find it through Steam
@@ -339,7 +350,12 @@ struct Prefs {
         budTris = s.value("budget/trianglesPerMaterial", 10922).toInt();
         budVerts = s.value("budget/vertices", 65536).toInt();
         budMats = s.value("budget/materials", 64).toInt();
-        budPieces = s.value("budget/collisionPieces", 20).toInt();
+        budPieces = s.value("budget/collisionPieces", 1200).toInt();
+        if (budPieces == 20) budPieces = 1200; // 0.15: the pieces meter warns (yellow) instead of a hard limit
+        joinExactOnly = s.value("editing/joinExactOnly", false).toBool();
+        simplifyDetail = s.value("collision/simplifyDetail", 8.0).toDouble();
+        launchGmod = s.value("gmod/launchAfterExport", false).toBool();
+        studiomdl = s.value("gmod/studiomdl").toString();
         startScreen = s.value("ui/startScreen", true).toBool();
         gmodPath = s.value("gmod/path").toString();
         protonPath = s.value("gmod/proton").toString();
@@ -385,6 +401,10 @@ struct Prefs {
         s.setValue("budget/vertices", budVerts);
         s.setValue("budget/materials", budMats);
         s.setValue("budget/collisionPieces", budPieces);
+        s.setValue("editing/joinExactOnly", joinExactOnly);
+        s.setValue("collision/simplifyDetail", simplifyDetail);
+        s.setValue("gmod/launchAfterExport", launchGmod);
+        s.setValue("gmod/studiomdl", studiomdl);
         s.setValue("ui/startScreen", startScreen);
         s.setValue("gmod/path", gmodPath);
         s.setValue("gmod/proton", protonPath);
@@ -398,6 +418,8 @@ struct Prefs {
         bonk_set_sel_box_wait(selBoxWait);
         bonk_set_collision_solid(collisionSolid);
         bonk_set_fov(float(fov));
+        bonk_set_join_exact(joinExactOnly);
+        bonk_set_simplify_detail(float(simplifyDetail));
         bonk_set_nodraw_look(ndStyle, float(ndColor.redF()), float(ndColor.greenF()), float(ndColor.blueF()), ndIntensity / 100.0f,
                              float(ndWidth), ndSpeed / 100.0f, nd2d);
     }
@@ -769,6 +791,11 @@ public:
         axisLock->setToolTip(QStringLiteral("The move stays on the axis you move along most. Alt while holding flips it for that move.\n"
                                             "Same as the Axis Lock button under Selection Options."));
         ef->addRow(axisLock);
+        joinExact = new QCheckBox(QStringLiteral("Ctrl+J joins only when the shape stays exactly the same"));
+        joinExact->setToolTip(QStringLiteral("Off (default): brushes that don't make one convex shape are wrapped in a hull.\n"
+                                             "On: Ctrl+J refuses those; Edit → Join Brushes (Hull) still wraps them."));
+        ef->addRow(joinExact);
+        QObject::connect(joinExact, &QCheckBox::toggled, this, [this](bool v) { if (!syncing) { p.joinExactOnly = v; changed(); } });
         ef->addRow(swapAlt);
         ef->addRow(QStringLiteral("Rotation snaps in steps of"), rotSnap);
         root->addWidget(editing);
@@ -844,12 +871,14 @@ public:
         budTris = bspin(100, 1000000);
         budVerts = bspin(100, 10000000);
         budMats = bspin(1, 1024);
-        budPieces = bspin(1, 1024);
+        budPieces = bspin(1, 100000);
+        budPieces->setToolTip(QStringLiteral("Not a hard limit: past this, the Collision pieces meter turns yellow\n"
+                                             "(\"Expensive collision mesh, model may still work fine\")."));
         budTris->setToolTip(QStringLiteral("Triangles of one material: 32,768 indices / 3 = 10,922"));
         bf->addRow(QStringLiteral("Triangles per material"), budTris);
         bf->addRow(QStringLiteral("Vertices"), budVerts);
         bf->addRow(QStringLiteral("Materials"), budMats);
-        bf->addRow(QStringLiteral("Collision pieces"), budPieces);
+        bf->addRow(QStringLiteral("Collision pieces: yellow above"), budPieces);
         root->addWidget(budBox);
 
         // Garry's Mod
@@ -875,6 +904,26 @@ public:
         gf->addRow(QStringLiteral("Proton"), proton);
         exportAfter = new QCheckBox(QStringLiteral("Export to the GMod addons folder after every compile"));
         gf->addRow(exportAfter);
+        launchGmod = new QCheckBox(QStringLiteral("Start Garry's Mod after exporting, to test it right away"));
+        launchGmod->setToolTip(QStringLiteral("Through Steam (steam://rungameid/4000). If it's already running, change map to load new models."));
+        gf->addRow(launchGmod);
+        studiomdl = new QLineEdit;
+        studiomdl->setPlaceholderText(QStringLiteral("Garry's Mod's own bin/studiomdl.exe"));
+        studiomdl->setToolTip(QStringLiteral("Another studiomdl.exe to compile with (e.g. StudioMDL CE), run through Proton the same way.\n"
+                                             "Empty: Garry's Mod's own."));
+        auto *smBrowse = new QPushButton(QStringLiteral("Browse…"));
+        auto *smRow = new QHBoxLayout;
+        smRow->addWidget(studiomdl, 1);
+        smRow->addWidget(smBrowse);
+        gf->addRow(QStringLiteral("Compiler"), smRow);
+        QObject::connect(smBrowse, &QPushButton::clicked, this, [this] {
+            const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("studiomdl.exe to compile with"),
+                                                           studiomdl->text().isEmpty() ? QDir::homePath() : QFileInfo(studiomdl->text()).absolutePath(),
+                                                           QStringLiteral("studiomdl (*.exe)"));
+            if (!f.isEmpty()) studiomdl->setText(f);
+        });
+        QObject::connect(launchGmod, &QCheckBox::toggled, this, [this](bool v) { if (!syncing) { p.launchGmod = v; changed(); } });
+        QObject::connect(studiomdl, &QLineEdit::textChanged, this, [this](const QString &v) { if (!syncing) { p.studiomdl = v.trimmed(); changed(); } });
         root->addWidget(gmBox);
         QObject::connect(browse, &QPushButton::clicked, this, [this] {
             QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Garry's Mod folder (…/steamapps/common/GarrysMod)"),
@@ -1030,7 +1079,8 @@ private:
     QComboBox *toolLayout, *density, *ndStyle, *ndWidth;
     QPushButton *ndColor;
     QSlider *ndIntensity, *ndSpeed;
-    QCheckBox *nd2d, *selTouch, *exportAfter, *selWait, *axisLock, *askResize;
+    QCheckBox *nd2d, *selTouch, *exportAfter, *selWait, *axisLock, *askResize, *launchGmod, *joinExact;
+    QLineEdit *studiomdl;
     QLineEdit *gmodPath;
     QComboBox *proton;
     QSpinBox *budTris, *budVerts, *budMats, *budPieces;
@@ -1084,6 +1134,9 @@ private:
         gmodPath->setText(v.gmodPath);
         proton->setCurrentIndex(std::max(0, proton->findData(v.protonPath)));
         exportAfter->setChecked(v.exportAfterCompile);
+        launchGmod->setChecked(v.launchGmod);
+        studiomdl->setText(v.studiomdl);
+        joinExact->setChecked(v.joinExactOnly);
         grid->setValue(v.gridIntensity);
         gridLabel->setText(QStringLiteral("%1%").arg(v.gridIntensity));
         showBg(v.bg, true);
@@ -1618,6 +1671,7 @@ class LayersPane : public QWidget {
 public:
     std::function<void(unsigned)> changed;
     std::function<void()> toggleCollisionLook;
+    std::function<void()> newCollision; // + Collision: ask Complex or Simplified
 
     explicit LayersPane(QWidget *parent = nullptr) : QWidget(parent) {
         setMinimumWidth(gCompact ? 170 : 200);
@@ -1712,7 +1766,7 @@ public:
             else closedHeads.insert(it->data(0, Qt::UserRole + 5).toInt());
         });
         QObject::connect(addVis, &QPushButton::clicked, this, [this] { op(0, 0); });
-        QObject::connect(addCol, &QPushButton::clicked, this, [this] { op(1, 0); });
+        QObject::connect(addCol, &QPushButton::clicked, this, [this] { if (newCollision) newCollision(); else op(1, 0); });
         QObject::connect(moveBtn, &QPushButton::clicked, this, [this] { if (int id = currentLayer()) op(4, id); });
         QObject::connect(copyBtn, &QPushButton::clicked, this, [this] { if (int id = currentLayer()) op(5, id); });
         if (qEnvironmentVariableIsSet("BONK_DEBUG_LAYERS")) {
@@ -1788,7 +1842,7 @@ public:
             }
             m.addSeparator();
             m.addAction(QStringLiteral("Add Visual Layer"), [this] { op(0, 0); });
-            m.addAction(QStringLiteral("Add Collision Layer"), [this] { op(1, 0); });
+            m.addAction(QStringLiteral("Add Collision Layer…"), [this] { if (newCollision) newCollision(); else op(1, 0); });
             m.exec(tree->viewport()->mapToGlobal(pos));
         });
     }
@@ -4458,13 +4512,14 @@ struct BudgetLimits {
     int tris = 10922;   // per material: 32,768 indices / 3
     int verts = 65536;
     int materials = 64;
-    int pieces = 20;    // $maxconvexpieces default
+    int pieces = 1200;  // the meter turns yellow past this
     void load() {
         QSettings s;
         tris = s.value("budget/trianglesPerMaterial", 10922).toInt();
         verts = s.value("budget/vertices", 65536).toInt();
         materials = s.value("budget/materials", 64).toInt();
-        pieces = s.value("budget/collisionPieces", 20).toInt();
+        pieces = s.value("budget/collisionPieces", 1200).toInt();
+        if (pieces == 20) pieces = 1200;
     }
     void save() const {
         QSettings s;
@@ -4480,6 +4535,7 @@ class BudgetMeter : public QWidget {
 public:
     QString name;
     int used = 0, limit = 1;
+    bool soft = false; // only a warning: yellow past the limit, never red
     std::function<void()> clicked;
 
     explicit BudgetMeter(const QString &n) : name(n) {
@@ -4498,19 +4554,25 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         const double frac = limit > 0 ? double(used) / limit : 0.0;
-        QColor col = frac >= 1.0 ? QColor(220, 60, 50) : frac >= 0.75 ? QColor(230, 175, 40) : QColor(70, 170, 90);
+        QColor col = soft ? (frac >= 1.0 ? QColor(230, 175, 40) : QColor(70, 170, 90))
+                          : frac >= 1.0 ? QColor(220, 60, 50) : frac >= 0.75 ? QColor(230, 175, 40) : QColor(70, 170, 90);
         QFont f = font();
         f.setPixelSize(gCompact ? 10 : 11);
         p.setFont(f);
         QFontMetrics fm(f);
-        const QString mark = frac >= 1.0 ? QStringLiteral("✖ ") : frac >= 0.75 ? QStringLiteral("▲ ") : QString();
+        const QString mark = soft ? (frac >= 1.0 ? QStringLiteral("▲ ") : QString())
+                                  : frac >= 1.0 ? QStringLiteral("✖ ") : frac >= 0.75 ? QStringLiteral("▲ ") : QString();
         const QString left = mark + name;
-        const QString right = QStringLiteral("%1 / %2").arg(QLocale().toString(used), QLocale().toString(limit));
-        const int lw = fm.horizontalAdvance(left) + 6, rw = fm.horizontalAdvance(right) + 6;
+        const QString right = soft ? (frac >= 1.0 ? QStringLiteral("%1 · Expensive collision mesh, model may still work fine").arg(QLocale().toString(used)) : QLocale().toString(used))
+                                   : QStringLiteral("%1 / %2").arg(QLocale().toString(used), QLocale().toString(limit));
+        const int lw = fm.horizontalAdvance(left) + 6;
+        // a long note gives way: the bar keeps at least 40 px, the note is shortened with …
+        const int rw = soft ? std::min(fm.horizontalAdvance(right) + 6, std::max(40, width() - lw - 46)) : fm.horizontalAdvance(right) + 6;
+        const QString rightShown = soft ? fm.elidedText(right, Qt::ElideRight, rw - 6) : right;
         QRectF bar(lw, height() * 0.25, std::max(20, width() - lw - rw), height() * 0.5);
         p.setPen(palette().color(QPalette::WindowText));
         p.drawText(QRect(0, 0, lw, height()), Qt::AlignVCenter | Qt::AlignLeft, left);
-        p.drawText(QRect(width() - rw, 0, rw, height()), Qt::AlignVCenter | Qt::AlignRight, right);
+        p.drawText(QRect(width() - rw, 0, rw, height()), Qt::AlignVCenter | Qt::AlignRight, rightShown);
         p.setPen(Qt::NoPen);
         p.setBrush(palette().color(QPalette::Mid));
         p.drawRoundedRect(bar, 3, 3);
@@ -4536,6 +4598,9 @@ public:
         meters[1] = new BudgetMeter(QStringLiteral("Vertices"));
         meters[2] = new BudgetMeter(QStringLiteral("Materials"));
         meters[3] = new BudgetMeter(QStringLiteral("Collision pieces"));
+        meters[3]->soft = true;
+        meters[3]->setMinimumWidth(gCompact ? 200 : 260); // room for some of "Expensive collision mesh…"
+        meters[3]->setMaximumWidth(gCompact ? 460 : 620);
         for (int i = 0; i < 4; ++i) {
             h->addWidget(meters[i], 1);
             if (i == 3) h->addStretch(1);
@@ -4559,7 +4624,7 @@ public:
     QStringList over() const {
         QStringList o;
         for (BudgetMeter *m : meters)
-            if (m->used > m->limit) o << QStringLiteral("%1: %2 / %3").arg(m->name).arg(m->used).arg(m->limit);
+            if (!m->soft && m->used > m->limit) o << QStringLiteral("%1: %2 / %3").arg(m->name).arg(m->used).arg(m->limit);
         return o;
     }
 
@@ -4582,7 +4647,9 @@ public:
                                   .arg(QString::fromUtf8(bonk_budget_offenders(1, 0))));
         meters[2]->setToolTip(QStringLiteral("Different materials on visible faces (nodraw doesn't count). Past 64, Source starts leaking memory.\n\nClick to select one brush per material."));
         meters[3]->setToolTip(QStringLiteral("Convex pieces in the collision layers: each collision brush is one.\n"
-                                             "studiomdl allows 20 by default ($maxconvexpieces raises it).\n\nClick to select them."));
+                                             "Bonk raises studiomdl's limit as needed; past %1 the meter turns yellow:\n"
+                                             "an expensive collision mesh, but the model may still work fine.\n"
+                                             "Simplified collision (or Ctrl+J) brings it down.\n\nClick to select them.").arg(limits.pieces));
     }
 
 private:
@@ -4598,6 +4665,78 @@ private:
 // ------------------------------------------------------------------ main window
 
 constexpr int kLayoutVersion = 10;
+
+/// New collision layer: a copy of the visual model, or a simplified hull of it.
+class CollisionDialog : public QDialog {
+public:
+    int mode = 1;
+    double detail = 8.0;
+
+    CollisionDialog(QWidget *parent, double startDetail, bool forCompile) : QDialog(parent), detail(startDetail) {
+        setWindowTitle(forCompile ? QStringLiteral("Generate a collision model") : QStringLiteral("New collision layer"));
+        auto *v = new QVBoxLayout(this);
+        if (forCompile)
+            v->addWidget(hintLabel(QStringLiteral("This model has no collision layer, so it would have no physics: it can't be picked up "
+                                                  "and things fall through it. Bonk can make one for this compile (it isn't saved into "
+                                                  "the model; Layers → + Collision makes one you can edit).")));
+        complexBtn = new QRadioButton(QStringLiteral("Complex"));
+        auto *ct = hintLabel(QStringLiteral("A complex mesh has all of the geometric detail of your visual model: one convex piece per brush."));
+        simpleBtn = new QRadioButton(QStringLiteral("Simplified"));
+        auto *st = hintLabel(QStringLiteral("A simplified mesh removes as many details as possible, optimizing it automatically for you: "
+                                            "walls, floors, roofs and stairs stay (stairs become ramps), windows are filled in, open "
+                                            "doorways stay open, and pieces that line up are merged."));
+        v->addWidget(complexBtn);
+        v->addWidget(ct);
+        v->addWidget(simpleBtn);
+        v->addWidget(st);
+        auto *row = new QHBoxLayout;
+        row->addSpacing(22);
+        row->addWidget(new QLabel(QStringLiteral("Detail size")));
+        detailBox = new QComboBox;
+        for (int g : {1, 2, 4, 8, 16, 32, 64}) detailBox->addItem(QStringLiteral("Grid %1").arg(g), g);
+        detailBox->setToolTip(QStringLiteral("Brushes thinner than this on their second-longest side count as details"));
+        int di = detailBox->findData(int(std::lround(startDetail)));
+        detailBox->setCurrentIndex(di < 0 ? detailBox->findData(8) : di);
+        row->addWidget(detailBox);
+        row->addStretch(1);
+        v->addLayout(row);
+        count = new QLabel;
+        v->addWidget(count);
+        auto *bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        bb->button(QDialogButtonBox::Ok)->setText(forCompile ? QStringLiteral("Generate") : QStringLiteral("Create"));
+        if (forCompile) {
+            QPushButton *without = bb->addButton(QStringLiteral("Compile Without"), QDialogButtonBox::ActionRole);
+            QObject::connect(without, &QPushButton::clicked, this, [this] { mode = -1; accept(); });
+        }
+        v->addWidget(bb);
+        simpleBtn->setChecked(true);
+        timer.setSingleShot(true);
+        timer.setInterval(250);
+        QObject::connect(&timer, &QTimer::timeout, this, [this] { recount(); });
+        QObject::connect(detailBox, &QComboBox::currentIndexChanged, this, [this] { count->setText(QStringLiteral("Counting…")); timer.start(); });
+        QObject::connect(simpleBtn, &QRadioButton::toggled, this, [this](bool on) { detailBox->setEnabled(on); });
+        QObject::connect(bb, &QDialogButtonBox::accepted, this, [this] {
+            mode = simpleBtn->isChecked() ? 1 : 0;
+            detail = detailBox->currentData().toDouble();
+            accept();
+        });
+        QObject::connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        resize(520, sizeHint().height());
+        QTimer::singleShot(0, this, [this] { recount(); });
+    }
+
+private:
+    QRadioButton *complexBtn, *simpleBtn;
+    QComboBox *detailBox;
+    QLabel *count;
+    QTimer timer;
+
+    void recount() {
+        int out[2] = {0, 0};
+        const int n = bonk_simplify_count(float(detailBox->currentData().toDouble()), out);
+        count->setText(QStringLiteral("Complex: <b>%1</b> pieces · Simplified: <b>%2</b> pieces").arg(QLocale().toString(out[1]), QLocale().toString(n)));
+    }
+};
 
 class MainWindow : public QMainWindow {
 public:
@@ -4736,6 +4875,82 @@ public:
         v->toolFlashAt = at;
         v->update();
         for (int ms : {120, 300, 500, 720}) QTimer::singleShot(ms, v, [v] { v->update(); });
+    }
+
+    // ---------------------------------------------------------- physics
+
+    void newCollisionLayer() {
+        int mode = 1;
+        double detail = prefs.simplifyDetail;
+        if (!qEnvironmentVariableIsSet("BONK_ASSUME_YES")) {
+            CollisionDialog d(this, prefs.simplifyDetail, false);
+            if (d.exec() != QDialog::Accepted) return;
+            mode = d.mode;
+            detail = d.detail;
+        }
+        if (mode == 1 && detail != prefs.simplifyDetail) {
+            prefs.simplifyDetail = detail;
+            prefs.save();
+            prefs.apply();
+        }
+        bonk_new_collision(mode, float(detail));
+        handle(F_R3D | F_R2D | F_TOOL);
+    }
+
+    /// Tools → Set Mass…: the model's weight in game.
+    void setMass() {
+        QDialog d(this);
+        d.setWindowTitle(QStringLiteral("Set Mass"));
+        auto *v = new QVBoxLayout(&d);
+        auto *autoBox = new QCheckBox(QStringLiteral("Automatic (studiomdl works it out from the collision model's volume)"));
+        auto *kg = new QDoubleSpinBox;
+        kg->setRange(0.1, 50000.0);
+        kg->setDecimals(1);
+        kg->setSuffix(QStringLiteral(" kg"));
+        kg->setGroupSeparatorShown(true);
+        const float cur = bonk_mass();
+        autoBox->setChecked(cur <= 0.0f);
+        kg->setValue(cur > 0.0f ? cur : 500.0);
+        kg->setEnabled(cur > 0.0f);
+        auto *row = new QHBoxLayout;
+        row->addWidget(new QLabel(QStringLiteral("Mass")));
+        row->addWidget(kg, 1);
+        v->addWidget(autoBox);
+        v->addLayout(row);
+        auto *grid = new QGridLayout;
+        struct P { const char *name; double kg; const char *tip; };
+        const P presets[] = {{"Feather-light", 1, "A paper cup: blows around"},
+                             {"Light (ragdoll)", 90, "About a person"},
+                             {"Moderate", 500, "A heavy crate or a car door"},
+                             {"Heavy", 5000, "A car"},
+                             {"Very Heavy (house)", 50000, "Source's maximum: a house barely budges"}};
+        int i = 0;
+        for (const P &p : presets) {
+            auto *b = new QPushButton(QStringLiteral("%1\n%2 kg").arg(QString::fromUtf8(p.name), QLocale().toString(p.kg, 'f', 0)));
+            b->setToolTip(QString::fromUtf8(p.tip));
+            const double val = p.kg;
+            QObject::connect(b, &QPushButton::clicked, &d, [autoBox, kg, val] { autoBox->setChecked(false); kg->setValue(val); });
+            grid->addWidget(b, i / 3, i % 3);
+            ++i;
+        }
+        v->addLayout(grid);
+        v->addWidget(hintLabel(QStringLiteral("Written as $mass in the QC's collision model when you compile. Saved in the model.")));
+        QObject::connect(autoBox, &QCheckBox::toggled, kg, [kg](bool a) { kg->setEnabled(!a); });
+        auto *bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        QObject::connect(bb, &QDialogButtonBox::accepted, &d, &QDialog::accept);
+        QObject::connect(bb, &QDialogButtonBox::rejected, &d, &QDialog::reject);
+        v->addWidget(bb);
+        if (d.exec() != QDialog::Accepted) return;
+        bonk_set_mass(autoBox->isChecked() ? 0.0f : float(kg->value()));
+        updateTitle();
+        statusBar()->showMessage(autoBox->isChecked() ? QStringLiteral("Mass: automatic")
+                                                      : QStringLiteral("Mass: %1 kg").arg(QLocale().toString(kg->value(), 'f', 1)), 4000);
+    }
+
+    /// Start Garry's Mod through Steam (it never touches the game's files).
+    void startGmod() {
+        QDesktopServices::openUrl(QUrl(QStringLiteral("steam://rungameid/4000")));
+        statusBar()->showMessage(QStringLiteral("Starting Garry's Mod… (already running? change map to load new models)"), 6000);
     }
 
     // ---------------------------------------------------------- clipboard
@@ -5802,27 +6017,33 @@ public:
         int physMode = 0;
         bool withPhys = true;
         if (bonk_collision_pieces() == 0) {
-            QMessageBox box(QMessageBox::Question, QStringLiteral("No collision model"),
-                            QStringLiteral("This model has no collision layer, so it would have no physics: it can't be picked up, "
-                                           "and things fall through it.<br><br><b>Generate</b> uses the visual brushes as the "
-                                           "collision model, one convex piece per brush (it isn't saved into the model; Layers → "
-                                           "New Collision Layer makes one you can edit)."),
-                            QMessageBox::NoButton, this);
-            QPushButton *gen = box.addButton(QStringLiteral("Generate"), QMessageBox::AcceptRole);
-            QPushButton *without = box.addButton(QStringLiteral("Compile Without"), QMessageBox::AcceptRole);
-            box.addButton(QMessageBox::Cancel);
-            box.setDefaultButton(gen);
+            // no collision layer: generate one for this compile (complex or simplified), or go without
             if (qEnvironmentVariableIsSet("BONK_ASSUME_YES")) {
-                physMode = 1;
+                physMode = 2;
             } else {
-                box.exec();
-                if (box.clickedButton() == gen) physMode = 1;
-                else if (box.clickedButton() == without) withPhys = false;
-                else return;
+                CollisionDialog d(this, prefs.simplifyDetail, true);
+                if (d.exec() != QDialog::Accepted) return;
+                if (d.mode < 0) withPhys = false;
+                else physMode = d.mode == 1 ? 2 : 1;
+                if (d.mode == 1 && d.detail != prefs.simplifyDetail) {
+                    prefs.simplifyDetail = d.detail;
+                    prefs.save();
+                }
             }
+            bonk_set_simplify_detail(float(prefs.simplifyDetail));
         }
         SteamFind sf;
         sf.detect();
+        if (!prefs.studiomdl.isEmpty()) {
+            // Settings → Compiler: another studiomdl.exe (e.g. StudioMDL CE)
+            if (!QFileInfo(prefs.studiomdl).isFile()) {
+                QMessageBox::warning(this, QStringLiteral("Compiler not found"),
+                                     QStringLiteral("Settings → Garry's Mod → Compiler points at %1, which isn't there. "
+                                                    "Clear it to use Garry's Mod's own studiomdl.").arg(tildePath(prefs.studiomdl).toHtmlEscaped()));
+                return;
+            }
+            sf.studiomdl = prefs.studiomdl;
+        }
         if (sf.studiomdl.isEmpty()) {
             gmodMissing(sf.gmodDir.isEmpty()
                             ? QStringLiteral("Bonk compiles with Garry's Mod's own studiomdl, but couldn't find Garry's Mod in your Steam "
@@ -5869,6 +6090,8 @@ public:
         if (out[2] > 0) cw->note(QStringLiteral("Left %1 collision piece%2 out: thinner than half a unit, which studiomdl can't use "
                                                 "(it would give up and shrink-wrap the whole model).").arg(out[2]).arg(out[2] == 1 ? QString() : QStringLiteral("s")));
         if (physMode == 1) cw->note(QStringLiteral("Collision generated from the visual brushes (%1 piece%2).").arg(out[1]).arg(out[1] == 1 ? QString() : QStringLiteral("s")));
+        if (physMode == 2) cw->note(QStringLiteral("Simplified collision generated from the visual brushes (%1 piece%2, detail size %3).")
+                                        .arg(out[1]).arg(out[1] == 1 ? QString() : QStringLiteral("s")).arg(prefs.simplifyDetail));
         if (!withPhys) cw->note(QStringLiteral("No collision model: it won't have physics in game."));
 
         // --- textures (VTFs) and VMTs
@@ -5940,7 +6163,9 @@ public:
         qc += QStringLiteral("$body \"body\" \"reference.smd\"\n");
         qc += QStringLiteral("$sequence \"idle\" \"reference.smd\" fps 30\n");
         if (withPhys)
-            qc += QStringLiteral("$collisionmodel \"physics.smd\"\n{\n\t$concave\n\t$maxconvexpieces %1\n\t$automass\n}\n").arg(std::max(20, out[1]));
+            qc += QStringLiteral("$collisionmodel \"physics.smd\"\n{\n\t$concave\n\t$maxconvexpieces %1\n\t%2\n}\n")
+                      .arg(std::max(20, out[1]))
+                      .arg(bonk_mass() > 0.0f ? QStringLiteral("$mass %1").arg(double(bonk_mass())) : QStringLiteral("$automass"));
         const QString qcPath = work + QStringLiteral("/model.qc");
         {
             QFile f(qcPath);
@@ -6130,8 +6355,10 @@ public:
                                     .arg(vtfs).arg(vtfs == 1 ? QString() : QStringLiteral("s"))
                                     .arg(n)
                                     .arg(errors.isEmpty() ? QString() : QStringLiteral("<br><br><b>Problems:</b> ") + errors.join(QStringLiteral("; ")).toHtmlEscaped());
+        if (prefs.launchGmod && errors.isEmpty() && !qEnvironmentVariableIsSet("BONK_SCREENSHOT")) startGmod();
         if (afterCompile) {
-            compileWindow()->note(QStringLiteral("Exported to <tt>%1</tt> (%2 files).").arg(tildePath(dest).toHtmlEscaped()).arg(n));
+            compileWindow()->note(QStringLiteral("Exported to <tt>%1</tt> (%2 files).%3").arg(tildePath(dest).toHtmlEscaped()).arg(n)
+                                      .arg(prefs.launchGmod ? QStringLiteral(" Starting Garry's Mod.") : QString()));
             compileWin->finish(true, QStringLiteral("%1, exported to GMod").arg(job.title));
             return;
         }
@@ -6953,6 +7180,7 @@ MainWindow::MainWindow() {
     layers = new LayersPane;
     layers->changed = [this](unsigned f) { handle(f | F_R3D | F_R2D); };
     layers->toggleCollisionLook = [this] { command(CMD_TOGGLE_COLLISION_SOLID); };
+    layers->newCollision = [this] { newCollisionLayer(); };
     picker = new TexturePicker(&library);
     picker->changed = [this](unsigned f) { handle(f | F_R3D | F_R2D); };
     picker->importReq = [this] { importTextures(); };
@@ -7061,6 +7289,8 @@ MainWindow::MainWindow() {
     file->addSeparator();
     fn(file, QStringLiteral("&Compile Model"), QKeySequence(Qt::Key_F9), [this] { compileModel(); });
     fn(file, QStringLiteral("&Export to GMod Addons Folder…"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_E), [this] { exportToGMod(false); });
+    fn(file, QStringLiteral("Start &Garry's Mod"), QKeySequence(), [this] { startGmod(); })
+        ->setToolTip(QStringLiteral("Through Steam. Settings can start it after every export."));
     fn(file, QStringLiteral("Open A&ddon Folder"), QKeySequence(), [this] {
         if (project.isOpen()) QDesktopServices::openUrl(QUrl::fromLocalFile(project.addonDir()));
     });
@@ -7084,6 +7314,11 @@ MainWindow::MainWindow() {
     edit->addSeparator();
     act(edit, QStringLiteral("&Group"), QKeySequence(Qt::CTRL | Qt::Key_G), CMD_GROUP);
     act(edit, QStringLiteral("U&ngroup"), QKeySequence(Qt::CTRL | Qt::Key_U), CMD_UNGROUP);
+    edit->addSeparator();
+    act(edit, QStringLiteral("&Join Brushes"), QKeySequence(Qt::CTRL | Qt::Key_J), CMD_JOIN)
+        ->setToolTip(QStringLiteral("One convex brush from the selection (hull, or exact only: Settings → Editing)"));
+    act(edit, QStringLiteral("Join Brushes (&Hull)"), QKeySequence(), CMD_JOIN_HULL);
+    act(edit, QStringLiteral("Join Brushes (E&xact Only)"), QKeySequence(), CMD_JOIN_EXACT);
     ignoreGroupsAct = act(edit, QStringLiteral("&Ignore Groups"), QKeySequence(Qt::CTRL | Qt::Key_W), CMD_IGNORE_GROUPS);
     ignoreGroupsAct->setCheckable(true);
     edit->addSeparator();
@@ -7182,6 +7417,9 @@ MainWindow::MainWindow() {
     tools->addSeparator();
     act(tools, QStringLiteral("&Create Block"), QKeySequence(), CMD_CREATE_BLOCK);
     act(tools, QStringLiteral("&Apply Bisect Cut"), QKeySequence(), CMD_BISECT_APPLY);
+    tools->addSeparator();
+    fn(tools, QStringLiteral("New Collision &Layer…"), QKeySequence(), [this] { newCollisionLayer(); });
+    fn(tools, QStringLiteral("Set &Mass…"), QKeySequence(), [this] { setMass(); });
     tools->addSeparator();
     fn(tools, QStringLiteral("Find &Overlapping Brushes…"), QKeySequence(), [this] { findOverlaps(); })
         ->setIcon(QIcon(toolIconPath(QStringLiteral("overlap"))));
@@ -7387,6 +7625,8 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                 } else if (c == QStringLiteral("copy")) w.copySelection(false);
                 else if (c == QStringLiteral("paste") || c == QStringLiteral("pastem")) w.pasteClipboard(c.endsWith(QLatin1Char('m')));
                 else if (c == QStringLiteral("overlaps")) w.findOverlaps();
+                else if (c.startsWith(QStringLiteral("mass:"))) bonk_set_mass(c.mid(5).toFloat());
+                else if (c == QStringLiteral("coldlg")) { auto *d = new CollisionDialog(&w, w.prefs.simplifyDetail, false); d->setAttribute(Qt::WA_DeleteOnClose); d->show(); }
                 else if (c.startsWith(QStringLiteral("anim:"))) w.importAnimation(c.mid(5).split(QLatin1Char('|')));
                 else if (c.startsWith(QStringLiteral("selusing:"))) { QByteArray k = c.mid(9).toUtf8(); bonk_select_faces_with(k.constData()); w.handle(F_R3D | F_R2D | F_TOOL); }
                 else if (c == QStringLiteral("convertall")) { if (w.picker->convertReq) w.picker->convertReq({}); }

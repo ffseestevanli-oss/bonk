@@ -309,6 +309,8 @@ pub struct Document {
     /// Where the model goes in the game, e.g. "housepack/onestory/house_1"
     /// (models/<path>.mdl). Stored in the .bpmdl so it's set once.
     pub model_path: String,
+    /// Mass in kg for the QC's collision model; 0 = automatic ($automass)
+    pub mass: f32,
     /// Material properties this model overrides: (material, serialized
     /// properties). The texture's own .bonkmat applies otherwise.
     pub mat_overrides: Vec<(String, String)>,
@@ -340,6 +342,7 @@ impl Document {
             active_layer: 1,
             origin: V3::default(),
             model_path: String::new(),
+            mass: 0.0,
             mat_overrides: Vec::new(),
             dirty: false,
             rev: 1,
@@ -943,6 +946,38 @@ impl Document {
         let id = self.add_layer(LayerKind::Collision); // checkpoints
         let n = if src.is_empty() { 0 } else { self.duplicate_ext(&src, Some(id), true).len() };
         self.selection.clear();
+        (id, n)
+    }
+
+    /// The visual brushes a collision model is made from: shown visual layers, no entities.
+    pub fn visual_brushes(&self) -> Vec<&Brush> {
+        self.brushes
+            .iter()
+            .filter(|b| b.entity.is_none() && self.layer(b.layer).is_some_and(|l| l.kind == LayerKind::Visual && l.visible))
+            .collect()
+    }
+
+    /// A new collision layer with the simplified hull of the visual model
+    /// (see collision::simplify). Returns (layer id, pieces).
+    pub fn add_collision_simplified(&mut self, detail: f32) -> (u32, usize) {
+        let pieces = crate::collision::simplify(&self.visual_brushes(), detail);
+        let id = self.add_layer(LayerKind::Collision); // checkpoints
+        let n = pieces.len();
+        for p in pieces {
+            let nid = self.take_id();
+            let mut b = p;
+            b.id = nid;
+            b.color = palette(nid);
+            b.layer = id;
+            b.group = None;
+            b.entity = None;
+            for f in b.faces.iter_mut() {
+                f.material = geom::NODRAW.to_string();
+            }
+            self.brushes.push(b);
+        }
+        self.selection.clear();
+        self.rev += 1;
         (id, n)
     }
 

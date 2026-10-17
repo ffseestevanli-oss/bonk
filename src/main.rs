@@ -5,6 +5,7 @@
 //! All editor logic and rendering live in Rust. The Qt6 window, menus and input
 //! plumbing live in `cpp/host.cpp`, which calls the `bonk_*` functions below.
 
+mod collision;
 mod doc;
 mod editor;
 mod export;
@@ -402,6 +403,46 @@ pub extern "C" fn bonk_selected_face_materials() -> *const c_char {
     ret_str(with_ed(|ed| ed.selected_face_materials().join("\n")))
 }
 
+/// A new collision layer: mode 0 complex (a copy of the visual model), 1 simplified
+/// (detail size in units). Returns the pieces made.
+#[no_mangle]
+pub extern "C" fn bonk_new_collision(mode: c_int, detail: f32) -> c_int {
+    with_ed(|ed| {
+        let (_, n) = if mode == 1 { ed.doc.add_collision_simplified(detail) } else { ed.doc.add_collision_from_visual() };
+        ed.message = Some(if mode == 1 {
+            format!("New collision layer: simplified into {n} piece{}", if n == 1 { "" } else { "s" })
+        } else {
+            format!("New collision layer: a copy of the visual model ({n} brush{}). Simplify it into the physics hull", if n == 1 { "" } else { "es" })
+        });
+        n as c_int
+    })
+}
+
+/// How many pieces a simplified collision model would have (out[1]: the complex count).
+#[no_mangle]
+pub extern "C" fn bonk_simplify_count(detail: f32, out: *mut c_int) -> c_int {
+    let (s, c) = with_ed(|ed| {
+        let v = ed.doc.visual_brushes();
+        (collision::simplify(&v, detail).len(), v.len())
+    });
+    if !out.is_null() {
+        unsafe { *out.add(1) = c as c_int };
+    }
+    s as c_int
+}
+
+/// The detail size simplified collision uses when compiling without a collision layer.
+#[no_mangle]
+pub extern "C" fn bonk_set_simplify_detail(d: f32) {
+    with_ed(|ed| ed.simplify_detail = d.clamp(1.0, 512.0));
+}
+
+/// Ctrl+J joins exactly only (1) or wraps a hull when it must (0).
+#[no_mangle]
+pub extern "C" fn bonk_set_join_exact(on: c_int) {
+    with_ed(|ed| ed.join_exact_only = on != 0);
+}
+
 /// Block tool shape (0 block, 1 cylinder, 2 wedge, 3 spike, 4 orb) and faces count.
 #[no_mangle]
 pub extern "C" fn bonk_set_block_shape(shape: c_int, faces: c_int) -> u32 {
@@ -587,13 +628,24 @@ pub extern "C" fn bonk_rename_material(old: *const c_char, new: *const c_char) -
 }
 
 /// Write the model's SMDs for studiomdl. `phys` may be "" (no physics file).
-/// phys_mode: 0 collision layers, 1 use the visual brushes as collision.
+/// phys_mode: 0 collision layers, 1 use the visual brushes as collision, 2 a simplified
+/// hull of the visual brushes (detail: bonk_set_simplify_detail).
 /// out = [triangles, collision pieces, too-thin collision pieces left out]. Returns 0 or -1.
 #[no_mangle]
 pub extern "C" fn bonk_export_smd(reference: *const c_char, phys: *const c_char, phys_mode: c_int, out: *mut c_int) -> c_int {
     let Some(rp) = path_arg(reference) else { return -1 };
     let pp = path_arg(phys).unwrap_or_default();
-    let (r, p) = with_ed(|ed| (export::reference_smd(ed), if pp.is_empty() { (String::new(), 0, 0) } else { export::physics_smd(ed, phys_mode == 1) }));
+    let (r, p) = with_ed(|ed| {
+        let phys = if pp.is_empty() {
+            (String::new(), 0, 0)
+        } else if phys_mode == 2 {
+            let pieces = collision::simplify(&ed.doc.visual_brushes(), ed.simplify_detail);
+            export::physics_smd_from(ed, pieces.iter().collect())
+        } else {
+            export::physics_smd(ed, phys_mode == 1)
+        };
+        (export::reference_smd(ed), phys)
+    });
     if let Err(e) = std::fs::write(&rp, r.0) {
         set_error(&format!("couldn't write {}: {}", rp, e));
         return -1;
@@ -905,6 +957,23 @@ pub extern "C" fn bonk_set_mat_override(name: *const c_char, props: *const c_cha
 pub extern "C" fn bonk_model_path() -> *const c_char {
     let s = with_ed(|ed| ed.doc.model_path.clone());
     ret_str(s)
+}
+
+#[no_mangle]
+pub extern "C" fn bonk_mass() -> f32 {
+    with_ed(|ed| ed.doc.mass)
+}
+
+/// The model's mass in kg (0 = automatic).
+#[no_mangle]
+pub extern "C" fn bonk_set_mass(kg: f32) {
+    with_ed(|ed| {
+        let m = if kg > 0.0 { kg.min(50000.0) } else { 0.0 };
+        if ed.doc.mass != m {
+            ed.doc.mass = m;
+            ed.doc.dirty = true;
+        }
+    });
 }
 
 #[no_mangle]
@@ -1314,6 +1383,19 @@ mod bench3 {
         println!("tidy: removed {n}, {left} left, {:?}", t.elapsed());
         with_ed(|ed| ed.doc.undo());
         println!("after undo: {}", with_ed(|ed| ed.doc.groups.len()));
+    }
+
+    #[test]
+    #[ignore]
+    fn simplify_user_model() {
+        let path = std::env::var("BONK_BENCH_MODEL").unwrap_or_default();
+        with_ed(|ed| io::load_file(ed, &path).unwrap());
+        for d in [8.0f32, 16.0, 32.0] {
+            let t = std::time::Instant::now();
+            let mut out = [0 as c_int; 2];
+            let n = bonk_simplify_count(d, out.as_mut_ptr());
+            println!("simplify detail {d}: {n} pieces from {} in {:?}", out[1], t.elapsed());
+        }
     }
 
     #[test]

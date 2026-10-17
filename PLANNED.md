@@ -3,18 +3,6 @@
 Queued ideas that haven't shipped yet, grouped by the build they're planned for.
 Shipped work is in [CHANGELOG.md](CHANGELOG.md).
 
-## Build 4: Physics
-- Simplified collision: when a collision layer is made, choose Complex (all detail) or Simplified
-  (details removed, walls become solids, open holes such as doors and windows kept), with a short
-  explanation of each
-- Join brushes (Ctrl+J): hull join by default; Settings → Editing can make it "exact only" (refuse
-  and ask when the result wouldn't be one convex brush); Edit → Join Brushes offers both
-- Set Mass… (Tools → Model Properties): a mass field with presets Feather-light, Light (ragdoll),
-  Moderate, Heavy, Very Heavy (house)
-- Collision budget: the bar turns yellow at high piece counts (mid to high 1000s) with a note like
-  "Expensive collision mesh, model may still work fine"
-- Compiler choice: Hammer++ / StudioMDL-CE besides Garry's Mod's studiomdl
-
 ## Build 5: Interface
 - Settings in tabs: Editing, Tools & Keys, Appearance (nodraw look, grid, background color),
   Advanced (budget limits)

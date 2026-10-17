@@ -384,14 +384,21 @@ QList<GuidePage> guidePages(bool hammer) {
     {
         GuidePage &p = page(QStringLiteral("collision"), GD, QStringLiteral("Collision models"), QStringLiteral("collision physics phy convex pieces ghost layer"));
         p.html = QStringLiteral("<p>The collision model is what Garry's Mod uses for physics: picking the prop up, bullets, things landing on it. "
-                                "Layers → New Collision Layer starts one as a copy of the visual model. While it's active, the visual model "
+                                "<b>+ Collision</b> in the Layers pane (or Tools → New Collision Layer) asks how to start it: <b>Complex</b>, "
+                                "a copy of every visual brush, or <b>Simplified</b>: walls, floors, roofs and stairs stay (stairs become "
+                                "ramps), windows with a pane or frame are filled in solid, open doorways stay open, loose little details go, "
+                                "and pieces that line up are merged. The Detail size (Grid 8 by default) sets what counts as little; the "
+                                "dialog shows how many pieces each way gives. While a collision layer is active, the visual model "
                                 "is a see-through ghost (the slider sets how visible) and the 3D view tells you you're editing collision.</p>"
                                 "<p>Each collision brush is one convex piece. Keep them few and simple: studiomdl allows 20 by default "
                                 "(Bonk raises the limit when it needs to).</p>"
                                 "<p><b>Collision look</b> (View menu, or the button under the layers): <i>Ghosted</i> draws collision as orange "
                                 "glass; <i>Solid</i> draws each piece opaque in its own color, so you can see where one ends and the next "
                                 "begins. It only changes the look.</p>"
-                                "<p>No collision layer when you compile? Bonk offers to <b>Generate</b> one from the visual brushes, "
+                                "<p><b>Ctrl+J</b> (Edit → Join Brushes) turns the selected brushes into one: exactly their shape when "
+                                "they make one convex brush together, otherwise a hull around them (Settings → Editing can make Ctrl+J "
+                                "exact only). Handy for cutting collision pieces down.</p>"
+                                "<p>No collision layer when you compile? Bonk offers to <b>Generate</b> one (complex or simplified) from the visual brushes, "
                                 "or to compile without physics.</p>");
         p.see = {QStringLiteral("budget"), QStringLiteral("compiling")};
     }
@@ -399,7 +406,8 @@ QList<GuidePage> guidePages(bool hammer) {
         GuidePage &p = page(QStringLiteral("budget"), GD, QStringLiteral("Budget"), QStringLiteral("budget limit triangles vertices materials pieces meter over overlap overlapping duplicate"));
         p.html = QStringLiteral("<p>The Budget bar along the bottom shows what the model costs, live, against Garry's Mod's studiomdl limits:</p><ul>"
                                 "<li><b>Triangles</b> of the busiest material (10,922 each: 32,768 indices)</li>"
-                                "<li><b>Vertices</b> (65,536)</li><li><b>Materials</b> (64)</li><li><b>Collision pieces</b> (20 by default)</li></ul>"
+                                "<li><b>Vertices</b> (65,536)</li><li><b>Materials</b> (64)</li><li><b>Collision pieces</b>: no hard limit (Bonk "
+                                "raises studiomdl's); past 1,200 it turns yellow: an expensive collision mesh, but the model may still work fine</li></ul>"
                                 "<p>Hover a meter for the heaviest brushes, click it to select them. Nodraw faces cost nothing, so nodraw "
                                 "faces nobody will see. Bonk warns before compiling something over budget. The limits are in Settings.</p>"
                                 "<p><b>Tools → Find Overlapping Brushes</b> lists brushes that share space (touching is fine), exact duplicates "
@@ -415,7 +423,8 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "its VMTs, then runs Garry's Mod's own <tt>studiomdl.exe</tt> through Proton. The result lands in the project's "
                                 "<tt>addon/&lt;project&gt;</tt> folder, ready for the Workshop.</p>"
                                 "<p><b>File → Export to GMod Addons Folder</b> copies that folder to <tt>garrysmod/addons/&lt;project&gt;</tt> "
-                                "so you can try it in game. It asks before replacing an earlier export. Settings can export after every compile.</p>");
+                                "so you can try it in game. It asks before replacing an earlier export. Settings can export after every compile, "
+                                "and start Garry's Mod after exporting (also File → Start Garry's Mod) so you can test right away.</p>");
         p.subs = {{QStringLiteral("Garry's Mod folder"), QStringLiteral("<p>Bonk finds Garry's Mod through Steam's library folders (Flatpak Steam too). It "
                                                                         "only uses that folder for two things: running bin/studiomdl.exe, and writing "
                                                                         "garrysmod/addons/&lt;project&gt; when you export. Settings → Garry's Mod can point "
@@ -423,6 +432,10 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("Proton"), QStringLiteral("<p>Bonk uses the newest stable Proton Steam has installed, with its own prefix in "
                                                             "~/.local/share/bonk/proton (the first compile sets it up, which takes a minute). "
                                                             "Settings → Garry's Mod picks a different Proton.</p>")},
+                  {QStringLiteral("Compiler"), QStringLiteral("<p>Settings → Garry's Mod → Compiler can point at another studiomdl.exe, such as "
+                                                              "StudioMDL CE; it runs through Proton the same way. Empty means Garry's Mod's own.</p>")},
+                  {QStringLiteral("Mass"), QStringLiteral("<p>Tools → Set Mass… sets how heavy the prop is in game ($mass): automatic, a number in "
+                                                          "kg, or a preset from Feather-light (1 kg) to Very Heavy (house, 50,000 kg, Source's maximum).</p>")},
                   {QStringLiteral("When it fails"), QStringLiteral("<p>The compile window shows studiomdl's errors in plain words; tick Show studiomdl's "
                                                                    "log for everything. Too many collision pieces or vertices show up in the Budget bar first.</p>")},
                   {QStringLiteral("Which way it faces"), QStringLiteral("<p>The side of the model facing <b>south</b> in the top view (toward the "

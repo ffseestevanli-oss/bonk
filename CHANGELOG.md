@@ -2,6 +2,25 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.15.0 — "Physics"
+
+- **Simplified collision.** + Collision (or Tools → New Collision Layer, or Generate when compiling
+  without one) asks: **Complex**, a copy of every visual brush, or **Simplified**: walls, floors,
+  roofs and stairs stay (stairs become ramps), windows with a pane or frame are filled in solid,
+  open doorways stay open, loose little details go, and pieces that line up are merged. A
+  **Detail size** (Grid 8 by default) sets what counts as little; the dialog shows the piece count
+  either way. Your 2s_house_5: 1,503 pieces complex, 1,120 simplified at Grid 8, 426 at Grid 16.
+- **Join Brushes (Ctrl+J):** one convex brush from the selection, exactly their shape when it can
+  be, else a hull around them. Faces keep their textures. Settings → Editing can make Ctrl+J exact
+  only; Edit → Join Brushes (Hull) / (Exact Only) are there either way.
+- **Tools → Set Mass…:** automatic or a number in kg, with presets Feather-light (1), Light
+  (ragdoll, 90), Moderate (500), Heavy (5,000) and Very Heavy (house, 50,000). Written as `$mass`.
+- **Collision pieces meter:** no longer red at 20; it turns yellow past 1,200 ("expensive, may
+  still work") and never blocks a compile.
+- **Compiler choice:** Settings → Garry's Mod → Compiler can point at another studiomdl.exe
+  (e.g. StudioMDL CE), run through Proton the same way.
+- **Start Garry's Mod** after exporting (a setting), or any time from the File menu.
+
 ## 0.14.1
 
 - The animation badge (▶ and the frame count) moved to the swatch's bottom-right corner: the

@@ -74,6 +74,9 @@ pub fn write(ed: &Editor) -> String {
     if !ed.doc.model_path.is_empty() {
         kv(&mut o, 1, "model_path", &ed.doc.model_path);
     }
+    if ed.doc.mass > 0.0 {
+        kv(&mut o, 1, "mass", &num(ed.doc.mass));
+    }
     for (m, props) in &ed.doc.mat_overrides {
         kv(&mut o, 1, "material_override", &format!("{}|{}", m, props));
     }
@@ -296,6 +299,7 @@ pub struct Loaded {
     pub active_layer: u32,
     pub origin: V3,
     pub model_path: String,
+    pub mass: f32,
     pub mat_overrides: Vec<(String, String)>,
     pub groups: Vec<Group>,
     /// Brushes whose stored faces didn't match their vertices and were rebuilt
@@ -327,6 +331,7 @@ pub fn read(text: &str) -> Result<Loaded, String> {
         active_layer: 0,
         origin: V3::default(),
         model_path: String::new(),
+        mass: 0.0,
         mat_overrides: Vec::new(),
         groups: Vec::new(),
         repaired: 0,
@@ -359,6 +364,7 @@ pub fn read(text: &str) -> Result<Loaded, String> {
                 out.origin = v3(o[0], o[1], o[2]);
             }
             ("model_path", Val::Str(s)) => out.model_path = s.trim().to_string(),
+            ("mass", Val::Str(s)) => out.mass = s.trim().parse().unwrap_or(0.0),
             ("material_override", Val::Str(s)) => {
                 if let Some((m, p)) = s.split_once('|') {
                     out.mat_overrides.push((m.trim().to_string(), p.to_string()));
@@ -528,6 +534,7 @@ pub fn apply(ed: &mut Editor, l: Loaded) -> usize {
     }
     ed.doc.replace_all(brushes, l.layers, l.active_layer, l.origin);
     ed.doc.model_path = l.model_path;
+    ed.doc.mass = l.mass;
     ed.doc.mat_overrides = l.mat_overrides;
     ed.doc.groups = l.groups;
     ed.doc.prune_groups();
@@ -607,6 +614,7 @@ mod tests {
         ed.doc.set_layer_flags(1, true, true);
         ed.doc.origin = v3(16.0, -8.0, 0.0);
         ed.doc.model_path = "housepack/onestory/house_1".into();
+        ed.doc.mass = 500.0;
         ed.doc.mat_overrides = vec![("walls/brick".into(), "shader=UnlitGeneric;selfillum=1".into())];
         if let Some(b) = ed.doc.brushes.first_mut() {
             b.faces[0].tex.shift = [3.5, -7.0];
@@ -627,6 +635,7 @@ mod tests {
         assert_eq!(ed2.doc.active_layer, col);
         assert_eq!(ed2.doc.origin, v3(16.0, -8.0, 0.0));
         assert_eq!(ed2.doc.model_path, "housepack/onestory/house_1");
+        assert_eq!(ed2.doc.mass, 500.0);
         assert_eq!(ed2.doc.mat_overrides, vec![("walls/brick".to_string(), "shader=UnlitGeneric;selfillum=1".to_string())]);
         assert_eq!(ed2.doc.brushes[0].faces[0].tex.shift, [3.5, -7.0]);
         assert_eq!(ed2.doc.brushes[0].faces[0].tex.scale, [0.5, 0.125]);

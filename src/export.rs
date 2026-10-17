@@ -83,11 +83,6 @@ pub fn reference_smd(ed: &Editor) -> (String, usize, usize) {
 /// left out: studiomdl calls them 2-dimensional and gives up on the whole
 /// collision model, shrink-wrapping it instead.
 pub fn physics_smd(ed: &Editor, from_visual: bool) -> (String, usize, usize) {
-    let mut o = String::new();
-    header(&mut o);
-    let mut pieces = 0;
-    let mut thin = 0;
-    let model_origin = ed.doc.origin;
     let use_brush = |b: &&Brush| {
         b.entity.is_none()
             && if from_visual {
@@ -96,7 +91,17 @@ pub fn physics_smd(ed: &Editor, from_visual: bool) -> (String, usize, usize) {
                 ed.doc.layer(b.layer).is_some_and(|l| l.kind == LayerKind::Collision)
             }
     };
-    for b in ed.doc.brushes.iter().filter(use_brush) {
+    physics_smd_from(ed, ed.doc.brushes.iter().filter(use_brush).collect())
+}
+
+/// The physics SMD from these brushes (one convex piece each).
+pub fn physics_smd_from(ed: &Editor, brushes: Vec<&Brush>) -> (String, usize, usize) {
+    let mut o = String::new();
+    header(&mut o);
+    let mut pieces = 0;
+    let mut thin = 0;
+    let model_origin = ed.doc.origin;
+    for b in brushes {
         let origin = ed.doc.layer(b.layer).and_then(|l| l.origin).unwrap_or(model_origin);
         let (lo, hi) = b.bounds();
         let size = hi - lo;
