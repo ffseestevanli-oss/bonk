@@ -3348,16 +3348,16 @@ impl Editor {
                 self.bisect_flip = (self.bisect_flip + 1) % 6;
                 return flags::ALL;
             }
-            key::D if !self.captured && pressed && m & (mods::CTRL | mods::ALT | mods::SHIFT) == 0 && self.s_hold.is_none() => {
-                return self.command(cmd::DESELECT); // D in any view (when not flying); Ctrl+D works everywhere (Edit menu)
+            key::D if !k3d && pressed && m & (mods::CTRL | mods::ALT | mods::SHIFT) == 0 && self.s_hold.is_none() => {
+                return self.command(cmd::DESELECT); // D in a 2D view; Ctrl+D works everywhere (Edit menu)
             }
-            // flying keys only while flying (Z): otherwise the 3D view takes the editing keys
-            key::W if self.captured => self.keys.w = pressed,
-            key::A if self.captured => self.keys.a = pressed,
-            key::S if self.captured => self.keys.s = pressed,
-            key::D if self.captured => self.keys.d = pressed,
-            key::Q if self.captured => self.keys.q = pressed,
-            key::E if self.captured => self.keys.e = pressed,
+            // WASD / QE fly the 3D camera whenever the 3D view has the keys (mouselook or not)
+            key::W if k3d => self.keys.w = pressed,
+            key::A if k3d => self.keys.a = pressed,
+            key::S if k3d => self.keys.s = pressed,
+            key::D if k3d => self.keys.d = pressed,
+            key::Q if k3d => self.keys.q = pressed,
+            key::E if k3d => self.keys.e = pressed,
             key::UP if self.captured => self.keys.up = pressed,
             key::DOWN if self.captured => self.keys.down = pressed,
             key::LEFT if self.captured => self.keys.left = pressed,
@@ -5694,15 +5694,11 @@ mod tests {
         assert!(e.doc.selection.is_empty());
         e.command(cmd::UNDO);
         assert_eq!(e.doc.selection, vec![a]);
-        // in the 3D view D deselects too, unless flying
-        e.captured = true;
+        // in the 3D view D flies (always), it doesn't deselect
         e.key(0, key::D, true, 0, false);
         assert_eq!(e.doc.selection, vec![a]);
+        assert!(e.tick(0.1) != 0);
         e.key(0, key::D, false, 0, false);
-        e.captured = false;
-        e.key(0, key::D, true, 0, false);
-        assert!(e.doc.selection.is_empty());
-        e.command(cmd::UNDO);
         // Ctrl+D (the menu command) works anywhere
         e.command(cmd::DESELECT);
         assert!(e.doc.selection.is_empty());

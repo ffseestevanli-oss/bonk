@@ -6541,7 +6541,7 @@ MainWindow::MainWindow() {
     ignoreGroupsAct = act(edit, QStringLiteral("&Ignore Groups"), QKeySequence(Qt::CTRL | Qt::Key_W), CMD_IGNORE_GROUPS);
     ignoreGroupsAct->setCheckable(true);
     edit->addSeparator();
-    act(edit, QStringLiteral("&Deselect (D in a view)"), QKeySequence(Qt::CTRL | Qt::Key_D), CMD_DESELECT);
+    act(edit, QStringLiteral("&Deselect (D in a 2D view)"), QKeySequence(Qt::CTRL | Qt::Key_D), CMD_DESELECT);
     // single keys are handled by the views (they need to know which view the mouse is in)
     act(edit, QStringLiteral("&Hide Selection / Show Hidden\tH"), QKeySequence(), CMD_HIDE_TOGGLE);
     act(edit, QStringLiteral("&Mirror Horizontally\t,"), QKeySequence(), CMD_MIRROR_H);

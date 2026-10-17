@@ -103,7 +103,7 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("click again"), QStringLiteral("Switch between resize and rotate handles")},
                   {QStringLiteral("drag"), QStringLiteral("Select half: move what you grab. Box half: draw a selection box, even over brushes")},
                   {QStringLiteral("Ctrl+drag"), QStringLiteral("Box half: a box that adds to the selection")},
-                  {QStringLiteral("D"), QStringLiteral("Deselect (any view, unless you're flying)")},
+                  {QStringLiteral("D"), QStringLiteral("Deselect (in a 2D view; in 3D, D flies)")},
                   {QStringLiteral("H"), QStringLiteral("Hide the selection for now; H with nothing selected shows it again")},
                   {QStringLiteral("Ctrl+D"), QStringLiteral("Deselect, anywhere")},
                   {QStringLiteral("Ctrl+A"), QStringLiteral("Select all")},
@@ -203,8 +203,8 @@ QList<GuidePage> guidePages(bool hammer) {
     {
         GuidePage &p = page(QStringLiteral("view3d"), MK, QStringLiteral("3D view & flying"), QStringLiteral("camera fly mouselook orbit pan zoom wasd edges 2d views"));
         p.keys = {{QStringLiteral("Z"), QStringLiteral("Mouselook (flying) on / off")},
-                  {QStringLiteral("W / A / S / D"), QStringLiteral("Fly, while in mouselook")},
-                  {QStringLiteral("Q / E"), QStringLiteral("Down / up, while in mouselook")},
+                  {QStringLiteral("W / A / S / D"), QStringLiteral("Fly, whenever the 3D view has the keys (mouselook or not)")},
+                  {QStringLiteral("Q / E"), QStringLiteral("Down / up")},
                   {QStringLiteral("Shift"), QStringLiteral("Fly faster")},
                   {QStringLiteral("right-drag"), QStringLiteral("Look around")},
                   {QStringLiteral("middle-drag"), QStringLiteral("Orbit around what's in the center of the view")},
@@ -213,8 +213,8 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("Space+drag"), QStringLiteral("2D: pan (middle-drag too)")},
                   {QStringLiteral("Ctrl+E"), QStringLiteral("Center the 2D views on the selection")}};
         p.html = QStringLiteral("<p>In mouselook the mouse looks, left-click selects at the crosshair, and Z or Esc lets go.</p>"
-                                "<p>Out of mouselook, the 3D view takes the editing keys: D, H, G (slides along the floor), R (turns about "
-                                "the vertical), the mirror keys, and the arrows nudge. S sizing and Shift copying stay in the 2D views, "
+                                "<p>Out of mouselook, WASD / QE still fly, and the 3D view takes the editing keys too: H, G (slides along the "
+                                "floor), R (turns about the vertical), the mirror keys, and the arrows nudge. S sizing and Shift copying stay in the 2D views, "
                                 "where there's a clear edge to grab.</p>"
                                 "<p>View → 3D field of view sets how wide it sees (75° by default, up to 120°; View → Unlock goes further).</p>"
                                 "<p>View → Show Edges in 3D turns the black brush outlines off for a cleaner look; selected brushes keep "

@@ -2,6 +2,12 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.13.4
+
+- **WASD / QE fly the 3D camera again whenever the 3D view has the keys**, in mouselook or not
+  (0.12 had limited them to mouselook). D in the 3D view flies; D deselects in the 2D views, and
+  Ctrl+D anywhere. The arrows still nudge in 3D.
+
 ## 0.13.3
 
 - **The Select button is split in two.** The left half (or 1) is point and click: click selects,
