@@ -496,6 +496,8 @@ pub struct Editor {
     pub nd_intensity: f32,
     pub nd_width: f32,
     pub nd_speed: f32,
+    /// Rainbow flow: px for one whole rainbow
+    pub nd_flow: f32,
     /// Seconds since start, for animated nodraw
     pub time: f32,
     anim_acc: f32,
@@ -582,6 +584,7 @@ impl Editor {
             nd_intensity: 0.6,
             nd_width: 6.0,
             nd_speed: 0.25,
+            nd_flow: 72.0,
             time: 0.0,
             anim_acc: 0.0,
             shift_hold: None,
@@ -2959,6 +2962,72 @@ impl Editor {
         }
         let n = ids.len();
         self.message = Some(format!("Pasted {} brush{}: G moves them", n, if n == 1 { "" } else { "es" }));
+        Ok(n)
+    }
+
+    /// How high the selection sits above whatever is under it (the floor, a
+    /// table…): saved with a prefab so it can land at the same height again.
+    pub fn selection_lift(&self) -> f32 {
+        let Some((lo, hi)) = self.doc.selection_bounds() else { return 0.0 };
+        let c = (lo + hi) * 0.5;
+        let floor = self.surface_below(c.x, c.y, lo.z - 0.01);
+        (lo.z - floor).max(0.0)
+    }
+
+    /// Where a prefab dropped at (x, y) in view `id` goes: its bottom center.
+    /// In the 3D view and the top view it stands on the surface under the
+    /// mouse (`lift` higher); in the front and side views it's where the mouse
+    /// is, its depth unchanged (`None` there for that axis).
+    fn prefab_target(&self, id: usize, x: f32, y: f32, lift: f32) -> (V3, [bool; 3]) {
+        if id == 0 {
+            let mut b = self.place_base_3d(x, y);
+            b.z += lift;
+            return (b, [true, true, true]);
+        }
+        let v = self.view(id);
+        let (ha, va, _) = v.kind.axes();
+        let (wh, wv) = v.to_world(x, y);
+        let mut b = V3::default();
+        b.set(ha, wh);
+        b.set(va, wv);
+        let mut use_axis = [false; 3];
+        use_axis[ha] = true;
+        use_axis[va] = true;
+        if v.kind == ViewKind::Top {
+            b.z = self.surface_below(b.x, b.y, 1.0e5) + lift;
+            use_axis[2] = true;
+        } else {
+            b.set(va, self.snap(wv));
+        }
+        (b, use_axis)
+    }
+
+    /// Place a prefab (clip text): in view `at` (id, x, y) on what's under the
+    /// mouse, else under the last mouse position, else where it was saved.
+    /// `lift`: keep its height above the floor (Some) or sit on the surface.
+    pub fn place_prefab(&mut self, text: &str, at: Option<(usize, f32, f32)>, lift: Option<f32>) -> Result<usize, String> {
+        let at = at.or(self.hover);
+        // where it goes, worked out before it's there to get in the way
+        let target = at.filter(|(id, _, _)| *id <= 3).map(|(id, x, y)| self.prefab_target(id, x, y, lift.unwrap_or(0.0)));
+        let n = self.paste(text, false)?;
+        if let (Some((base, use_axis)), Some((lo, hi))) = (target, self.doc.selection_bounds()) {
+            let mut d = V3::default();
+            for a in 0..3 {
+                if !use_axis[a] {
+                    continue;
+                }
+                let want = if a == 2 { base.z } else { self.snap(base.get(a) - (hi.get(a) - lo.get(a)) * 0.5) };
+                d.set(a, want - lo.get(a));
+            }
+            let orig = self.doc.selected_brushes();
+            let mut changed = true;
+            self.translate_brushes(&orig, d, &mut changed);
+            if let Some(b) = self.doc.selection_bounds() {
+                self.work = b;
+                self.ripple = Some((b, self.time));
+            }
+        }
+        self.message = Some(format!("Placed {} brush{}: G moves them", n, if n == 1 { "" } else { "es" }));
         Ok(n)
     }
 
@@ -5613,6 +5682,45 @@ mod tests {
         // one undo takes a paste back
         f.command(cmd::UNDO);
         assert_eq!(f.doc.brushes.len(), 3);
+    }
+
+    #[test]
+    fn prefabs_land_on_the_surface_keeping_their_height() {
+        // a shelf hanging 32 units above a floor, saved as a prefab
+        let mut e = editor();
+        e.doc.add_brush(v3(-512.0, -512.0, -16.0), v3(512.0, 512.0, 0.0));
+        let shelf = e.doc.add_brush(v3(0.0, 0.0, 32.0), v3(32.0, 64.0, 40.0));
+        e.doc.selection = vec![shelf];
+        assert_eq!(e.selection_lift(), 32.0);
+        let text = crate::io::write_clip(&e, "");
+        // another model with a table 48 high at (256, 256)
+        let mut f = editor();
+        f.doc.add_brush(v3(-512.0, -512.0, -16.0), v3(512.0, 512.0, 0.0));
+        f.doc.add_brush(v3(192.0, 192.0, 0.0), v3(320.0, 320.0, 48.0));
+        // dropped in the top view on the table, keeping its height: 48 + 32
+        let p = sp(&f, 1, 256.0, 256.0);
+        f.place_prefab(&text, Some((1, p.0, p.1)), Some(32.0)).unwrap();
+        let (lo, hi) = f.doc.selection_bounds().unwrap();
+        assert_eq!(lo.z, 80.0, "{lo:?}");
+        assert!(((lo.x + hi.x) * 0.5 - 256.0).abs() <= 16.0 && ((lo.y + hi.y) * 0.5 - 256.0).abs() <= 16.0, "{lo:?} {hi:?}");
+        assert_eq!(hi.z - lo.z, 8.0, "same shape");
+        // without keeping the height it sits on the table (beside the first one)
+        let p2 = sp(&f, 1, 300.0, 300.0);
+        f.place_prefab(&text, Some((1, p2.0, p2.1)), None).unwrap();
+        assert_eq!(f.doc.selection_bounds().unwrap().0.z, 48.0);
+        // off the table, on the floor
+        let q = sp(&f, 1, -256.0, -256.0);
+        f.place_prefab(&text, Some((1, q.0, q.1)), Some(32.0)).unwrap();
+        assert_eq!(f.doc.selection_bounds().unwrap().0.z, 32.0);
+        // the front view puts its bottom where the mouse is, depth unchanged
+        let r = sp(&f, 2, 100.0, 64.0);
+        f.place_prefab(&text, Some((2, r.0, r.1)), Some(32.0)).unwrap();
+        let (lo, _) = f.doc.selection_bounds().unwrap();
+        assert_eq!((lo.x, lo.z), (0.0, 64.0), "{lo:?}");
+        // one undo per placement
+        let n = f.doc.brushes.len();
+        f.command(cmd::UNDO);
+        assert_eq!(f.doc.brushes.len(), n - 1);
     }
 
     #[test]

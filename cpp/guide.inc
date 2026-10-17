@@ -367,6 +367,29 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("compiling"), QStringLiteral("textures")};
     }
     {
+        GuidePage &p = page(QStringLiteral("prefabs"), GD, QStringLiteral("Prefabs"),
+                            QStringLiteral("prefab prefabs reuse library furniture save selection drop drag place keep height floor shared project"));
+        p.html = QStringLiteral("<p>A prefab is a set of brushes you've saved to use again: a window, a shelf, a whole room. Select the "
+                                "brushes and use <b>Save Selection as Prefab…</b> (on the Prefabs tab or in the Edit menu): give it a name, "
+                                "a folder if you like (<tt>Furniture/Kitchen</tt>), and where it goes.</p>"
+                                "<p>To use one, <b>drag it from the Prefabs tab into a view</b>, or double-click it to drop it under the mouse. "
+                                "It arrives selected, so G moves it straight away; one undo takes it back.</p>");
+        p.subs = {{QStringLiteral("Shared or this project"), QStringLiteral("<p><b>Shared</b> prefabs work in every project: they're kept in "
+                                                                            "~/.local/share/bonk/prefabs with copies of their textures, which are "
+                                                                            "copied into a project the first time you place one there. "
+                                                                            "<b>This project</b>'s prefabs live in the project's Prefabs folder and "
+                                                                            "use its textures. The tab shows both.</p>")},
+                  {QStringLiteral("Keep height above floor"), QStringLiteral("<p>On (the default), a prefab remembers how high it was above "
+                                                                             "whatever was under it when you saved it: a shelf saved 32 units up "
+                                                                             "lands 32 units above the floor or table you drop it on. Off, it sits "
+                                                                             "right on the surface. In the 3D and top views it lands on what's under "
+                                                                             "the mouse; in the front and side views it goes where the mouse is.</p>")},
+                  {QStringLiteral("Organizing"), QStringLiteral("<p>Right-click a prefab to rename it, move it to another folder, retake its "
+                                                                "thumbnail, show it in your file manager or delete it. The filter box finds "
+                                                                "prefabs by name or folder; the Size slider sets the thumbnail size.</p>")}};
+        p.see = {QStringLiteral("moving"), QStringLiteral("textures")};
+    }
+    {
         GuidePage &p = page(QStringLiteral("groups"), GD, QStringLiteral("Layers & Groups"), QStringLiteral("layer group ungroup ignore visual collision origin ghost"));
         p.keys = {{QStringLiteral("Ctrl+G"), QStringLiteral("Group the selection (groups can hold groups)")},
                   {QStringLiteral("Ctrl+U"), QStringLiteral("Ungroup one level")},
@@ -483,14 +506,22 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("compiling"), QStringLiteral("projects")};
     }
     {
-        GuidePage &p = page(QStringLiteral("settings"), GD, QStringLiteral("Settings"), QStringLiteral("settings preferences interface size compact nodraw background colors hammer keys"));
+        GuidePage &p = page(QStringLiteral("settings"), GD, QStringLiteral("Settings"),
+                            QStringLiteral("settings preferences interface size compact low resolution pixel font bonk pixel nodraw stripe rainbow background colors hammer keys tabs"));
         p.keys = {{QStringLiteral("Ctrl+Shift+,"), QStringLiteral("Configure Bonk!")}};
-        p.html = QStringLiteral("<p>Changes preview live; Cancel puts everything back.</p>");
-        p.subs = {{QStringLiteral("Interface size"), QStringLiteral("<p>Auto makes the interface compact on screens under 1440p (a Steam Deck or a "
-                                                                    "1366×768 laptop) and regular above; or pick Compact or Regular. Takes effect "
-                                                                    "after a restart.</p>")},
+        p.html = QStringLiteral("<p>Settings come in tabs: <b>Editing</b>, <b>Tools & Keys</b>, <b>Appearance</b>, <b>Garry's Mod</b> and "
+                                "<b>Advanced</b> (the budget limits). It opens on the tab you used last. Changes preview live; Cancel puts "
+                                "everything back.</p>");
+        p.subs = {{QStringLiteral("Interface size"), QStringLiteral("<p>Appearance → Interface size. Auto makes the interface compact on screens under "
+                                                                    "1440p and regular above. <b>Compact (Low Resolution)</b> goes further for small "
+                                                                    "screens: tighter panels and small text without smoothing, so every letter lands on "
+                                                                    "whole pixels. Pick the font: your system font (6 to 11 px) or <b>Bonk Pixel</b>, "
+                                                                    "Bonk's own pixel font, crisp at 6, 12 or 18 px. The preview shows it at actual size "
+                                                                    "and magnified. Takes effect after a restart.</p>")},
                   {QStringLiteral("Nodraw look"), QStringLiteral("<p>Nodraw faces get stripes: a solid color, an RGB cycle, or a rainbow flow, with "
-                                                                 "intensity, width and speed. They're hidden in the 2D views unless you ask for them.</p>")},
+                                                                 "intensity and speed. <b>Stripe length</b> sets how long each stripe is, and the gap "
+                                                                 "after it, so longer bars come with longer gaps. <b>Rainbow flow length</b> sets how far "
+                                                                 "one whole rainbow stretches. Stripes are hidden in the 2D views unless you ask for them.</p>")},
                   {QStringLiteral("Background & grid"), QStringLiteral("<p>Presets from Hammer Black to Paper, or any color from the wheel; the grid "
                                                                        "adapts to stay readable.</p>")}};
         p.see = {QStringLiteral("tools")};
@@ -527,7 +558,7 @@ public:
         hint = new QLabel;
         hint->setWordWrap(true);
         QFont hf = hint->font();
-        hf.setPointSizeF(hf.pointSizeF() * 0.85);
+        hf = uiScaled(hf, 0.85);
         hint->setFont(hf);
         hint->setStyleSheet(QStringLiteral("color: palette(placeholder-text)"));
         lv->addWidget(hint);

@@ -39,13 +39,14 @@ out vec4 o_col;
 // style 0 solid, 1 RGB cycle (all stripes one hue, cycling), 2 rainbow flow.
 uniform vec4 u_nd;
 uniform vec3 u_nd_col;
+uniform float u_nd_flow; // rainbow flow: px per whole rainbow
 vec3 nd_hsv(float h) {
     vec3 k = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
     return mix(vec3(1.0), k, 0.85);
 }
 vec3 nd_colour() {
     float d = gl_FragCoord.x + gl_FragCoord.y;
-    if (u_nd.x > 1.5) return nd_hsv(fract(d / (u_nd.z * 12.0) - u_nd.w));
+    if (u_nd.x > 1.5) return nd_hsv(fract(d / max(u_nd_flow, 1.0) - u_nd.w));
     if (u_nd.x > 0.5) return nd_hsv(fract(u_nd.w));
     return u_nd_col;
 }
@@ -102,13 +103,14 @@ out vec4 o_col;
 // style 0 solid, 1 RGB cycle (all stripes one hue, cycling), 2 rainbow flow.
 uniform vec4 u_nd;
 uniform vec3 u_nd_col;
+uniform float u_nd_flow; // rainbow flow: px per whole rainbow
 vec3 nd_hsv(float h) {
     vec3 k = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
     return mix(vec3(1.0), k, 0.85);
 }
 vec3 nd_colour() {
     float d = gl_FragCoord.x + gl_FragCoord.y;
-    if (u_nd.x > 1.5) return nd_hsv(fract(d / (u_nd.z * 12.0) - u_nd.w));
+    if (u_nd.x > 1.5) return nd_hsv(fract(d / max(u_nd_flow, 1.0) - u_nd.w));
     if (u_nd.x > 0.5) return nd_hsv(fract(u_nd.w));
     return u_nd_col;
 }
@@ -150,6 +152,7 @@ struct Prog {
     alpha: i32,
     nd: i32,
     nd_col: i32,
+    nd_flow: i32,
     anim: i32,
     pulse: i32,
 }
@@ -165,7 +168,7 @@ pub struct Renderer {
     /// GL textures uploaded from the texture store: name -> (gl id, generation)
     textures: RefCell<HashMap<String, (u32, u64)>>,
     /// Nodraw look for this frame: (style, intensity, width, phase), color
-    nd: std::cell::Cell<([f32; 4], [f32; 3])>,
+    nd: std::cell::Cell<([f32; 4], [f32; 3], f32)>,
 }
 
 /// Floats per lit vertex: position, normal, rgba, stripe flag, uv.
@@ -341,18 +344,19 @@ impl Renderer {
         let lit = program(&gl, LIT_VS, LIT_FS)?;
         let (vao_flat, vbo_flat) = make_vao(&gl, &[3, 4]);
         let (vao_lit, vbo_lit) = make_vao(&gl, &[3, 3, 4, 1, 2]);
-        Ok(Renderer { gl, flat, lit, vao_flat, vbo_flat, vao_lit, vbo_lit, textures: RefCell::new(HashMap::new()), nd: std::cell::Cell::new(([0.0, 0.6, 6.0, 0.0], [0.86, 0.74, 0.25])) })
+        Ok(Renderer { gl, flat, lit, vao_flat, vbo_flat, vao_lit, vbo_lit, textures: RefCell::new(HashMap::new()), nd: std::cell::Cell::new(([0.0, 0.6, 6.0, 0.0], [0.86, 0.74, 0.25], 72.0)) })
     }
 
     fn set_nodraw_look(&self, ed: &Editor) {
-        self.nd.set(([ed.nd_style as f32, ed.nd_intensity, ed.nd_width.max(1.0), ed.time * ed.nd_speed], ed.nd_col));
+        self.nd.set(([ed.nd_style as f32, ed.nd_intensity, ed.nd_width.max(1.0), ed.time * ed.nd_speed], ed.nd_col, ed.nd_flow));
     }
 
     unsafe fn nd_uniforms(&self, p: &Prog) {
         let g = &self.gl;
-        let (a, c) = self.nd.get();
+        let (a, c, flow) = self.nd.get();
         (g.Uniform4f)(p.nd, a[0], a[1], a[2], a[3]);
         (g.Uniform3f)(p.nd_col, c[0], c[1], c[2]);
+        (g.Uniform1f)(p.nd_flow, flow);
     }
 
     /// GL texture for a material, uploading (or re-uploading) it from the
@@ -1297,5 +1301,5 @@ unsafe fn program(g: &Gl, vs: &str, fs: &str) -> Result<Prog, String> {
         let c = CString::new(n).unwrap();
         (g.GetUniformLocation)(p, c.as_ptr())
     };
-    Ok(Prog { id: p, mvp: loc("u_mvp"), stripes: loc("u_stripes"), use_tex: loc("u_use_tex"), tex: loc("u_tex"), alpha: loc("u_alpha"), nd: loc("u_nd"), nd_col: loc("u_nd_col"), anim: loc("u_anim"), pulse: loc("u_pulse") })
+    Ok(Prog { id: p, mvp: loc("u_mvp"), stripes: loc("u_stripes"), use_tex: loc("u_use_tex"), tex: loc("u_tex"), alpha: loc("u_alpha"), nd: loc("u_nd"), nd_col: loc("u_nd_col"), nd_flow: loc("u_nd_flow"), anim: loc("u_anim"), pulse: loc("u_pulse") })
 }

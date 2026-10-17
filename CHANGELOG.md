@@ -2,6 +2,33 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.17.0 — "Interface"
+
+### Prefabs
+- **A Prefabs tab** beside Layers and the Texture Picker: brush sets to reuse, with thumbnails,
+  in folders. **Save Selection as Prefab…** (on the tab, or in the Edit menu) saves the selected
+  brushes with a name and a folder, either **Shared** (every project, in
+  `~/.local/share/bonk/prefabs`, carrying copies of its textures) or for **this project only**
+  (its `Prefabs` folder). The tab shows both.
+- **Drag a prefab into a view** to place it, or double-click it to drop it under the mouse. In the
+  3D and top views it lands on what's under the mouse; in the front and side views it goes where
+  the mouse is. It arrives selected, one undo per placement, and textures it needs are copied
+  into the project.
+- **Keep height above floor** (on by default): a shelf saved 32 units above the floor lands 32
+  units above the surface you drop it on. Off, it sits right on the surface.
+- Right-click to rename, move to a folder, retake the thumbnail, show in the file manager or
+  delete. A filter box and a size slider too.
+
+### Settings
+- **In tabs:** Editing, Tools & Keys, Appearance, Garry's Mod and Advanced (budget limits). It
+  opens on the tab you used last.
+- **Compact (Low Resolution)** (was "Compact"): tighter panels and small text without smoothing.
+  Pick the font: your system font at 6 to 11 px, or **Bonk Pixel**, a pixel font drawn for Bonk
+  (built in, 11 KB), crisp at 6, 12 or 18 px. A preview shows it at actual size and ×2.
+- **Nodraw look:** a **Stripe length** slider (2 to 48 px; each stripe and the gap after it) in
+  place of Thin / Medium / Chunky, and a **Rainbow flow length** slider for how far one whole
+  rainbow stretches.
+
 ## 0.16.4
 
 - **Fix:** dragging categories in the Spawnlist Editor only moved them on screen; the spawnlist

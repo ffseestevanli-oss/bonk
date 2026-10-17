@@ -663,7 +663,7 @@ private:
             if (i.data(HeaderRole).toBool()) {
                 QFont f = o.font;
                 f.setBold(true);
-                f.setPointSizeF(f.pointSizeF() * 1.5);
+                f = uiScaled(f, 1.5);
                 p->setFont(f);
                 p->setPen(sel ? o.palette.highlight().color().lighter(150) : QColor(235, 235, 240));
                 p->drawText(r.adjusted(6, 0, -6, -4), Qt::AlignLeft | Qt::AlignBottom, i.data(Qt::DisplayRole).toString());

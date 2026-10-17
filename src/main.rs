@@ -324,6 +324,34 @@ pub extern "C" fn bonk_paste(text: *const c_char, at_mouse: c_int) -> u32 {
     })
 }
 
+/// The selection as prefab text (the clipboard format, textures from `source`), "" if nothing is selected.
+#[no_mangle]
+pub extern "C" fn bonk_prefab_text(source: *const c_char) -> *const c_char {
+    let src = path_arg(source).unwrap_or_default();
+    let t = with_ed(|ed| if ed.doc.selection.is_empty() { String::new() } else { io::write_clip(ed, &src) });
+    ret_str(t)
+}
+
+/// How high the selection sits above what's under it.
+#[no_mangle]
+pub extern "C" fn bonk_selection_lift() -> f32 {
+    with_ed(|ed| ed.selection_lift())
+}
+
+/// Place prefab text in `view` at (x, y) (view -1: under the last mouse position).
+/// `keep` keeps it `lift` units above the surface it lands on.
+#[no_mangle]
+pub extern "C" fn bonk_place_prefab(text: *const c_char, view: c_int, x: f32, y: f32, keep: c_int, lift: f32) -> u32 {
+    let t = path_arg(text).unwrap_or_default();
+    with_ed(|ed| {
+        let at = (view >= 0).then_some((view as usize, x, y));
+        if let Err(e) = ed.place_prefab(&t, at, (keep != 0).then_some(lift)) {
+            ed.message = Some(format!("Can't place it: {e}"));
+        }
+        editor::flags::ALL | editor::flags::TOOL
+    })
+}
+
 /// Tools → Find Overlapping Brushes: one line per pair, "a b volume duplicate".
 #[no_mangle]
 pub extern "C" fn bonk_overlap_scan() -> *const c_char {
@@ -489,6 +517,16 @@ pub extern "C" fn bonk_model_bounds(path: *const c_char, out: *mut f32) -> c_int
         unsafe { std::ptr::copy_nonoverlapping([l.x, l.y, l.z, h.x, h.y, h.z].as_ptr(), out, 6) };
     }
     0
+}
+
+/// Bonk Pixel, the low-resolution interface font (a TrueType file), built into the binary.
+#[no_mangle]
+pub extern "C" fn bonk_pixel_font(len: *mut c_int) -> *const u8 {
+    static FONT: &[u8] = include_bytes!("../assets/fonts/BonkPixel.ttf");
+    if !len.is_null() {
+        unsafe { *len = FONT.len() as c_int };
+    }
+    FONT.as_ptr()
 }
 
 /// Frame the saved model at `path` for a spawn icon seen from yaw / pitch with
@@ -712,10 +750,16 @@ pub extern "C" fn bonk_set_nodraw_look(style: c_int, r: f32, g: f32, b: f32, int
         ed.nd_style = style.clamp(0, 2);
         ed.nd_col = [r, g, b];
         ed.nd_intensity = intensity.clamp(0.0, 1.0);
-        ed.nd_width = width.clamp(2.0, 32.0);
+        ed.nd_width = width.clamp(2.0, 48.0);
         ed.nd_speed = speed.clamp(0.0, 4.0);
         ed.nodraw_2d = show_2d != 0;
     });
+}
+
+/// Rainbow flow: how many pixels one whole rainbow stretches over.
+#[no_mangle]
+pub extern "C" fn bonk_set_nodraw_flow(px: f32) {
+    with_ed(|ed| ed.nd_flow = px.clamp(12.0, 600.0));
 }
 
 /// The selection box takes brushes it touches (1) or only ones fully inside (0).

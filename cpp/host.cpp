@@ -126,6 +126,10 @@ unsigned bonk_focus_lost(int view);
 unsigned bonk_tick(float dt);
 unsigned bonk_command(int cmd);
 int bonk_tool();
+const char *bonk_prefab_text(const char *source);
+float bonk_selection_lift();
+unsigned bonk_place_prefab(const char *text, int view, float x, float y, int keep, float lift);
+const unsigned char *bonk_pixel_font(int *len);
 int bonk_render_thumb(int view, const char *path, float yaw, float pitch, float dist, float tx, float ty, float tz, float fov, int w, int h);
 int bonk_model_bounds(const char *path, float *out);
 int bonk_model_fit(const char *path, float yaw, float pitch, float fov, float aspect, float *out);
@@ -171,6 +175,7 @@ void bonk_set_ghost_opacity(float a);
 int bonk_editing_collision();
 int bonk_view_flags();
 void bonk_set_nodraw_look(int style, float r, float g, float b, float intensity, float width, float speed, int show2d);
+void bonk_set_nodraw_flow(float px);
 void bonk_set_sel_touch(int on);
 void bonk_budget(int *out);
 float bonk_grid();
@@ -228,6 +233,43 @@ namespace {
 const char *kAppName = "Bonk! Model Prop-inator!";
 /// Compact UI (screens under 1440p unless Settings says otherwise)
 bool gCompact = false;
+/// Low-resolution mode (Settings → Appearance → Compact (Low Resolution)): small text without
+/// smoothing, in the system font or Bonk Pixel, gLowPx pixels tall.
+bool gLowRes = false, gPixelFont = false;
+int gLowPx = 6;
+QString gPixelFamily; // "Bonk Pixel", once registered
+
+/// `f` at `rel` times the normal text size. In low-resolution mode that's a whole number of
+/// pixels (whole multiples for Bonk Pixel, so it stays crisp); otherwise it scales the point size.
+QFont uiScaled(QFont f, double rel) {
+    if (gLowRes) {
+        f.setPixelSize(gPixelFont ? gLowPx * std::max(1, int(std::lround(rel))) : std::max(6, int(std::lround(gLowPx * rel))));
+        return f;
+    }
+    if (f.pointSizeF() > 0) f.setPointSizeF(f.pointSizeF() * rel);
+    else if (f.pixelSize() > 0) f.setPixelSize(std::max(6, int(std::lround(f.pixelSize() * rel))));
+    return f;
+}
+/// A compact size, or a smaller one in low-resolution mode.
+int lowOr(int compact, int low) { return gLowRes ? low : compact; }
+/// The system font, smoothed: for text drawn into icons and cursors, whatever the interface uses.
+QFont smoothFont() {
+    QFont f = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+    f.setStyleStrategy(QFont::PreferAntialias);
+    return f;
+}
+/// `f` at `px` pixels as the regular interface draws it (≈12 px text), scaled for low resolution.
+QFont uiPx(QFont f, int px) {
+    if (gLowRes) return uiScaled(f, px / 12.0);
+    f.setPixelSize(px);
+    return f;
+}
+/// `f` at `pt` points as the regular interface draws it (≈9 pt text), scaled for low resolution.
+QFont uiPt(QFont f, double pt) {
+    if (gLowRes) return uiScaled(f, pt / 9.0);
+    f.setPointSizeF(pt);
+    return f;
+}
 constexpr double kPi = 3.14159265358979323846;
 
 // Keep in sync with src/editor.rs
@@ -307,12 +349,16 @@ struct Prefs {
     int fov = 75;                // 3D view field of view
     bool fovUnlocked = false;    // allow more than 120°
     bool askResize = true;       // ask to shrink oversized textures when they're added
-    int density = 0;             // 0 auto (compact under 1440p), 1 compact, 2 regular
+    int density = 0;             // 0 auto (compact under 1440p), 1 compact (low resolution), 2 regular
+    int lowFont = 1;             // low resolution: 0 the system font without smoothing, 1 Bonk Pixel
+    int lowPx = 6;               // low resolution: text size in px (Bonk Pixel: 6, 12 or 18)
+    int settingsTab = 0;         // the Settings tab last open
     // Nodraw look
     int ndStyle = 0;             // 0 solid, 1 RGB cycle, 2 rainbow flow
     QColor ndColor = QColor(219, 189, 64);
     int ndIntensity = 60;        // percent
-    int ndWidth = 6;             // stripe width in px
+    int ndWidth = 6;             // stripe length in px (a stripe and the gap after it are each this long)
+    int ndFlow = 72;             // Rainbow flow: px for one full rainbow
     int ndSpeed = 25;            // percent of 1 cycle/second
     bool nd2d = false;           // nodraw stripes in the 2D views
     // Budget limits (GMod studiomdl defaults)
@@ -351,11 +397,15 @@ struct Prefs {
         fov = qBound(30, s.value("view/fov", 75).toInt(), fovUnlocked ? 170 : 120);
         askResize = s.value("textures/askResize", true).toBool();
         density = s.value("view/density", 0).toInt();
+        lowFont = s.value("view/lowFont", 1).toInt();
+        lowPx = s.value("view/lowPx", 6).toInt();
+        settingsTab = s.value("view/settingsTab", 0).toInt();
         ndStyle = s.value("nodraw/style", 0).toInt();
         ndColor = QColor(s.value("nodraw/color", "#dbbd40").toString());
         if (!ndColor.isValid()) ndColor = QColor(219, 189, 64);
         ndIntensity = s.value("nodraw/intensity", 60).toInt();
         ndWidth = s.value("nodraw/width", 6).toInt();
+        ndFlow = s.value("nodraw/flow", 72).toInt();
         ndSpeed = s.value("nodraw/speed", 25).toInt();
         nd2d = s.value("nodraw/show2d", false).toBool();
         budTris = s.value("budget/trianglesPerMaterial", 10922).toInt();
@@ -402,10 +452,14 @@ struct Prefs {
         s.setValue("view/fovUnlocked", fovUnlocked);
         s.setValue("textures/askResize", askResize);
         s.setValue("view/density", density);
+        s.setValue("view/lowFont", lowFont);
+        s.setValue("view/lowPx", lowPx);
+        s.setValue("view/settingsTab", settingsTab);
         s.setValue("nodraw/style", ndStyle);
         s.setValue("nodraw/color", ndColor.name());
         s.setValue("nodraw/intensity", ndIntensity);
         s.setValue("nodraw/width", ndWidth);
+        s.setValue("nodraw/flow", ndFlow);
         s.setValue("nodraw/speed", ndSpeed);
         s.setValue("nodraw/show2d", nd2d);
         s.setValue("budget/trianglesPerMaterial", budTris);
@@ -433,6 +487,7 @@ struct Prefs {
         bonk_set_simplify_detail(float(simplifyDetail));
         bonk_set_nodraw_look(ndStyle, float(ndColor.redF()), float(ndColor.greenF()), float(ndColor.blueF()), ndIntensity / 100.0f,
                              float(ndWidth), ndSpeed / 100.0f, nd2d);
+        bonk_set_nodraw_flow(float(ndFlow));
     }
     bool lightBg() const { return 0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF() > 0.5; }
 };
@@ -679,7 +734,7 @@ public:
         headline->setWordWrap(true);
         QFont hf = headline->font();
         hf.setBold(true);
-        hf.setPointSizeF(hf.pointSizeF() * 1.15);
+        hf = uiScaled(hf, 1.15);
         headline->setFont(hf);
         v->addWidget(headline);
         summary = new QLabel;
@@ -762,15 +817,28 @@ public:
     SettingsDialog(Prefs &prefs, std::function<void()> onChanged, QWidget *parent)
         : QDialog(parent), p(prefs), original(prefs), changed(std::move(onChanged)) {
         setWindowTitle(QStringLiteral("Configure Bonk!"));
-        // scrolls on short screens (1366×768), buttons stay put
+        // tabs, each scrolling on short screens (1366×768); the buttons stay put
         auto *outer = new QVBoxLayout(this);
-        auto *scroll = new QScrollArea;
-        scroll->setWidgetResizable(true);
-        scroll->setFrameShape(QFrame::NoFrame);
-        auto *inner = new QWidget;
-        scroll->setWidget(inner);
-        outer->addWidget(scroll, 1);
-        auto *root = new QVBoxLayout(inner);
+        tabs = new QTabWidget;
+        outer->addWidget(tabs, 1);
+        QList<QWidget *> pages;
+        auto page = [&](const QString &name) {
+            auto *scroll = new QScrollArea;
+            scroll->setWidgetResizable(true);
+            scroll->setFrameShape(QFrame::NoFrame);
+            scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+            auto *inner = new QWidget;
+            scroll->setWidget(inner);
+            tabs->addTab(scroll, name);
+            pages << inner;
+            auto *l = new QVBoxLayout(inner);
+            return l;
+        };
+        QVBoxLayout *editTab = page(QStringLiteral("Editing"));
+        QVBoxLayout *toolsTab = page(QStringLiteral("Tools && Keys"));
+        QVBoxLayout *lookTab = page(QStringLiteral("Appearance"));
+        QVBoxLayout *gmodTab = page(QStringLiteral("Garry's Mod"));
+        QVBoxLayout *advTab = page(QStringLiteral("Advanced"));
 
         // Editing
         auto *editing = new QGroupBox(QStringLiteral("Editing"));
@@ -809,7 +877,8 @@ public:
         QObject::connect(joinExact, &QCheckBox::toggled, this, [this](bool v) { if (!syncing) { p.joinExactOnly = v; changed(); } });
         ef->addRow(swapAlt);
         ef->addRow(QStringLiteral("Rotation snaps in steps of"), rotSnap);
-        root->addWidget(editing);
+        editTab->addWidget(editing);
+        editTab->addStretch(1);
 
         // Tools & keys
         auto *toolsBox = new QGroupBox(QStringLiteral("Tools && keys"));
@@ -826,10 +895,6 @@ public:
         toolLayout = new QComboBox;
         toolLayout->addItems({QStringLiteral("Icons"), QStringLiteral("List"), QStringLiteral("Compact list")});
         tf->addRow(QStringLiteral("Tool panel layout"), toolLayout);
-        density = new QComboBox;
-        density->addItems({QStringLiteral("Auto (compact under 1440p)"), QStringLiteral("Compact"), QStringLiteral("Regular")});
-        density->setToolTip(QStringLiteral("Takes effect the next time Bonk starts"));
-        tf->addRow(QStringLiteral("Interface size (after restart)"), density);
         tf->addRow(rememberBisect);
         tf->addRow(hammerKeys);
         applyOnClick = new QCheckBox(QStringLiteral("Texture Picker: clicking a swatch applies it right away"));
@@ -844,7 +909,28 @@ public:
         askResize->setToolTip(QStringLiteral("Textures imported from a Source game or addon are never asked about.\n"
                                              "Compiling converts whatever it needs without asking either way."));
         tf->addRow(askResize);
-        root->addWidget(toolsBox);
+        toolsTab->addWidget(toolsBox);
+        toolsTab->addStretch(1);
+
+        // Interface size (Appearance)
+        auto *uiBox = new QGroupBox(QStringLiteral("Interface size (after restart)"));
+        auto *uf = new QFormLayout(uiBox);
+        density = new QComboBox;
+        density->addItems({QStringLiteral("Auto (compact under 1440p)"), QStringLiteral("Compact (Low Resolution)"), QStringLiteral("Regular")});
+        density->setToolTip(QStringLiteral("Takes effect the next time Bonk starts.\n"
+                                           "Compact (Low Resolution): small, unsmoothed text and tighter panels, for small screens."));
+        uf->addRow(QStringLiteral("Size"), density);
+        lowFont = new QComboBox;
+        lowFont->addItem(QStringLiteral("System font, no smoothing"));
+        lowFont->addItem(QStringLiteral("Bonk Pixel"));
+        lowFont->setToolTip(QStringLiteral("Bonk Pixel is Bonk's own pixel font: crisp at 6, 12 and 18 px."));
+        lowPx = new QComboBox;
+        uf->addRow(QStringLiteral("Font"), lowFont);
+        uf->addRow(QStringLiteral("Text size"), lowPx);
+        lowPreview = new QLabel;
+        lowPreview->setToolTip(QStringLiteral("Actual size, then magnified ×2"));
+        uf->addRow(lowPreview);
+        lookTab->addWidget(uiBox);
 
         // Nodraw look
         auto *ndBox = new QGroupBox(QStringLiteral("Nodraw look"));
@@ -855,10 +941,16 @@ public:
         ndColor->setToolTip(QStringLiteral("Stripe color (Solid color style)"));
         ndIntensity = new QSlider(Qt::Horizontal);
         ndIntensity->setRange(0, 100);
-        ndWidth = new QComboBox;
-        ndWidth->addItem(QStringLiteral("Thin"), 4);
-        ndWidth->addItem(QStringLiteral("Medium"), 6);
-        ndWidth->addItem(QStringLiteral("Chunky"), 11);
+        ndWidth = new QSlider(Qt::Horizontal);
+        ndWidth->setRange(2, 48);
+        ndWidth->setToolTip(QStringLiteral("How long each stripe is, and the gap after it: longer bars, longer gaps"));
+        ndWidthLabel = new QLabel;
+        ndWidthLabel->setMinimumWidth(44);
+        ndFlow = new QSlider(Qt::Horizontal);
+        ndFlow->setRange(12, 600);
+        ndFlow->setToolTip(QStringLiteral("Rainbow flow: how far one whole rainbow stretches across the stripes"));
+        ndFlowLabel = new QLabel;
+        ndFlowLabel->setMinimumWidth(44);
         ndSpeed = new QSlider(Qt::Horizontal);
         ndSpeed->setRange(0, 200);
         ndSpeed->setToolTip(QStringLiteral("RGB cycle / Rainbow flow speed: slow drift to party mode"));
@@ -870,10 +962,17 @@ public:
         nf->addRow(QStringLiteral("Style"), ndStyle);
         nf->addRow(QStringLiteral("Color"), colRow);
         nf->addRow(QStringLiteral("Intensity"), ndIntensity);
-        nf->addRow(QStringLiteral("Stripe width"), ndWidth);
+        auto *wRow = new QHBoxLayout;
+        wRow->addWidget(ndWidth, 1);
+        wRow->addWidget(ndWidthLabel);
+        nf->addRow(QStringLiteral("Stripe length"), wRow);
+        auto *fRow = new QHBoxLayout;
+        fRow->addWidget(ndFlow, 1);
+        fRow->addWidget(ndFlowLabel);
+        nf->addRow(QStringLiteral("Rainbow flow length"), fRow);
         nf->addRow(QStringLiteral("Speed"), ndSpeed);
         nf->addRow(nd2d);
-        root->addWidget(ndBox);
+        lookTab->addWidget(ndBox);
 
         // Budget
         auto *budBox = new QGroupBox(QStringLiteral("Budget limits (Garry's Mod studiomdl)"));
@@ -890,7 +989,8 @@ public:
         bf->addRow(QStringLiteral("Vertices"), budVerts);
         bf->addRow(QStringLiteral("Materials"), budMats);
         bf->addRow(QStringLiteral("Collision pieces: yellow above"), budPieces);
-        root->addWidget(budBox);
+        advTab->addWidget(budBox);
+        advTab->addStretch(1);
 
         // Garry's Mod
         auto *gmBox = new QGroupBox(QStringLiteral("Garry's Mod && compiling"));
@@ -935,7 +1035,8 @@ public:
         });
         QObject::connect(launchGmod, &QCheckBox::toggled, this, [this](bool v) { if (!syncing) { p.launchGmod = v; changed(); } });
         QObject::connect(studiomdl, &QLineEdit::textChanged, this, [this](const QString &v) { if (!syncing) { p.studiomdl = v.trimmed(); changed(); } });
-        root->addWidget(gmBox);
+        gmodTab->addWidget(gmBox);
+        gmodTab->addStretch(1);
         QObject::connect(browse, &QPushButton::clicked, this, [this] {
             QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Garry's Mod folder (…/steamapps/common/GarrysMod)"),
                                                           gmodPath->text().isEmpty() ? QDir::homePath() : gmodPath->text());
@@ -959,7 +1060,7 @@ public:
         gl->addWidget(new QLabel(QStringLiteral("Intensity")));
         gl->addWidget(grid, 1);
         gl->addWidget(gridLabel);
-        root->addWidget(gridBox);
+        lookTab->addWidget(gridBox);
 
         // Background
         auto *bgBox = new QGroupBox(QStringLiteral("Background color"));
@@ -992,14 +1093,16 @@ public:
         customRow->addWidget(brightness);
         customRow->addLayout(side);
         bl->addLayout(customRow);
-        root->addWidget(bgBox);
+        lookTab->addWidget(bgBox);
+        lookTab->addStretch(1);
 
         auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::RestoreDefaults);
         outer->addWidget(buttons);
-        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        scroll->setMinimumWidth(inner->sizeHint().width() + scroll->verticalScrollBar()->sizeHint().width() + 4);
         {
-            QSize want = inner->sizeHint() + QSize(40, 60);
+            QSize want(0, 0);
+            for (QWidget *w : pages) want = want.expandedTo(w->sizeHint());
+            tabs->setMinimumWidth(want.width() + 30);
+            want += QSize(60, 110);
             const QRect avail = QGuiApplication::primaryScreen() ? QGuiApplication::primaryScreen()->availableGeometry() : QRect(0, 0, 1366, 768);
             resize(std::min(want.width(), avail.width() - 40), std::min(want.height(), avail.height() - 60));
         }
@@ -1019,10 +1122,35 @@ public:
         QObject::connect(budMats, &QSpinBox::valueChanged, this, [this](int v) { if (!syncing) { p.budMats = v; changed(); } });
         QObject::connect(budPieces, &QSpinBox::valueChanged, this, [this](int v) { if (!syncing) { p.budPieces = v; changed(); } });
         QObject::connect(toolLayout, &QComboBox::currentIndexChanged, this, [this](int i) { if (!syncing) { p.toolLayout = i; changed(); } });
-        QObject::connect(density, &QComboBox::currentIndexChanged, this, [this](int i) { if (!syncing) { p.density = i; changed(); } });
+        QObject::connect(density, &QComboBox::currentIndexChanged, this, [this](int i) {
+            if (syncing) return;
+            p.density = i;
+            showLow();
+            changed();
+        });
         QObject::connect(ndStyle, &QComboBox::currentIndexChanged, this, [this](int i) { if (!syncing) { p.ndStyle = i; showNd(); changed(); } });
         QObject::connect(ndIntensity, &QSlider::valueChanged, this, [this](int v) { if (!syncing) { p.ndIntensity = v; changed(); } });
-        QObject::connect(ndWidth, &QComboBox::currentIndexChanged, this, [this] { if (!syncing) { p.ndWidth = ndWidth->currentData().toInt(); changed(); } });
+        QObject::connect(ndWidth, &QSlider::valueChanged, this, [this](int v) {
+            ndWidthLabel->setText(QStringLiteral("%1 px").arg(v));
+            if (!syncing) { p.ndWidth = v; changed(); }
+        });
+        QObject::connect(ndFlow, &QSlider::valueChanged, this, [this](int v) {
+            ndFlowLabel->setText(QStringLiteral("%1 px").arg(v));
+            if (!syncing) { p.ndFlow = v; changed(); }
+        });
+        QObject::connect(lowFont, &QComboBox::currentIndexChanged, this, [this](int i) {
+            if (syncing) return;
+            p.lowFont = i;
+            showLow();
+            changed();
+        });
+        QObject::connect(lowPx, &QComboBox::currentIndexChanged, this, [this] {
+            if (syncing) return;
+            p.lowPx = lowPx->currentData().toInt();
+            showLow();
+            changed();
+        });
+        QObject::connect(tabs, &QTabWidget::currentChanged, this, [this](int i) { p.settingsTab = i; });
         QObject::connect(ndSpeed, &QSlider::valueChanged, this, [this](int v) { if (!syncing) { p.ndSpeed = v; changed(); } });
         QObject::connect(nd2d, &QCheckBox::toggled, this, [this](bool v) { if (!syncing) { p.nd2d = v; changed(); } });
         QObject::connect(ndColor, &QPushButton::clicked, this, [this] {
@@ -1039,6 +1167,7 @@ public:
             p.ndColor = d.ndColor;
             p.ndIntensity = d.ndIntensity;
             p.ndWidth = d.ndWidth;
+            p.ndFlow = d.ndFlow;
             p.ndSpeed = d.ndSpeed;
             load(p);
             changed();
@@ -1087,9 +1216,11 @@ private:
     Prefs &p;
     Prefs original;
     std::function<void()> changed;
-    QComboBox *toolLayout, *density, *ndStyle, *ndWidth;
+    QTabWidget *tabs;
+    QComboBox *toolLayout, *density, *ndStyle, *lowFont, *lowPx;
+    QLabel *lowPreview, *ndWidthLabel, *ndFlowLabel;
     QPushButton *ndColor;
-    QSlider *ndIntensity, *ndSpeed;
+    QSlider *ndIntensity, *ndSpeed, *ndWidth, *ndFlow;
     QCheckBox *nd2d, *selTouch, *exportAfter, *selWait, *axisLock, *askResize, *launchGmod, *joinExact;
     QLineEdit *studiomdl;
     QLineEdit *gmodPath;
@@ -1112,6 +1243,50 @@ private:
         return QIcon(px);
     }
 
+    /// The low-resolution choices: sizes that suit the font, and a preview of it.
+    void showLow(int px = -1) {
+        if (px < 0) px = p.lowPx;
+        const bool low = density->currentIndex() == 1, pixel = lowFont->currentIndex() == 1;
+        lowFont->setEnabled(low);
+        lowPx->setEnabled(low);
+        const bool was = syncing;
+        syncing = true;
+        lowPx->clear();
+        if (pixel) for (int px : {6, 12, 18}) lowPx->addItem(QStringLiteral("%1 px (×%2)").arg(px).arg(px / 6), px);
+        else for (int px = 6; px <= 11; ++px) lowPx->addItem(QStringLiteral("%1 px").arg(px), px);
+        int want = pixel ? std::clamp((px + 3) / 6 * 6, 6, 18) : std::clamp(px, 6, 11);
+        lowPx->setCurrentIndex(std::max(0, lowPx->findData(want)));
+        syncing = was;
+        // the preview: actual size, then ×2
+        QFont f = pixel && !gPixelFamily.isEmpty() ? QFont(gPixelFamily) : QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+        f.setPixelSize(lowPx->currentData().toInt());
+        f.setStyleStrategy(QFont::StyleStrategy(QFont::NoAntialias | QFont::PreferMatch));
+        f.setHintingPreference(pixel ? QFont::PreferNoHinting : QFont::PreferDefaultHinting);
+        const QStringList lines = {QStringLiteral("File  Edit  View  Tools — Compile Model…"), QStringLiteral("Grid 16 · 1,503 brushes · Layers × Budget")};
+        const QFontMetrics fm(f);
+        int w = 0;
+        for (const QString &l : lines) w = std::max(w, fm.horizontalAdvance(l));
+        QImage one(w + 8, fm.height() * lines.size() + 6, QImage::Format_RGB32);
+        one.fill(palette().color(QPalette::Base));
+        {
+            QPainter q(&one);
+            q.setFont(f);
+            q.setPen(palette().color(QPalette::Text));
+            for (int i = 0; i < lines.size(); ++i) q.drawText(4, 3 + fm.ascent() + i * fm.height(), lines[i]);
+        }
+        const QImage two = one.scaled(one.size() * 2, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+        QImage both(two.width(), one.height() + two.height() + 6, QImage::Format_RGB32);
+        both.fill(palette().color(QPalette::Window));
+        {
+            QPainter q(&both);
+            q.drawImage(0, 0, one);
+            q.drawImage(0, one.height() + 6, two);
+        }
+        lowPreview->setPixmap(QPixmap::fromImage(both));
+        lowPreview->setEnabled(low);
+        lowPreview->setVisible(low);
+    }
+
     void load(const Prefs &v) {
         syncing = true;
         nudge->setChecked(v.nudge);
@@ -1128,12 +1303,18 @@ private:
         budPieces->setValue(v.budPieces);
         toolLayout->setCurrentIndex(std::clamp(v.toolLayout, 0, 2));
         density->setCurrentIndex(std::clamp(v.density, 0, 2));
+        tabs->setCurrentIndex(std::clamp(v.settingsTab, 0, tabs->count() - 1));
         ndStyle->setCurrentIndex(std::clamp(v.ndStyle, 0, 2));
         ndIntensity->setValue(v.ndIntensity);
-        ndWidth->setCurrentIndex(std::max(0, ndWidth->findData(v.ndWidth)));
+        ndWidth->setValue(std::clamp(v.ndWidth, 2, 48));
+        ndWidthLabel->setText(QStringLiteral("%1 px").arg(ndWidth->value()));
+        ndFlow->setValue(std::clamp(v.ndFlow, 12, 600));
+        ndFlowLabel->setText(QStringLiteral("%1 px").arg(ndFlow->value()));
+        lowFont->setCurrentIndex(std::clamp(v.lowFont, 0, 1));
         ndSpeed->setValue(v.ndSpeed);
         nd2d->setChecked(v.nd2d);
         showNd();
+        showLow(v.lowPx);
         int i = rotSnap->findData(v.rotSnap);
         rotSnap->setCurrentIndex(i < 0 ? 1 : i);
         toolColor->setCurrentIndex(v.greyTools ? 1 : 0);
@@ -1237,6 +1418,9 @@ protected:
     void keyReleaseEvent(QKeyEvent *e) override;
     void focusOutEvent(QFocusEvent *e) override;
     void enterEvent(QEnterEvent *e) override;
+    void dragEnterEvent(QDragEnterEvent *e) override;
+    void dragMoveEvent(QDragMoveEvent *e) override;
+    void dropEvent(QDropEvent *e) override;
 };
 
 // ------------------------------------------------------------------ tool panel
@@ -1315,14 +1499,12 @@ protected:
         if (!px.isNull()) {
             p.drawPixmap(iconRect, px, QRectF(px.rect()));
         } else if (!wide) {
-            QFont f = font();
-            f.setPixelSize(9);
+            QFont f = uiPx(font(), 9);
             p.setFont(f);
             p.drawText(r.adjusted(2, 2, -2, -12), Qt::AlignCenter | Qt::TextWordWrap, label);
         }
         if (wide) {
-            QFont f = font();
-            f.setPixelSize(std::clamp(int(height() * 0.29), 10, 13));
+            QFont f = uiPx(font(), std::clamp(int(height() * 0.29), 10, 13));
             f.setBold(active);
             p.setFont(f);
             QRectF tr(iconRect.right() + height() * 0.18, 0, width() - iconRect.right() - height() * 0.18 - 18 - (corner ? corner->width() + 4 : 0), height());
@@ -1331,8 +1513,7 @@ protected:
                 p.drawText(tr, Qt::AlignVCenter | Qt::AlignLeft, label);
         }
         p.setOpacity(1.0);
-        QFont f = font();
-        f.setPixelSize(std::clamp(int(height() * 0.25), 8, 12));
+        QFont f = uiPx(font(), std::clamp(int(height() * 0.25), 8, 12));
         f.setBold(true);
         p.setFont(f);
         const qreal inset = corner && wide ? corner->width() + 4 : 0;
@@ -1350,14 +1531,13 @@ private:
 /// Centered section title with a full-width underline.
 class SectionHeader : public QWidget {
 public:
-    explicit SectionHeader(const QString &t) : text(t) { setFixedHeight(gCompact ? 20 : 24); }
+    explicit SectionHeader(const QString &t) : text(t) { setFixedHeight(gCompact ? lowOr(20, 15) : 24); }
 
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         p.setPen(palette().color(QPalette::WindowText));
-        QFont f = font();
-        f.setPixelSize(gCompact ? 11 : 12);
+        QFont f = uiPx(font(), gCompact ? 11 : 12);
         p.setFont(f);
         p.drawText(QRect(0, 0, width(), height() - 5), Qt::AlignHCenter | Qt::AlignBottom, text);
         p.setPen(QPen(palette().color(QPalette::WindowText), 1.5));
@@ -1412,7 +1592,7 @@ public:
 
     ToolPanel(std::function<void(int)> onCommand, std::function<void()> onTexture, int layoutMode, QWidget *parent = nullptr)
         : QWidget(parent), onCommand(std::move(onCommand)), onTexture(std::move(onTexture)) {
-        setMinimumWidth(gCompact ? 120 : 140);
+        setMinimumWidth(gCompact ? lowOr(120, 104) : 140);
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
         setContextMenuPolicy(Qt::CustomContextMenu);
         QObject::connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
@@ -1652,13 +1832,13 @@ private:
 
     /// Icons follow the pane's width (3 per row); lists have a fixed height.
     void resizeButtons() {
-        const int margins = gCompact ? 12 : 20;
+        const int margins = gCompact ? lowOr(12, 8) : 20;
         int sq;
         if (mode == 0) {
-            const int lo = gCompact ? 26 : 30, hi = gCompact ? 40 : 56;
+            const int lo = gCompact ? lowOr(26, 18) : 30, hi = gCompact ? lowOr(40, 30) : 56;
             sq = std::clamp((width() - margins - 8) / 3, lo, hi);
         } else {
-            sq = mode == 1 ? (gCompact ? 34 : 44) : (gCompact ? 24 : 30);
+            sq = mode == 1 ? (gCompact ? lowOr(34, 24) : 44) : (gCompact ? lowOr(24, 18) : 30);
         }
         for (Entry &e : entries) {
             e.button->setFixedHeight(sq);
@@ -2300,9 +2480,7 @@ QString defaultProjectsDir() {
 QLabel *hintLabel(const QString &html) {
     auto *l = new QLabel(html);
     l->setWordWrap(true);
-    QFont f = l->font();
-    f.setPointSizeF(f.pointSizeF() * 0.9);
-    l->setFont(f);
+    l->setFont(uiScaled(l->font(), 0.9));
     QPalette pal = l->palette();
     pal.setColor(QPalette::WindowText, pal.color(QPalette::PlaceholderText));
     l->setPalette(pal);
@@ -3454,7 +3632,7 @@ public:
                         q.setBrush(QColor(0, 0, 0, 170));
                         // bottom right: the bottom-left corner is the material-properties dot
                         q.drawRoundedRect(QRectF(112, 150, 74, 36), 6, 6);
-                        QFont f;
+                        QFont f = smoothFont();
                         f.setPixelSize(22);
                         f.setBold(true);
                         q.setFont(f);
@@ -3805,7 +3983,7 @@ public:
         zr->addWidget(new QLabel(QStringLiteral("Zoom")));
         zoom = new QSlider(Qt::Horizontal);
         zoom->setRange(32, 192);
-        zoom->setValue(QSettings().value("picker/zoom", gCompact ? 48 : 64).toInt());
+        zoom->setValue(QSettings().value("picker/zoom", gCompact ? lowOr(48, 40) : 64).toInt());
         zoom->setToolTip(QStringLiteral("Swatch size (Ctrl+wheel over the swatches)"));
         zr->addWidget(zoom, 1);
         v->addLayout(zr);
@@ -4552,7 +4730,7 @@ public:
     explicit BudgetMeter(const QString &n) : name(n) {
         setMinimumWidth(gCompact ? 150 : 190);
         setMaximumWidth(gCompact ? 300 : 360); // label, bar and numbers stay together
-        setFixedHeight(gCompact ? 18 : 22);
+        setFixedHeight(gCompact ? lowOr(18, 14) : 22);
         setCursor(Qt::PointingHandCursor);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     }
@@ -4567,8 +4745,7 @@ protected:
         const double frac = limit > 0 ? double(used) / limit : 0.0;
         QColor col = soft ? (frac >= 1.0 ? QColor(230, 175, 40) : QColor(70, 170, 90))
                           : frac >= 1.0 ? QColor(220, 60, 50) : frac >= 0.75 ? QColor(230, 175, 40) : QColor(70, 170, 90);
-        QFont f = font();
-        f.setPixelSize(gCompact ? 10 : 11);
+        QFont f = uiPx(font(), gCompact ? 10 : 11);
         p.setFont(f);
         QFontMetrics fm(f);
         const QString mark = soft ? (frac >= 1.0 ? QStringLiteral("▲ ") : QString())
@@ -4673,6 +4850,7 @@ private:
 #include "guide.inc"
 #include "importer.inc"
 #include "spawnlist.inc"
+#include "prefabs.inc"
 
 // ------------------------------------------------------------------ main window
 
@@ -4765,7 +4943,8 @@ public:
     TexturePicker *picker = nullptr;
     TextureLibrary library;
     Project project;
-    QDockWidget *toolsDock = nullptr, *pickerDock = nullptr, *layersDock = nullptr, *budgetDock = nullptr;
+    QDockWidget *toolsDock = nullptr, *pickerDock = nullptr, *layersDock = nullptr, *budgetDock = nullptr, *prefabsDock = nullptr;
+    PrefabsPane *prefabs = nullptr;
     BudgetBar *budget = nullptr;
     QByteArray defaultLayout;
     QMenu *recentMenu = nullptr, *recentModelsMenu = nullptr;
@@ -4868,7 +5047,7 @@ public:
             p.setPen(QPen(QColor(0, 0, 0, 200), 1.2));
             p.setBrush(cols[kind]);
             p.drawRoundedRect(badge.adjusted(1, 1, -1, -1), 5, 5);
-            QFont f;
+            QFont f = smoothFont();
             f.setBold(true);
             f.setPixelSize(13);
             p.setFont(f);
@@ -5090,6 +5269,117 @@ public:
         if (fetched)
             statusBar()->showMessage(QStringLiteral("Copied %1 texture%2 in from the project the brushes came from")
                                          .arg(fetched).arg(fetched == 1 ? QString() : QStringLiteral("s")), 6000);
+    }
+
+    // ---------------------------------------------------------------- prefabs
+
+    bool prefabsShown = false;
+
+    /// The prefab's thumbnail: drawn like a spawn icon, from a three-quarter view.
+    QImage prefabThumb(const PrefabInfo &p) {
+        ThumbCam cam;
+        cam.yaw = -55;
+        cam.pitch = 28;
+        return renderThumb(p.file, fitCam(p.file, cam, 1.0), 128, 128);
+    }
+
+    /// Edit → Save Selection as Prefab… (and the Prefabs tab's button).
+    void savePrefab() {
+        const QByteArray src = project.isOpen() ? QFile::encodeName(project.texturesDir()) : QByteArray();
+        QString text = QString::fromUtf8(bonk_prefab_text(src.constData()));
+        if (text.isEmpty()) {
+            statusBar()->showMessage(QStringLiteral("Select the brushes to save as a prefab first"), 4000);
+            return;
+        }
+        const float lift = bonk_selection_lift();
+        SavePrefabDialog d(this, project.isOpen(), QStringLiteral("Prefab"));
+        d.rootFor = [this](bool shared) { return shared ? sharedPrefabDir() : projectPrefabDir(project); };
+        d.fillFolders();
+        if (qEnvironmentVariableIsSet("BONK_PREFAB_NAME")) { // developer aid: answer the dialog
+            const QStringList a = qEnvironmentVariable("BONK_PREFAB_NAME").split(QLatin1Char(','));
+            d.name->setText(a.value(0));
+            d.where->setCurrentIndex(a.value(2) == QStringLiteral("project") ? std::min(1, d.where->count() - 1) : 0);
+            d.folder->setCurrentText(a.value(1));
+        } else if (d.exec() != QDialog::Accepted) {
+            return;
+        }
+        const bool shared = d.where->currentData().toBool();
+        const QString root = shared ? sharedPrefabDir() : projectPrefabDir(project);
+        const QString folder = prefabFolderPath(d.folder->currentText());
+        const QString dir = root + (folder.isEmpty() ? QString() : QLatin1Char('/') + folder);
+        const QString base = dir + QLatin1Char('/') + prefabFileName(d.name->text());
+        if (QFileInfo::exists(base + QStringLiteral(".bpfab")) && !qEnvironmentVariableIsSet("BONK_ASSUME_YES") &&
+            QMessageBox::question(this, QStringLiteral("Save as Prefab"), QStringLiteral("There's already a prefab called \"%1\" there. Replace it?")
+                                                                              .arg(QFileInfo(base).fileName())) != QMessageBox::Yes)
+            return;
+        QDir().mkpath(dir);
+        PrefabInfo p;
+        p.file = base + QStringLiteral(".bpfab");
+        p.shared = shared;
+        p.name = QFileInfo(base).fileName();
+        // shared prefabs carry copies of their textures (and their material properties)
+        int copied = 0;
+        if (shared) {
+            QDir(p.textures()).removeRecursively();
+            static const QRegularExpression matRe(QStringLiteral("\"mat\"\\s+\"([^\"]*)\""));
+            QSet<QString> used;
+            for (auto it = matRe.globalMatch(text); it.hasNext();) used.insert(it.next().captured(1));
+            for (const TexEntry &e : library.entries) {
+                if (!used.contains(e.key)) continue;
+                const QString dest = p.textures() + QLatin1Char('/') + e.rel;
+                QDir().mkpath(QFileInfo(dest).absolutePath());
+                if (QFile::copy(e.file, dest)) {
+                    ++copied;
+                    const QString side = MatProps::sidecarFor(e.file);
+                    if (QFileInfo::exists(side)) QFile::copy(side, MatProps::sidecarFor(dest));
+                }
+            }
+        }
+        static const QRegularExpression srcRe(QStringLiteral("\"source_textures\"\\s+\"[^\"]*\""));
+        text.replace(srcRe, QStringLiteral("\"source_textures\"\t\"\"")); // set again where it's placed
+        QFile f(p.file);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            QMessageBox::warning(this, QStringLiteral("Save as Prefab"), QStringLiteral("Couldn't write %1").arg(p.file));
+            return;
+        }
+        f.write(text.toUtf8());
+        f.close();
+        QFile m(p.meta());
+        if (m.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            m.write(QJsonDocument(QJsonObject{{"lift", double(lift)}, {"format", 1}}).toJson());
+        QFile::remove(p.thumb()); // drawn fresh by the refresh
+        prefabs->refresh();
+        prefabsDock->show();
+        prefabsDock->raise();
+        statusBar()->showMessage(QStringLiteral("Saved the prefab \"%1\"%2%3").arg(p.name)
+                                     .arg(shared ? QStringLiteral(" (shared)") : QStringLiteral(" in this project"))
+                                     .arg(copied ? QStringLiteral(" with %1 texture%2").arg(copied).arg(copied == 1 ? QString() : QStringLiteral("s")) : QString()),
+                                 6000);
+    }
+
+    /// A prefab file dropped on view `view` at `at`.
+    void dropPrefab(const QString &file, int view, QPointF at) {
+        PrefabInfo p;
+        p.file = file;
+        p.name = QFileInfo(file).completeBaseName();
+        p.shared = QFileInfo(file).absoluteFilePath().startsWith(QFileInfo(sharedPrefabDir()).absoluteFilePath() + QLatin1Char('/'));
+        placePrefab(p, view, at);
+    }
+
+    /// Place a prefab: dropped in a view (view, at), or under the mouse (view -1).
+    void placePrefab(const PrefabInfo &p, int view, QPointF at) {
+        const QString text = prefabText(p, project.isOpen() ? project.texturesDir() : QString());
+        if (!text.contains(QStringLiteral("BonkModel"))) {
+            statusBar()->showMessage(QStringLiteral("Couldn't read the prefab %1").arg(p.name), 5000);
+            return;
+        }
+        const int fetched = fetchClipboardTextures(text);
+        const QByteArray t = text.toUtf8();
+        handle(bonk_place_prefab(t.constData(), view, float(at.x()), float(at.y()), prefabs->keepHeight(), float(p.lift())),
+               view >= 0 ? views[view] : views[1]);
+        if (fetched)
+            statusBar()->showMessage(QStringLiteral("Placed %1 and copied in %2 of its texture%3").arg(p.name).arg(fetched).arg(fetched == 1 ? QString() : QStringLiteral("s")), 6000);
+        if (view >= 0) views[view]->setFocus(Qt::OtherFocusReason);
     }
 
     int fetchClipboardTextures(const QString &text) {
@@ -5396,6 +5686,7 @@ public:
         project = p;
         addRecentProject(project.file);
         library.setProject(&project);
+        if (prefabs) prefabs->refresh();
         rebuildRecentMenu();
         statusBar()->showMessage(QStringLiteral("Project %1: %2 texture%3").arg(project.name).arg(library.entries.size())
                                  .arg(library.entries.size() == 1 ? QString() : QStringLiteral("s")), 4000);
@@ -5430,6 +5721,7 @@ public:
         if (!project.isOpen() || !maybeSave()) return;
         project = Project();
         library.setProject(&project);
+        if (prefabs) prefabs->refresh();
         filePath.clear();
         command(CMD_NEW);
         rebuildRecentMenu();
@@ -7040,6 +7332,25 @@ Viewport::Viewport(int id_, MainWindow *mw_) : id(id_), mw(mw_) {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setMinimumSize(120, 90);
+    setAcceptDrops(true); // prefabs from the Prefabs tab
+}
+
+void Viewport::dragEnterEvent(QDragEnterEvent *e) {
+    if (e->mimeData()->hasFormat(kPrefabMime)) e->acceptProposedAction();
+    else e->ignore();
+}
+
+void Viewport::dragMoveEvent(QDragMoveEvent *e) {
+    if (e->mimeData()->hasFormat(kPrefabMime)) e->acceptProposedAction();
+    else e->ignore();
+}
+
+void Viewport::dropEvent(QDropEvent *e) {
+    if (!e->mimeData()->hasFormat(kPrefabMime)) return e->ignore();
+    e->acceptProposedAction();
+    const QString file = QString::fromUtf8(e->mimeData()->data(kPrefabMime));
+    const QPointF at = e->position();
+    QTimer::singleShot(0, mw, [m = mw, file, v = id, at] { m->dropPrefab(file, v, at); });
 }
 
 void Viewport::paintGL() {
@@ -7052,8 +7363,7 @@ void Viewport::paintGL() {
 /// Everything Qt draws over the GL picture: labels, flashes, the hold hint.
 void Viewport::paintOverlay(QPainter &p) {
     p.setRenderHint(QPainter::TextAntialiasing);
-    QFont f = font();
-    f.setPointSizeF(9.0);
+    QFont f = uiPt(font(), 9.0);
     p.setFont(f);
     QFontMetrics fm(f);
     bool light = mw->prefs.lightBg();
@@ -7075,7 +7385,7 @@ void Viewport::paintOverlay(QPainter &p) {
     auto cornerLabel = [&](const QString &t, double alpha) {
         QFont gf = font();
         gf.setBold(true);
-        gf.setPointSizeF(gCompact ? 13 : 16);
+        gf = uiPt(gf, gCompact ? 13 : 16);
         p.setFont(gf);
         QFontMetrics gm(gf);
         QRect r(width() - gm.horizontalAdvance(t) - 26, 8, gm.horizontalAdvance(t) + 16, gm.height() + 8);
@@ -7121,7 +7431,7 @@ void Viewport::paintOverlay(QPainter &p) {
             static const QColor cols[6] = {QColor(), QColor(70, 140, 230), QColor(80, 180, 110), QColor(220, 140, 50), QColor(200, 90, 200), QColor(130, 130, 150)};
             const QColor accent = cols[std::clamp(hint[1], 0, 5)];
             QFont hf = font();
-            hf.setPointSizeF(gCompact ? 8.5 : 9.5);
+            hf = uiPt(hf, gCompact ? 8.5 : 9.5);
             p.setFont(hf);
             QFontMetrics hm(hf);
             const int bar = 3, pad = 6;
@@ -7142,7 +7452,7 @@ void Viewport::paintOverlay(QPainter &p) {
         // editing the physics hull: say so, loudly
         QFont bf = font();
         bf.setBold(true);
-        bf.setPointSizeF(gCompact ? 8.5 : 9.5);
+        bf = uiPt(bf, gCompact ? 8.5 : 9.5);
         p.setFont(bf);
         const int bh = QFontMetrics(bf).height() + 8;
         p.fillRect(QRect(0, 0, width(), bh), QColor(242, 140, 40, 225));
@@ -7334,6 +7644,13 @@ MainWindow::MainWindow() {
     pickerScroll->setMinimumWidth(std::max(gCompact ? 200 : 236, picker->minimumSizeHint().width() + pickerScroll->verticalScrollBar()->sizeHint().width() + 2));
     pickerDock = dock(QStringLiteral("Texture Picker"), "texturePicker", pickerScroll);
     layersDock = dock(QStringLiteral("Layers"), "layers", layers);
+    prefabs = new PrefabsPane;
+    prefabs->saveRequested = [this] { savePrefab(); };
+    prefabs->placeRequested = [this](const PrefabInfo &p, int view, QPointF at) { placePrefab(p, view, at); };
+    prefabs->renderThumb = [this](const PrefabInfo &p) { return prefabThumb(p); };
+    prefabs->projectRoot = [this] { return projectPrefabDir(project); };
+    prefabs->projectName = [this] { return project.name; };
+    prefabsDock = dock(QStringLiteral("Prefabs"), "prefabs", prefabs);
     budget = new BudgetBar;
     budget->changed = [this](unsigned f) { handle(f); };
     budgetDock = dock(QStringLiteral("Budget"), "budget", budget);
@@ -7346,10 +7663,18 @@ MainWindow::MainWindow() {
     addDockWidget(Qt::RightDockWidgetArea, layersDock);
     addDockWidget(Qt::RightDockWidgetArea, pickerDock);
     addDockWidget(Qt::BottomDockWidgetArea, budgetDock); // under the viewports
+    addDockWidget(Qt::RightDockWidgetArea, prefabsDock);
     tabifyDockWidget(layersDock, pickerDock);
+    tabifyDockWidget(pickerDock, prefabsDock);
     pickerDock->raise();
-    const int sideW = gCompact ? 150 : 190, rightW = gCompact ? 220 : 270;
+    const int sideW = gCompact ? lowOr(150, 124) : 190, rightW = gCompact ? lowOr(220, 190) : 270;
     resizeDocks({toolsDock, pickerDock}, {sideW, rightW}, Qt::Horizontal);
+    QObject::connect(prefabsDock, &QDockWidget::visibilityChanged, this, [this](bool vis) {
+        if (vis && !prefabsShown) {
+            prefabsShown = true; // thumbnails are drawn the first time the tab is seen
+            prefabs->refresh();
+        }
+    });
     for (QDockWidget *d : {toolsDock, pickerDock, layersDock})
         QObject::connect(d, &QDockWidget::visibilityChanged, this, [this, d](bool vis) {
             syncTool();
@@ -7412,6 +7737,7 @@ MainWindow::MainWindow() {
     fn(edit, QStringLiteral("&Paste"), QKeySequence::Paste, [this] { pasteClipboard(false); })
         ->setToolTip(QStringLiteral("Paste in the same spot it was copied from (works across models and projects)"));
     fn(edit, QStringLiteral("Paste Under the &Mouse"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_V), [this] { pasteClipboard(true); });
+    fn(edit, QStringLiteral("Save Selection as Pre&fab…"), QKeySequence(), [this] { savePrefab(); });
     act(edit, QStringLiteral("&Delete"), QKeySequence::Delete, CMD_DELETE);
     act(edit, QStringLiteral("Select &All"), QKeySequence::SelectAll, CMD_SELECT_ALL);
     edit->addSeparator();
@@ -7538,13 +7864,13 @@ MainWindow::MainWindow() {
     applyToolKeys();
 
     QMenu *window = menuBar()->addMenu(QStringLiteral("&Window"));
-    for (QDockWidget *d : {toolsDock, pickerDock, layersDock, budgetDock}) window->addAction(d->toggleViewAction());
+    for (QDockWidget *d : {toolsDock, pickerDock, layersDock, prefabsDock, budgetDock}) window->addAction(d->toggleViewAction());
     window->addSeparator();
     fn(window, QStringLiteral("&Reset Layout"), QKeySequence(), [this] {
         restoreState(defaultLayout, kLayoutVersion);
-        for (QDockWidget *d : {toolsDock, pickerDock, layersDock, budgetDock}) d->show();
+        for (QDockWidget *d : {toolsDock, pickerDock, layersDock, prefabsDock, budgetDock}) d->show();
         pickerDock->raise();
-        resizeDocks({toolsDock, pickerDock}, {gCompact ? 150 : 190, gCompact ? 220 : 270}, Qt::Horizontal);
+        resizeDocks({toolsDock, pickerDock}, {gCompact ? lowOr(150, 124) : 190, gCompact ? lowOr(220, 190) : 270}, Qt::Horizontal);
     });
 
     QMenu *settings = menuBar()->addMenu(QStringLiteral("&Settings"));
@@ -7575,7 +7901,14 @@ MainWindow::MainWindow() {
     {
         QSettings st;
         restoreGeometry(st.value("window/geometry").toByteArray());
-        restoreState(st.value("window/layout").toByteArray(), kLayoutVersion);
+        const bool restored = restoreState(st.value("window/layout").toByteArray(), kLayoutVersion);
+        // layouts saved before the Prefabs tab existed: put it beside Layers
+        if (restored && !st.value("window/prefabsPlaced", false).toBool()) {
+            tabifyDockWidget(layersDock, prefabsDock);
+            prefabsDock->show();
+            pickerDock->raise();
+        }
+        st.setValue("window/prefabsPlaced", true);
     }
     rebuildRecentMenu();
     library.setProject(&project);
@@ -7634,12 +7967,35 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
         // Interface size: compact on screens under 1440p unless Settings says otherwise.
         QSettings st(QStringLiteral("bonk"), QStringLiteral("bonk"));
         int d = st.value("view/density", 0).toInt();
-        if (qEnvironmentVariable("BONK_DENSITY") == QStringLiteral("compact")) d = 1;
+        if (qEnvironmentVariable("BONK_DENSITY") == QStringLiteral("compact") || qEnvironmentVariable("BONK_DENSITY") == QStringLiteral("lowres")) d = 1;
         if (qEnvironmentVariable("BONK_DENSITY") == QStringLiteral("regular")) d = 2;
         QScreen *sc = QGuiApplication::primaryScreen();
         const int physH = sc ? int(sc->geometry().height() * sc->devicePixelRatio()) : 1080;
         gCompact = d == 1 || (d == 0 && physH < 1440);
-        if (gCompact) {
+        gLowRes = d == 1;
+        int lowFont = st.value("view/lowFont", 1).toInt();
+        gLowPx = st.value("view/lowPx", 6).toInt();
+        if (qEnvironmentVariableIsSet("BONK_LOWFONT")) lowFont = qEnvironmentVariable("BONK_LOWFONT") == QStringLiteral("system") ? 0 : 1;
+        if (qEnvironmentVariableIsSet("BONK_LOWPX")) gLowPx = qEnvironmentVariable("BONK_LOWPX").toInt();
+        {
+            int n = 0;
+            const unsigned char *data = bonk_pixel_font(&n);
+            const int id = QFontDatabase::addApplicationFontFromData(QByteArray(reinterpret_cast<const char *>(data), n));
+            const QStringList fam = id >= 0 ? QFontDatabase::applicationFontFamilies(id) : QStringList();
+            if (!fam.isEmpty()) gPixelFamily = fam.first();
+        }
+        if (gLowRes) {
+            QFont f = QApplication::font();
+            if (lowFont == 1 && !gPixelFamily.isEmpty()) {
+                gPixelFont = true;
+                f = QFont(gPixelFamily);
+                f.setHintingPreference(QFont::PreferNoHinting);
+            }
+            gLowPx = gPixelFont ? std::clamp((gLowPx + 3) / 6 * 6, 6, 18) : std::clamp(gLowPx, 6, 11);
+            f.setPixelSize(gLowPx);
+            f.setStyleStrategy(QFont::StyleStrategy(QFont::NoAntialias | QFont::PreferMatch));
+            QApplication::setFont(f);
+        } else if (gCompact) {
             QFont f = QApplication::font();
             if (f.pointSizeF() > 0) f.setPointSizeF(std::max(7.5, f.pointSizeF() - 1.0));
             QApplication::setFont(f);
@@ -7733,6 +8089,14 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                 else if (c == QStringLiteral("paste") || c == QStringLiteral("pastem")) w.pasteClipboard(c.endsWith(QLatin1Char('m')));
                 else if (c == QStringLiteral("overlaps")) w.findOverlaps();
                 else if (c.startsWith(QStringLiteral("mass:"))) bonk_set_mass(c.mid(5).toFloat());
+                else if (c == QStringLiteral("savefab")) w.savePrefab();
+                else if (c == QStringLiteral("prefabs")) { w.prefabsDock->show(); w.prefabsDock->raise(); }
+                else if (c.startsWith(QStringLiteral("placefab:"))) { // placefab:<name>:<view>:<x>:<y>
+                    const QStringList a = c.split(QLatin1Char(':'));
+                    for (const QString &root : {sharedPrefabDir(), projectPrefabDir(w.project)})
+                        for (const PrefabInfo &pf : listPrefabs(root, root == sharedPrefabDir()))
+                            if (pf.name == a.value(1)) w.dropPrefab(pf.file, a.value(2, QStringLiteral("-1")).toInt(), QPointF(a.value(3).toDouble(), a.value(4).toDouble()));
+                }
                 else if (c == QStringLiteral("spawnlist")) w.openSpawnlists();
                 else if (c == QStringLiteral("spawnwrite")) w.writeSpawnlistQuiet();
                 else if (c == QStringLiteral("coldlg")) { auto *d = new CollisionDialog(&w, w.prefs.simplifyDetail, false); d->setAttribute(Qt::WA_DeleteOnClose); d->show(); }
