@@ -6115,10 +6115,12 @@ void Viewport::paintOverlay(QPainter &p) {
     };
     if (gridFlash.isValid() && gridFlash.elapsed() < 900)
         cornerLabel(QStringLiteral("Grid %1").arg(double(bonk_grid())), 1.0); // no dimming: just the label
-    // Saved: the 3D view says so for a moment, then it fades (no tint over the views)
-    if (id == 0 && mw->saveFlash.isValid() && mw->saveFlash.elapsed() < 1400) {
+    // Saved: a dark tint blinks over every view and fades out
+    if (mw->saveFlash.isValid() && mw->saveFlash.elapsed() < 1400) {
         const double t = mw->saveFlash.elapsed() / 1400.0;
-        if (true) cornerLabel(QStringLiteral("Project saved!"), std::clamp(1.0 - std::max(0.0, t - 0.6) / 0.4, 0.0, 1.0));
+        const double tint = t < 0.12 ? t / 0.12 : 1.0 - (t - 0.12) / 0.88;
+        p.fillRect(rect(), QColor(0, 0, 0, int(110 * std::clamp(tint, 0.0, 1.0))));
+        if (id == 0) cornerLabel(QStringLiteral("Project saved!"), std::clamp(1.0 - std::max(0.0, t - 0.6) / 0.4, 0.0, 1.0));
     }
     // Mouse 4 / 5 switched tools: the tool's icon by the cursor, fading out
     if (toolFlash.isValid() && toolFlash.elapsed() < 700) {
@@ -6158,6 +6160,7 @@ void Viewport::paintOverlay(QPainter &p) {
             p.setPen(Qt::white);
             p.drawText(r, Qt::AlignCenter, text);
             p.setFont(f);
+            p.setBrush(Qt::NoBrush); // or the focus frame below fills the whole view with it
         }
     }
     if (id == 0 && bonk_editing_collision()) {
@@ -6175,6 +6178,7 @@ void Viewport::paintOverlay(QPainter &p) {
     }
     if (hasFocus()) {
         p.setPen(light ? QColor(70, 70, 140) : QColor(90, 90, 120));
+        p.setBrush(Qt::NoBrush);
         p.drawRect(0, 0, width() - 1, height() - 1);
     }
 }
@@ -6573,7 +6577,7 @@ MainWindow::MainWindow() {
         float dt = clock.restart() / 1000.0f;
         unsigned f = bonk_tick(dt);
         if (f) handle(f);
-        if (saveFlash.isValid() && saveFlash.elapsed() < 1500) views[0]->update();
+        if (saveFlash.isValid() && saveFlash.elapsed() < 1500) repaintAll();
     });
     timer.start(8);
 

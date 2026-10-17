@@ -2,6 +2,12 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.13.1
+
+- **Fixed: a 2D view went dark while you held G, S, Shift or R, or panned.** The hold hint left
+  its dark fill behind and the view's focus frame painted the whole view with it.
+- The dark "Project saved!" blink is back (0.13.0 had taken it out by mistake).
+
 ## 0.13.0 — "Modeling power"
 
 ### Drawing
@@ -38,7 +44,6 @@ All notable changes to Bonk! Model Prop-inator!, newest first.
   whole hold (Alt still frees it).
 - **Back to the start:** bringing the mouse back near where a G or Shift move started puts the
   selection exactly where it was, even off the grid.
-- Saving no longer tints the views; the 3D view still says "Project saved!".
 - With the Texture Picker's swatches focused, Ctrl+C / X / V, Delete and F2 still act on texture
   files.
 
