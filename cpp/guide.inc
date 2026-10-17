@@ -458,8 +458,9 @@ QList<GuidePage> guidePages(bool hammer) {
                                                                  "move it in the frame, wheel to zoom. <b>Fit</b> frames the whole model snugly from "
                                                                  "the current angle; <b>Use for Whole Category</b> gives every model in the category "
                                                                  "the same angle and size. The icon has a transparent background, like GMod's.</p>"
-                                                                 "<p><b>Icon size</b> is the tile size in the spawn menu: 64 is GMod's usual, 128 or 256 "
-                                                                 "suits big models like houses. Icons are drawn from the saved models, so Bonk saves "
+                                                                 "<p><b>Tile size</b> is the icon's size in the spawn menu, wide × tall: 64 × 64 is GMod's "
+                                                                 "usual, 128 or 256 suits big models, and a wide tile (256 × 128) suits a long house. "
+                                                                 "Pick a preset or type any size; a new shape frames the model again. Icons are drawn from the saved models, so Bonk saves "
                                                                  "your model before opening the editor.</p>")},
                   {QStringLiteral("Category icons"), QStringLiteral("<p>Pick a base: a built-in shape, a Silk icon or an image file; tint it; and add "
                                                                     "a sub-icon in a corner (a star on the house, say). The preview shows it at the "
@@ -473,7 +474,8 @@ QList<GuidePage> guidePages(bool hammer) {
                                                                     "<tt>lua/autorun/client/bonk_spawnlist_&lt;project&gt;.lua</tt>, the category icons in "
                                                                     "<tt>materials/&lt;project&gt;/spawnlist</tt>, and each model's spawn icon in "
                                                                     "<tt>materials/spawnicons/models/…</tt>: the 64 × 64 one, plus "
-                                                                    "<tt>&lt;name&gt;_&lt;size&gt;.png</tt> for bigger tiles. The spawnlist itself is kept in "
+                                                                    "<tt>&lt;name&gt;_&lt;size&gt;.png</tt> for bigger square tiles or "
+                                                                    "<tt>&lt;name&gt;_&lt;wide&gt;x&lt;tall&gt;.png</tt> for other shapes. The spawnlist itself is kept in "
                                                                     "the project as <tt>spawnlist.json</tt>.</p>"
                                                                     "<p>If GMod shows an icon of its own for a model, it drew one earlier and keeps it in "
                                                                     "garrysmod/materials/spawnicons; delete that file to see yours.</p>")}};

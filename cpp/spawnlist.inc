@@ -35,7 +35,8 @@ struct SpawnItem {
     QString text;    // header text
     QString model;   // "models/…/x.mdl"
     QString source;  // the .bpmdl it's made from (relative to the project)
-    int size = 64;   // icon size in the spawn menu (64 / 128 / 256 / 512)
+    int wide = 64, tall = 64; // the tile in the spawn menu (64 × 64 is GMod's usual)
+    bool square() const { return wide == tall; }
     ThumbCam cam;
 };
 
@@ -80,7 +81,8 @@ QJsonObject catToJson(const SpawnCategory &c) {
             o["type"] = QStringLiteral("model");
             o["model"] = it.model;
             o["source"] = it.source;
-            o["size"] = it.size;
+            o["wide"] = it.wide;
+            o["tall"] = it.tall;
             o["cam"] = it.cam.toJson();
         }
         items.append(o);
@@ -100,7 +102,9 @@ SpawnCategory catFromJson(const QJsonObject &o) {
         it.text = i.value("text").toString();
         it.model = i.value("model").toString();
         it.source = i.value("source").toString();
-        it.size = i.value("size").toInt(64);
+        const int size = i.value("size").toInt(64); // 0.16.0 kept one size
+        it.wide = std::clamp(i.value("wide").toInt(size), 16, 1024);
+        it.tall = std::clamp(i.value("tall").toInt(size), 16, 1024);
         it.cam = ThumbCam::fromJson(i.value("cam").toObject());
         c.items << it;
     }
@@ -296,7 +300,20 @@ QString luaStr(const QString &s) {
 // ------------------------------------------------------------------ writing
 
 /// Renders a spawn icon of a saved model (the main window supplies it: it needs GL).
-using ThumbRenderer = std::function<QImage(const QString &bpmdl, const ThumbCam &cam, int size)>;
+using ThumbRenderer = std::function<QImage(const QString &bpmdl, const ThumbCam &cam, int w, int h)>;
+
+/// `cam` re-framed snugly for a view `aspect` wide per unit tall, keeping its angle.
+ThumbCam fitCam(const QString &bpmdl, ThumbCam cam, double aspect) {
+    float f[4];
+    const QByteArray p = QFile::encodeName(bpmdl);
+    if (bonk_model_fit(p.constData(), float(cam.yaw), float(cam.pitch), float(cam.fov), float(aspect), f) == 0) {
+        cam.tx = f[0];
+        cam.ty = f[1];
+        cam.tz = f[2];
+        cam.dist = f[3];
+    }
+    return cam;
+}
 
 /// Write the spawnlist into the addon: the Lua, category icons and spawn icons.
 /// Returns a summary (or an error starting with "!").
@@ -335,24 +352,28 @@ QString writeSpawnlists(const Spawnlists &sl, const Project &pj, const ThumbRend
                 lua += QStringLiteral("\t\t{ type = \"header\", text = %1 },\n").arg(luaStr(it.text));
                 continue;
             }
-            if (it.size != 64) lua += QStringLiteral("\t\t{ type = \"model\", model = %1, wide = %2, tall = %2 },\n").arg(luaStr(it.model)).arg(it.size);
+            if (it.wide != 64 || it.tall != 64)
+                lua += QStringLiteral("\t\t{ type = \"model\", model = %1, wide = %2, tall = %3 },\n").arg(luaStr(it.model)).arg(it.wide).arg(it.tall);
             else lua += QStringLiteral("\t\t{ type = \"model\", model = %1 },\n").arg(luaStr(it.model));
-            // the spawn icon: GMod's name for it, plus the size-suffixed one for big icons
-            const QString key = it.model + QLatin1Char('@') + QString::number(it.size);
+            // the spawn icon: GMod's 64 × 64 one, plus one named for the tile's size
+            const QString key = QStringLiteral("%1@%2x%3").arg(it.model).arg(it.wide).arg(it.tall);
             if (doneThumbs.contains(key) || it.source.isEmpty() || !render) continue;
             doneThumbs.insert(key);
             QString stem = it.model;
             if (stem.endsWith(QStringLiteral(".mdl"))) stem.chop(4);
             const QString src = QFileInfo(it.source).isRelative() ? pj.dir() + QLatin1Char('/') + it.source : it.source;
-            const QImage big = render(src, it.cam, std::max(64, it.size));
+            const QImage big = render(src, it.cam, it.wide, it.tall);
             if (big.isNull()) {
                 errors << QStringLiteral("couldn't draw %1").arg(it.model);
                 continue;
             }
             const QString file = addon + QStringLiteral("/materials/spawnicons/") + stem;
             QDir().mkpath(QFileInfo(file).absolutePath());
-            big.scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation).save(file + QStringLiteral(".png"));
-            if (it.size != 64) big.save(file + QStringLiteral("_%1.png").arg(it.size));
+            // a square tile's own picture scales down; a wide or tall one is framed again square
+            const QImage base = it.square() ? big : render(src, fitCam(src, it.cam, 1.0), 64, 64);
+            if (!base.isNull()) base.scaled(64, 64, Qt::IgnoreAspectRatio, Qt::SmoothTransformation).save(file + QStringLiteral(".png"));
+            if (it.square() && it.wide != 64) big.save(file + QStringLiteral("_%1.png").arg(it.wide));
+            else if (!it.square()) big.save(file + QStringLiteral("_%1x%2.png").arg(it.wide).arg(it.tall));
             ++thumbs;
         }
         lua += QStringLiteral("\t}, %1, %2, %3 )\n").arg(luaStr(icon)).arg(id).arg(parent);
@@ -396,6 +417,7 @@ class ThumbView : public QLabel {
 public:
     std::function<void()> moved;
     ThumbCam *cam = nullptr;
+    QSize frame{256, 256}; // the picture's size inside the view
 
     ThumbView() {
         setFixedSize(256, 256);
@@ -406,11 +428,15 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *e) override {
-        // a checkerboard shows what's transparent
+        // a checkerboard where the picture is shows what's transparent
         QPainter p(this);
+        p.fillRect(rect(), palette().window());
+        const QRect fr(QPoint((width() - frame.width()) / 2, (height() - frame.height()) / 2), frame);
         const int t = 12;
-        for (int y = 0; y < height(); y += t)
-            for (int x = 0; x < width(); x += t) p.fillRect(x, y, t, t, ((x + y) / t) % 2 ? QColor(70, 70, 76) : QColor(90, 90, 98));
+        p.setClipRect(fr);
+        for (int y = fr.top(); y < fr.bottom(); y += t)
+            for (int x = fr.left(); x < fr.right(); x += t)
+                p.fillRect(x, y, t, t, (((x - fr.left()) + (y - fr.top())) / t) % 2 ? QColor(70, 70, 76) : QColor(90, 90, 98));
         p.end();
         QLabel::paintEvent(e);
     }
@@ -423,7 +449,7 @@ protected:
         if (pan) {
             // move the target across the view plane
             const double y = qDegreesToRadians(cam->yaw), pt = qDegreesToRadians(cam->pitch);
-            const double k = cam->dist * std::tan(qDegreesToRadians(cam->fov) * 0.5) * 2.0 / height();
+            const double k = cam->dist * std::tan(qDegreesToRadians(cam->fov) * 0.5) * 2.0 / std::max(1, frame.height());
             const double rx = -std::sin(y), ry = std::cos(y);                                     // right
             const double ux = -std::cos(y) * std::sin(pt), uy = -std::sin(y) * std::sin(pt), uz = std::cos(pt); // up
             cam->tx += (-d.x() * rx + d.y() * ux) * k;
@@ -448,7 +474,7 @@ private:
 
 /// The category's page, laid out like GMod's spawn menu: tiles flowing left to
 /// right, headers on lines of their own. Tiles are drawn at 3/4 of their size
-/// in the spawn menu.
+/// in the spawn menu (smaller still past 256).
 class SpawnPage : public QListWidget {
 public:
     static constexpr int HeaderRole = Qt::UserRole + 1, SizeRole = Qt::UserRole + 2;
@@ -467,7 +493,10 @@ public:
         setStyleSheet(QStringLiteral("QListWidget { background: #3b3b40; }"));
     }
 
-    static int tile(int size) { return std::min(256, size * 3 / 4); }
+    static QSize tile(QSize s) {
+        const double k = std::min(0.75, 256.0 / std::max(s.width(), s.height()));
+        return QSize(std::max(12, int(s.width() * k)), std::max(12, int(s.height() * k)));
+    }
 
     /// Headers span the width (that's what puts them on their own line).
     void fitHeaders() {
@@ -500,8 +529,7 @@ private:
                 const QSize h = i.data(Qt::SizeHintRole).toSize();
                 return h.isValid() ? h : QSize(200, 30);
             }
-            const int t = tile(i.data(SizeRole).toInt());
-            return QSize(t, t);
+            return tile(i.data(SizeRole).toSize());
         }
         void paint(QPainter *p, const QStyleOptionViewItem &o, const QModelIndex &i) const override {
             p->save();
@@ -523,7 +551,7 @@ private:
                 p->setBrush(QColor(255, 255, 255, 28));
                 p->drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
                 const QIcon icon = i.data(Qt::DecorationRole).value<QIcon>();
-                icon.paint(p, r.adjusted(2, 2, -2, -2));
+                icon.paint(p, r.adjusted(2, 2, -2, -2), Qt::AlignCenter);
                 if (sel) {
                     p->setBrush(Qt::NoBrush);
                     p->setPen(QPen(o.palette.highlight().color(), 2.5));
@@ -687,6 +715,7 @@ private:
     // thumb pane
     ThumbView *thumb;
     QComboBox *sizeBox;
+    QSpinBox *wideSpin, *tallSpin;
     QLabel *thumbInfo;
     QTimer thumbTimer;
 
@@ -759,13 +788,17 @@ private:
         return it.header ? it.text : QFileInfo(it.model).completeBaseName();
     }
 
+    static QString tileTip(const SpawnItem &it) {
+        return QStringLiteral("%1\n%2 × %3 in the spawn menu").arg(it.model).arg(it.wide).arg(it.tall);
+    }
+
     QListWidgetItem *makeTile(const SpawnItem &it) {
         auto *li = new QListWidgetItem(displayName(it));
         li->setData(SpawnPage::HeaderRole, it.header);
-        li->setData(SpawnPage::SizeRole, it.size);
+        li->setData(SpawnPage::SizeRole, QSize(it.wide, it.tall));
         if (!it.header) {
-            li->setIcon(QIcon(QPixmap::fromImage(thumbFor(it, SpawnPage::tile(it.size)))));
-            li->setToolTip(QStringLiteral("%1\n%2 × %2 in the spawn menu").arg(it.model).arg(it.size));
+            li->setIcon(QIcon(QPixmap::fromImage(thumbFor(it, SpawnPage::tile(QSize(it.wide, it.tall))))));
+            li->setToolTip(tileTip(it));
         }
         return li;
     }
@@ -1062,10 +1095,26 @@ private:
         r1->addWidget(allBtn);
         v->addLayout(r1);
         auto *r2 = new QHBoxLayout;
-        r2->addWidget(new QLabel(QStringLiteral("Icon size in the spawn menu")));
+        r2->addWidget(new QLabel(QStringLiteral("Tile size")));
         sizeBox = new QComboBox;
-        for (int s : {64, 128, 256, 512}) sizeBox->addItem(QStringLiteral("%1 × %1").arg(s), s);
+        sizeBox->setToolTip(QStringLiteral("The icon's size in the spawn menu, wide × tall"));
+        for (QSize z : {QSize(64, 64), QSize(128, 64), QSize(64, 128), QSize(128, 128), QSize(256, 128), QSize(128, 256),
+                        QSize(256, 256), QSize(512, 256), QSize(256, 512), QSize(512, 512)})
+            sizeBox->addItem(QStringLiteral("%1 × %2").arg(z.width()).arg(z.height()), z);
+        sizeBox->addItem(QStringLiteral("Custom"));
+        wideSpin = new QSpinBox;
+        tallSpin = new QSpinBox;
+        for (QSpinBox *b : {wideSpin, tallSpin}) {
+            b->setRange(16, 1024);
+            b->setSingleStep(16);
+            b->setSuffix(QStringLiteral(" px"));
+        }
+        wideSpin->setToolTip(QStringLiteral("Wide"));
+        tallSpin->setToolTip(QStringLiteral("Tall"));
         r2->addWidget(sizeBox);
+        r2->addWidget(wideSpin);
+        r2->addWidget(new QLabel(QStringLiteral("×")));
+        r2->addWidget(tallSpin);
         r2->addStretch(1);
         v->addLayout(r2);
         v->addWidget(hintLabel(QStringLiteral("Drag to turn the model, right-drag (or Shift+drag) to move it in the frame, wheel to zoom. "
@@ -1103,7 +1152,8 @@ private:
                 it.cam.yaw = src->cam.yaw;
                 it.cam.pitch = src->cam.pitch;
                 it.cam.fov = src->cam.fov;
-                it.size = src->size;
+                it.wide = src->wide;
+                it.tall = src->tall;
                 fit(it, true);
             }
             changed();
@@ -1112,17 +1162,41 @@ private:
             page->setCurrentRow(r);
         });
         QObject::connect(sizeBox, &QComboBox::currentIndexChanged, this, [this] {
-            SpawnItem *it = currentItem();
-            if (!it || syncing) return;
-            it->size = sizeBox->currentData().toInt();
-            const int r = page->currentRow();
-            page->item(r)->setData(SpawnPage::SizeRole, it->size);
-            page->item(r)->setToolTip(QStringLiteral("%1\n%2 × %2 in the spawn menu").arg(it->model).arg(it->size));
-            drawThumb();
-            page->doItemsLayout();
-            changed();
+            const QSize z = sizeBox->currentData().toSize();
+            if (syncing || !z.isValid()) return;
+            setTileSize(z.width(), z.height());
         });
+        for (QSpinBox *b : {wideSpin, tallSpin})
+            QObject::connect(b, &QSpinBox::valueChanged, this, [this] {
+                if (!syncing) setTileSize(wideSpin->value(), tallSpin->value());
+            });
         return w;
+    }
+
+    /// Show the tile size in the preset box and the spin boxes.
+    void showTileSize(const SpawnItem &it) {
+        syncing = true;
+        const int k = sizeBox->findData(QSize(it.wide, it.tall));
+        sizeBox->setCurrentIndex(k >= 0 ? k : sizeBox->count() - 1);
+        wideSpin->setValue(it.wide);
+        tallSpin->setValue(it.tall);
+        syncing = false;
+    }
+
+    void setTileSize(int w, int h) {
+        SpawnItem *it = currentItem();
+        if (!it) return;
+        const bool reshaped = w * it->tall != h * it->wide;
+        it->wide = w;
+        it->tall = h;
+        if (reshaped) fit(*it, true); // a new shape: frame it again from the same angle
+        showTileSize(*it);
+        const int r = page->currentRow();
+        page->item(r)->setData(SpawnPage::SizeRole, QSize(w, h));
+        page->item(r)->setToolTip(tileTip(*it));
+        drawThumb();
+        page->doItemsLayout();
+        changed();
     }
 
     SpawnItem *currentItem() {
@@ -1139,24 +1213,18 @@ private:
     /// Frame the model snugly from the current angle.
     void fit(SpawnItem &it, bool keepAngle = false) {
         if (!keepAngle) it.cam = ThumbCam();
-        float f[4];
-        const QByteArray p = QFile::encodeName(sourcePath(it));
-        if (bonk_model_fit(p.constData(), float(it.cam.yaw), float(it.cam.pitch), float(it.cam.fov), f) != 0) return;
-        it.cam.tx = f[0];
-        it.cam.ty = f[1];
-        it.cam.tz = f[2];
-        it.cam.dist = f[3];
+        it.cam = fitCam(sourcePath(it), it.cam, double(it.wide) / it.tall);
         for (const QString &k : thumbCache.keys())
             if (k.startsWith(it.model + QLatin1Char('@'))) thumbCache.remove(k);
     }
 
-    QImage thumbFor(const SpawnItem &it, int size) {
-        const QString key = it.model + QLatin1Char('@') + QString::number(size);
+    QImage thumbFor(const SpawnItem &it, QSize size) {
+        const QString key = QStringLiteral("%1@%2x%3").arg(it.model).arg(size.width()).arg(size.height());
         auto f = thumbCache.find(key);
         if (f != thumbCache.end()) return *f;
-        QImage img = render ? render(sourcePath(it), it.cam, size) : QImage();
+        QImage img = render ? render(sourcePath(it), it.cam, size.width(), size.height()) : QImage();
         if (img.isNull()) {
-            img = QImage(size, size, QImage::Format_ARGB32_Premultiplied);
+            img = QImage(size, QImage::Format_ARGB32_Premultiplied);
             img.fill(QColor(80, 80, 88));
         }
         thumbCache.insert(key, img);
@@ -1177,9 +1245,7 @@ private:
         }
         stack->setCurrentIndex(2);
         if (it->cam.dist <= 0) fit(*it);
-        syncing = true;
-        sizeBox->setCurrentIndex(std::max(0, sizeBox->findData(it->size)));
-        syncing = false;
+        showTileSize(*it);
         thumbInfo->setText(QStringLiteral("<tt>%1</tt><br>from %2").arg(it->model.toHtmlEscaped(), it->source.toHtmlEscaped()));
         thumb->cam = &it->cam;
         drawThumb();
@@ -1188,14 +1254,17 @@ private:
     void drawThumb() {
         SpawnItem *it = currentItem();
         if (!it || it->header) return;
-        QImage img = render ? render(sourcePath(*it), it->cam, 256) : QImage();
+        // the preview: the tile's shape, its longer side 256
+        const double k = 256.0 / std::max(it->wide, it->tall);
+        const QSize ps(std::max(8, int(it->wide * k)), std::max(8, int(it->tall * k)));
+        QImage img = render ? render(sourcePath(*it), it->cam, ps.width(), ps.height()) : QImage();
+        thumb->frame = ps;
         thumb->setPixmap(QPixmap::fromImage(img));
         // the page's tile follows
         for (const QString &k : thumbCache.keys())
             if (k.startsWith(it->model + QLatin1Char('@'))) thumbCache.remove(k);
         if (QListWidgetItem *li = page->currentItem(); li && !img.isNull()) {
-            const int t = SpawnPage::tile(it->size);
-            li->setIcon(QIcon(QPixmap::fromImage(img.scaled(t, t, Qt::KeepAspectRatio, Qt::SmoothTransformation))));
+            li->setIcon(QIcon(QPixmap::fromImage(img.scaled(SpawnPage::tile(QSize(it->wide, it->tall)), Qt::KeepAspectRatio, Qt::SmoothTransformation))));
         }
     }
 

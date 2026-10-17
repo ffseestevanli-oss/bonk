@@ -127,7 +127,7 @@ unsigned bonk_command(int cmd);
 int bonk_tool();
 int bonk_render_thumb(int view, const char *path, float yaw, float pitch, float dist, float tx, float ty, float tz, float fov, int w, int h);
 int bonk_model_bounds(const char *path, float *out);
-int bonk_model_fit(const char *path, float yaw, float pitch, float fov, float *out);
+int bonk_model_fit(const char *path, float yaw, float pitch, float fov, float aspect, float *out);
 int bonk_is_captured();
 const char *bonk_status();
 int bonk_save(const char *path);
@@ -4912,46 +4912,47 @@ public:
 
     /// A spawn icon: the saved model drawn off screen with a transparent
     /// background, at 2× and scaled down for smooth edges.
-    QImage renderThumb(const QString &bpmdl, const ThumbCam &cam, int size) {
+    QImage renderThumb(const QString &bpmdl, const ThumbCam &cam, int w, int h) {
         Viewport *v = views[0];
         if (qEnvironmentVariableIsSet("BONK_SHOT_THUMBS")) { // developer aid: no GL off screen, use thumbnails drawn elsewhere
             QImage img(qEnvironmentVariable("BONK_SHOT_THUMBS") + QLatin1Char('/') + QFileInfo(bpmdl).completeBaseName() + QStringLiteral(".png"));
-            return img.isNull() ? img : img.scaled(size, size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            if (img.isNull()) return img;
+            if (w != h) { // crop the square stand-in to the shape
+                const int s = img.width();
+                img = w > h ? img.copy(0, (s - s * h / w) / 2, s, s * h / w) : img.copy((s - s * w / h) / 2, 0, s * w / h, s);
+            }
+            return img.scaled(w, h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         }
         if (!v->context() || !v->isValid()) return QImage();
         v->makeCurrent();
-        const int ss = std::min(size * 2, 1024);
+        // drawn at twice the size (up to 1024 on the longer side) and scaled down, for smooth edges
+        const double up = std::min(2.0, 1024.0 / std::max(w, h));
+        const int sw = std::max(1, int(w * up)), sh = std::max(1, int(h * up));
         QOpenGLFramebufferObjectFormat fmt;
         fmt.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
         fmt.setSamples(0);
         QImage out;
         {
-            QOpenGLFramebufferObject fbo(ss, ss, fmt);
+            QOpenGLFramebufferObject fbo(sw, sh, fmt);
             if (fbo.isValid() && fbo.bind()) {
                 QOpenGLFunctions *gl = v->context()->functions();
-                gl->glViewport(0, 0, ss, ss);
+                gl->glViewport(0, 0, sw, sh);
                 const QByteArray p = QFile::encodeName(bpmdl);
                 ThumbCam c = cam;
-                float f[4];
-                if (c.dist <= 0 && bonk_model_fit(p.constData(), float(c.yaw), float(c.pitch), float(c.fov), f) == 0) {
-                    c.tx = f[0];
-                    c.ty = f[1];
-                    c.tz = f[2];
-                    c.dist = f[3];
-                }
+                if (c.dist <= 0) c = fitCam(bpmdl, c, double(w) / h);
                 if (bonk_render_thumb(0, p.constData(), float(c.yaw), float(c.pitch), float(std::max(1.0, c.dist)), float(c.tx), float(c.ty), float(c.tz),
-                                      float(c.fov), ss, ss) == 0)
+                                      float(c.fov), sw, sh) == 0)
                     out = fbo.toImage(true).convertToFormat(QImage::Format_ARGB32);
                 fbo.release();
             }
         }
         v->doneCurrent();
         if (out.isNull()) return out;
-        return out.scaled(size, size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        return out.scaled(w, h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
 
     ThumbRenderer thumbRenderer() {
-        return [this](const QString &f, const ThumbCam &c, int s) { return renderThumb(f, c, s); };
+        return [this](const QString &f, const ThumbCam &c, int w, int h) { return renderThumb(f, c, w, h); };
     }
 
     /// Tools → Spawnlist Editor…

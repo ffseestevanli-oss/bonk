@@ -2,6 +2,14 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.16.1
+
+- **Any tile shape:** spawn icons can be wide or tall, not just square: presets (128 × 64,
+  64 × 128, 256 × 128, 512 × 256…) or any size from 16 to 1,024 px in each direction. The
+  preview and the page take the tile's shape, and changing the shape frames the model again from
+  the same angle. Written as `wide` / `tall` in the Lua; the icon goes in as
+  `<name>_<wide>x<tall>.png`, next to a square 64 × 64 one framed for GMod's usual tile.
+
 ## 0.16.0 — "Spawnlists"
 
 - **Spawnlist Editor (Tools → Spawnlist Editor…):** your models in GMod's spawn menu, as a pack.

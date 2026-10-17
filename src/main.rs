@@ -492,10 +492,11 @@ pub extern "C" fn bonk_model_bounds(path: *const c_char, out: *mut f32) -> c_int
 }
 
 /// Frame the saved model at `path` for a spawn icon seen from yaw / pitch with
-/// `fov` (degrees): out = [target x, y, z, distance], fitting its visible
-/// vertices (not just its box) snugly. Returns 0, or -1.
+/// `fov` (vertical, degrees) in a view `aspect` wide per unit tall: out =
+/// [target x, y, z, distance], fitting its visible vertices (not just its box)
+/// snugly. Returns 0, or -1.
 #[no_mangle]
-pub extern "C" fn bonk_model_fit(path: *const c_char, yaw: f32, pitch: f32, fov: f32, out: *mut f32) -> c_int {
+pub extern "C" fn bonk_model_fit(path: *const c_char, yaw: f32, pitch: f32, fov: f32, aspect: f32, out: *mut f32) -> c_int {
     let Some(p) = path_arg(path) else { return -1 };
     let r = with_thumb_model(&p, |ed| {
         let pts: Vec<V3> = ed
@@ -505,7 +506,7 @@ pub extern "C" fn bonk_model_fit(path: *const c_char, yaw: f32, pitch: f32, fov:
             .filter(|b| b.entity.is_none() && !ed.doc.is_collision(b))
             .flat_map(|b| b.faces.iter().filter(|f| f.material != geom::NODRAW).flat_map(move |f| f.idx.iter().map(move |&i| b.verts[i])))
             .collect();
-        thumb_fit(&pts, yaw, pitch, fov)
+        thumb_fit(&pts, yaw, pitch, fov, aspect)
     })
     .flatten();
     let Some((t, d)) = r else { return -1 };
@@ -515,10 +516,10 @@ pub extern "C" fn bonk_model_fit(path: *const c_char, yaw: f32, pitch: f32, fov:
     0
 }
 
-/// Target and distance that fit `pts` in a square view from yaw / pitch:
+/// Target and distance that fit `pts` in a view `aspect` wide (per unit tall) from yaw / pitch:
 /// the target is centered on the points' extent across the view, and the
 /// distance is the least that keeps every point inside (with a small margin).
-fn thumb_fit(pts: &[V3], yaw: f32, pitch: f32, fov: f32) -> Option<(V3, f32)> {
+fn thumb_fit(pts: &[V3], yaw: f32, pitch: f32, fov: f32, aspect: f32) -> Option<(V3, f32)> {
     if pts.is_empty() {
         return None;
     }
@@ -528,6 +529,7 @@ fn thumb_fit(pts: &[V3], yaw: f32, pitch: f32, fov: f32) -> Option<(V3, f32)> {
     let r = v3(-sy, cy, 0.0);
     let u = v3(-cy * sp, -sy * sp, cp);
     let t = (fov.clamp(5.0, 120.0).to_radians() * 0.5).tan() / 1.06;
+    let tw = t * aspect.clamp(0.1, 10.0);
     // center on the extent across the view plane, then back off; a second pass
     // re-centers on the perspective extent
     let (mut lo, mut hi) = (pts[0], pts[0]);
@@ -538,7 +540,7 @@ fn thumb_fit(pts: &[V3], yaw: f32, pitch: f32, fov: f32) -> Option<(V3, f32)> {
     let mut c = (lo + hi) * 0.5;
     let need = |c: V3| pts.iter().fold(8.0f32, |d, p| {
         let q = *p - c;
-        d.max(q.dot(r).abs().max(q.dot(u).abs()) / t + q.dot(e))
+        d.max((q.dot(r).abs() / tw).max(q.dot(u).abs() / t) + q.dot(e))
     });
     let reach = (hi - lo).len() + 1.0;
     for _ in 0..8 {
@@ -1566,8 +1568,8 @@ mod thumb_tests {
     fn thumb_fit_frames_every_point_and_centers_them() {
         // an L-shaped spread of points
         let pts = [v3(0.0, 0.0, 0.0), v3(400.0, 0.0, 0.0), v3(0.0, 40.0, 0.0), v3(0.0, 0.0, 100.0), v3(400.0, 40.0, 10.0)];
-        for (yaw, pitch) in [(-60.0f32, 20.0f32), (30.0, 45.0), (0.0, 0.0)] {
-            let (c, d) = thumb_fit(&pts, yaw, pitch, 30.0).unwrap();
+        for (yaw, pitch, aspect) in [(-60.0f32, 20.0f32, 1.0f32), (30.0, 45.0, 1.0), (0.0, 0.0, 1.0), (-60.0, 20.0, 2.0), (30.0, 45.0, 0.5)] {
+            let (c, d) = thumb_fit(&pts, yaw, pitch, 30.0, aspect).unwrap();
             let (sy, cy) = yaw.to_radians().sin_cos();
             let (sp, cp) = pitch.to_radians().sin_cos();
             let e = v3(cy * cp, sy * cp, sp);
@@ -1578,7 +1580,7 @@ mod thumb_tests {
             for p in &pts {
                 let q = *p - c;
                 let depth = d - q.dot(e);
-                let (x, y) = (q.dot(r) / depth / t, q.dot(u) / depth / t);
+                let (x, y) = (q.dot(r) / depth / (t * aspect), q.dot(u) / depth / t);
                 assert!(x.abs() <= 1.0 && y.abs() <= 1.0, "point off screen at {yaw},{pitch}: {x} {y}");
                 x0 = x0.min(x);
                 x1 = x1.max(x);
@@ -1589,6 +1591,6 @@ mod thumb_tests {
             assert!((x1 - x0).max(y1 - y0) > 1.8, "too loose at {yaw},{pitch}: {}", (x1 - x0).max(y1 - y0));
             assert!(((x0 + x1) * 0.5).abs() < 0.05 && ((y0 + y1) * 0.5).abs() < 0.05, "off center at {yaw},{pitch}: {x0} {x1} {y0} {y1}");
         }
-        assert!(thumb_fit(&[], 0.0, 0.0, 30.0).is_none());
+        assert!(thumb_fit(&[], 0.0, 0.0, 30.0, 1.0).is_none());
     }
 }
