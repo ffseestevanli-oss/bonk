@@ -3387,13 +3387,17 @@ public:
                         q.setRenderHint(QPainter::Antialiasing);
                         q.setPen(Qt::NoPen);
                         q.setBrush(QColor(0, 0, 0, 170));
-                        q.drawRoundedRect(QRectF(6, 150, 74, 36), 6, 6);
+                        // bottom right: the bottom-left corner is the material-properties dot
+                        q.drawRoundedRect(QRectF(112, 150, 74, 36), 6, 6);
                         QFont f;
                         f.setPixelSize(22);
                         f.setBold(true);
                         q.setFont(f);
+                        // a drawn play triangle (fonts don't all have ▶), then the frame count
+                        q.setBrush(Qt::white);
+                        q.drawPolygon(QPolygonF({QPointF(121, 159), QPointF(121, 177), QPointF(136, 168)}));
                         q.setPen(Qt::white);
-                        q.drawText(QRectF(6, 150, 74, 36), Qt::AlignCenter, QStringLiteral("▶ %1").arg(e.frames));
+                        q.drawText(QRectF(138, 150, 46, 36), Qt::AlignVCenter | Qt::AlignLeft, QString::number(e.frames));
                     }
                 }
                 e.icon = QIcon(QPixmap::fromImage(sq));

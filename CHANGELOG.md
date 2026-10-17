@@ -2,6 +2,11 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.14.1
+
+- The animation badge (▶ and the frame count) moved to the swatch's bottom-right corner: the
+  material-properties dot was drawn over it, which is the circle you saw.
+
 ## 0.14.0 — "Textures"
 
 ### Texture tools
