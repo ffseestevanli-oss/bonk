@@ -6,6 +6,7 @@ use crate::doc::*;
 use crate::tex::{self, TexMap};
 use crate::texstore;
 use crate::geom;
+use crate::shapes::{self, Shape};
 use crate::math::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -97,6 +98,10 @@ impl Camera {
 pub const FOV_DEG: f32 = 75.0;
 /// How long the "dropped here" ripple lasts
 pub const RIPPLE_SECS: f32 = 0.55;
+/// Within this many pixels of where a move started, it sits exactly where it was
+pub const MOVE_DEAD_ZONE_PX: f32 = 7.0;
+/// How far a locked move goes before it picks its axis
+pub const AXIS_COMMIT_PX: f32 = 10.0;
 const LOOK_SENS: f32 = 0.18; // degrees per pixel
 const FLY_SPEED: f32 = 600.0; // units per second
 const TURN_SPEED: f32 = 100.0; // degrees per second (arrow keys)
@@ -170,8 +175,13 @@ enum Target {
 }
 
 enum Drag {
-    NewBox { view: usize, start: (f32, f32), start_px: (f32, f32), ctrl: bool },
+    /// `quick`: Quick Draw (right-drag): one grid unit deep, created on release
+    NewBox { view: usize, start: (f32, f32), start_px: (f32, f32), ctrl: bool, quick: bool },
     Move { view: usize, target: Target, grab: (f32, f32), orig: (V3, V3), orig_brushes: Vec<Brush>, changed: bool, toggle_on_click: bool, clone: bool },
+    /// R held in the Vertex tool with vertices selected: turn them about their center
+    VRotate { view: usize, center: V3, start_x: f32, orig_brushes: Vec<Brush>, sel: Vec<(u32, V3)>, changed: bool },
+    /// S held in the Vertex tool with vertices selected: scale them about their center
+    VScale { view: usize, center: V3, center_px: (f32, f32), start_d: f32, orig_brushes: Vec<Brush>, sel: Vec<(u32, V3)>, changed: bool },
     Resize { view: usize, target: Target, hx: i8, hy: i8, orig: (V3, V3), orig_brushes: Vec<Brush>, changed: bool },
     /// `by_key`: started by holding R (ends when R is released, not on mouse up)
     Rotate { view: usize, center: (f32, f32), start_ang: f32, orig_brushes: Vec<Brush>, changed: bool, by_key: bool },
@@ -353,6 +363,10 @@ pub mod cmd {
     pub const TOGGLE_BOX_TOUCH: i32 = 36;
     /// View → Collision Look: ghosted ↔ solid
     pub const TOGGLE_COLLISION_SOLID: i32 = 37;
+    /// The Vertex tool's ↖ button: vertex select on / off (switches to the Vertex tool)
+    pub const TOGGLE_VERTEX_PICK: i32 = 38;
+    /// Measurement Buddies: place a car (HL2 jeep sized)
+    pub const TOOL_CAR: i32 = 39;
 }
 
 #[derive(Default)]
@@ -381,6 +395,13 @@ pub struct Editor {
     pub captured: bool,
     /// Pending box of the block tool (not yet a brush)
     pub block_box: Option<(V3, V3)>,
+    /// Vertex tool's vertex select (the ↖ button): clicks and boxes pick vertices on any brush
+    pub vertex_pick: bool,
+    /// What the Block tool makes, and how many sides round shapes get
+    pub block_shape: Shape,
+    pub block_faces: u32,
+    /// (depth axis, horizontal axis) of the view the block box was drawn in
+    pub block_axis: (usize, usize),
     /// Scale or rotate handles around the selection (selection tool)
     pub sel_mode: HandleMode,
     /// Selected vertices in the vertex tool, as (brush id, position)
@@ -431,6 +452,9 @@ pub struct Editor {
     /// G / Shift moves stay on one axis (the one you move along most); Alt flips it for a hold
     pub axis_lock: bool,
     axis_flip: bool,
+    /// The axis a locked hold committed to (0 = the view's horizontal / world X,
+    /// 1 = vertical / world Y); it stays for the whole hold
+    axis_commit: Option<u8>,
     /// Brushes hidden with H (this session only, never saved)
     pub hidden: Vec<u32>,
     /// Collision brushes drawn solid, each in its own color, instead of orange glass
@@ -491,6 +515,10 @@ impl Editor {
             cam: Camera { pos: v3(-320.0, -320.0, 256.0), yaw: 45.0, pitch: -25.0 },
             captured: false,
             block_box: None,
+            vertex_pick: false,
+            block_shape: Shape::Block,
+            block_faces: 8,
+            block_axis: (2, 0),
             sel_mode: HandleMode::Scale,
             vsel: Vec::new(),
             free: false,
@@ -517,6 +545,7 @@ impl Editor {
             sel_box_wait: false,
             axis_lock: true,
             axis_flip: false,
+            axis_commit: None,
             hidden: Vec::new(),
             collision_solid: false,
             fov: FOV_DEG,
@@ -902,10 +931,15 @@ impl Editor {
 
     /// Vertices of selected brushes under a screen point.
     pub fn hit_vertices(&self, id: usize, x: f32, y: f32) -> Vec<(u32, V3)> {
+        self.hit_vertices_of(id, x, y, false)
+    }
+
+    /// `any`: vertices of every brush you can click, not just selected ones (vertex select).
+    fn hit_vertices_of(&self, id: usize, x: f32, y: f32, any: bool) -> Vec<(u32, V3)> {
         let v = self.view(id);
         let r = VERTEX_PX + 3.0;
         let mut cands = Vec::new();
-        for b in self.doc.brushes.iter().filter(|b| self.doc.is_selected(b.id) && b.entity.is_none()) {
+        for b in self.doc.brushes.iter().filter(|b| (self.doc.is_selected(b.id) || (any && self.pickable(b))) && b.entity.is_none()) {
             for &p in &b.verts {
                 let (sx, sy) = v.project(p);
                 let dist = ((sx - x).powi(2) + (sy - y).powi(2)).sqrt();
@@ -1008,6 +1042,13 @@ impl Editor {
         // Hold M: the same, without the copy (smaller dead zone: M is deliberate)
         if let Some((view, start, false)) = self.move_hold {
             if view == id && self.drag.is_none() && ((x - start.0).powi(2) + (y - start.1).powi(2)).sqrt() >= 6.0 {
+                // the Vertex tool with vertices selected: G moves the vertices
+                if self.tool == Tool::Vertex && !self.vsel.is_empty() {
+                    let grab = self.view(id).to_world(start.0, start.1);
+                    self.drag = Some(Drag::Vertex { view: id, grab, anchor: self.vsel[0].1, orig_brushes: self.doc.selected_brushes(), sel: self.vsel.clone(), changed: false });
+                    self.move_hold = Some((view, start, true));
+                    return;
+                }
                 // the Block tool's unfinished box moves like a brush
                 if let (Tool::Block, Some(bb)) = (self.tool, self.block_box) {
                     let grab = self.view(id).to_world(start.0, start.1);
@@ -1066,6 +1107,11 @@ impl Editor {
     /// Drop a Shift-held clone (or an M-held move) where it is.
     fn place_shift_clone(&mut self) -> u32 {
         self.axis_flip = false;
+        self.axis_commit = None;
+        if let Some(Drag::Vertex { .. }) = self.drag {
+            self.drag = None;
+            return flags::ALL;
+        }
         if let Some(Drag::Move3D { .. }) = self.drag {
             self.drag = None;
             self.hold_in_3d = false;
@@ -1206,6 +1252,13 @@ impl Editor {
             self.drag = Some(Drag::Pan { view: id, last: (x, y) });
             return flags::cursor(cursor::HAND);
         }
+        if btn == button::RIGHT && self.tool == Tool::Block {
+            // Quick Draw: right-drag a block one grid unit deep
+            let (wh, wv) = self.view(id).to_world(x, y);
+            self.block_box = None;
+            self.drag = Some(Drag::NewBox { view: id, start: (wh, wv), start_px: (x, y), ctrl: false, quick: true });
+            return flags::ALL;
+        }
         if btn != button::LEFT {
             return 0;
         }
@@ -1247,7 +1300,7 @@ impl Editor {
                     }
                 }
                 self.block_box = None;
-                self.drag = Some(Drag::NewBox { view: id, start: (wh, wv), start_px: (x, y), ctrl });
+                self.drag = Some(Drag::NewBox { view: id, start: (wh, wv), start_px: (x, y), ctrl, quick: false });
                 flags::ALL
             }
             Tool::Select => {
@@ -1317,6 +1370,31 @@ impl Editor {
                 if hit.is_some() && !ctrl {
                     self.drag = self.selection_drag_move(id, (wh, wv), false);
                 }
+                flags::ALL
+            }
+            Tool::Vertex if self.vertex_pick => {
+                // vertex select: clicks pick vertices on any brush, drags draw a box;
+                // G / R / S / arrows do the moving
+                let h = self.hit_vertices_of(id, x, y, true);
+                if !h.is_empty() {
+                    if !ctrl {
+                        self.vsel.clear();
+                    }
+                    for (bid, p) in h {
+                        if let Some(i) = self.vsel.iter().position(|&(i, q)| i == bid && (q - p).len() < 1e-3) {
+                            if ctrl {
+                                self.vsel.remove(i);
+                            }
+                        } else {
+                            self.vsel.push((bid, p));
+                        }
+                        if !self.doc.is_selected(bid) {
+                            self.doc.selection.push(bid);
+                        }
+                    }
+                    return flags::ALL;
+                }
+                self.drag = Some(Drag::Marquee { view: id, start: (x, y), cur: (x, y), ctrl });
                 flags::ALL
             }
             Tool::Vertex => {
@@ -1420,7 +1498,8 @@ impl Editor {
         self.show_entities = true;
         self.tool = Tool::Select;
         self.sel_mode = HandleMode::Scale;
-        self.message = Some(format!("Placed a scale mannequin at {}, {}, {}", fmt_num(base.x), fmt_num(base.y), fmt_num(base.z)));
+        let what = if self.place == Entity::Car { "car" } else { "scale mannequin" };
+        self.message = Some(format!("Placed a {what} at {}, {}, {} (never compiled)", fmt_num(base.x), fmt_num(base.y), fmt_num(base.z)));
         flags::ALL | flags::TOOL
     }
 
@@ -2319,11 +2398,22 @@ impl Editor {
                     if t > 0.0 {
                         let p = o + d * t;
                         let mut delta = v3(p.x - start.x, p.y - start.y, 0.0);
+                        let near = delta.len() < self.grid * 0.5 && self.hold_carrying();
                         if self.hold_carrying() && self.axis_locked() {
-                            if delta.x.abs() >= delta.y.abs() { delta.y = 0.0 } else { delta.x = 0.0 }
+                            if self.axis_commit.is_none() && delta.len() >= self.grid.max(4.0) {
+                                self.axis_commit = Some(if delta.x.abs() >= delta.y.abs() { 0 } else { 1 });
+                            }
+                            match self.axis_commit {
+                                Some(0) => delta.y = 0.0,
+                                Some(_) => delta.x = 0.0,
+                                None => delta = V3::default(),
+                            }
                         }
                         delta.x = self.snap(delta.x);
                         delta.y = self.snap(delta.y);
+                        if near {
+                            delta = V3::default(); // back where it started
+                        }
                         if delta.len() < 1e5 && (changed || delta != V3::default()) {
                             self.translate_brushes(&orig_brushes, delta, &mut changed);
                             moved = true;
@@ -2365,7 +2455,7 @@ impl Editor {
                 }
                 Drag::SelNew { view, start, start_px }
             }
-            Drag::NewBox { view, start, start_px, ctrl } => {
+            Drag::NewBox { view, start, start_px, ctrl, quick } => {
                 let v = self.view(view);
                 let (ha, va, da) = v.kind.axes();
                 let (wh, wv) = v.to_world(x, y);
@@ -2379,13 +2469,26 @@ impl Editor {
                     hi.set(ha, h0.max(h1));
                     lo.set(va, v0.min(v1));
                     hi.set(va, v0.max(v1));
-                    lo.set(da, self.work.0.get(da));
-                    hi.set(da, self.work.1.get(da));
+                    if quick {
+                        // one grid unit deep: on the floor or on top of the selection (top view),
+                        // where the Block tool would start it otherwise
+                        let base = if da == 2 {
+                            self.doc.selection_bounds().map(|b| b.1.z).unwrap_or(0.0)
+                        } else {
+                            self.work.0.get(da)
+                        };
+                        lo.set(da, base);
+                        hi.set(da, base + self.grid);
+                    } else {
+                        lo.set(da, self.work.0.get(da));
+                        hi.set(da, self.work.1.get(da));
+                    }
                     self.block_box = Some((lo, hi));
+                    self.block_axis = (da, ha);
                 } else {
                     self.block_box = None;
                 }
-                Drag::NewBox { view, start, start_px, ctrl }
+                Drag::NewBox { view, start, start_px, ctrl, quick }
             }
             Drag::Move { view, target, grab, orig, orig_brushes, mut changed, toggle_on_click, clone } => {
                 let v = self.view(view);
@@ -2394,9 +2497,26 @@ impl Editor {
                 let mut nb = orig;
                 let mut dh = self.snap(orig.0.get(ha) + wh - grab.0) - orig.0.get(ha);
                 let mut dv = self.snap(orig.0.get(va) + wv - grab.1) - orig.0.get(va);
-                // a G / Shift hold with the axis lock on: only the axis you're moving along most
+                // back near where it started: exactly where it was
+                let px = ((wh - grab.0).powi(2) + (wv - grab.1).powi(2)).sqrt() * v.zoom;
+                if px < MOVE_DEAD_ZONE_PX && self.hold_carrying() {
+                    dh = 0.0;
+                    dv = 0.0;
+                }
+                // a G / Shift hold with the axis lock on: the first clear direction wins
+                // and stays for the whole hold (Alt frees it)
                 if self.hold_carrying() && self.axis_locked() {
-                    if (wh - grab.0).abs() >= (wv - grab.1).abs() { dv = 0.0 } else { dh = 0.0 }
+                    if self.axis_commit.is_none() && px >= AXIS_COMMIT_PX {
+                        self.axis_commit = Some(if (wh - grab.0).abs() >= (wv - grab.1).abs() { 0 } else { 1 });
+                    }
+                    match self.axis_commit {
+                        Some(0) => dv = 0.0,
+                        Some(_) => dh = 0.0,
+                        None => {
+                            dh = 0.0;
+                            dv = 0.0;
+                        }
+                    }
                 }
                 for (axis, d) in [(ha, dh), (va, dv)] {
                     nb.0.set(axis, orig.0.get(axis) + d);
@@ -2485,6 +2605,45 @@ impl Editor {
                 }
                 Drag::Rotate { view, center, start_ang, orig_brushes, changed, by_key }
             }
+            Drag::VRotate { view, center, start_x, orig_brushes, sel, mut changed } => {
+                let v = self.view(view);
+                let (ha, va, _) = v.kind.axes();
+                let mut ang = -(x - start_x) * 0.5f32.to_radians();
+                if !self.free {
+                    let s = self.cfg.rot_snap.max(1.0).to_radians();
+                    ang = (ang / s).round() * s;
+                }
+                if changed || ang != 0.0 {
+                    let c = (center.get(ha), center.get(va));
+                    self.apply_vertex_map(&orig_brushes, &sel, &|p| rotate_points(&[p], ha, va, c, ang)[0], &mut changed);
+                } else {
+                    out = 0;
+                }
+                Drag::VRotate { view, center, start_x, orig_brushes, sel, changed }
+            }
+            Drag::VScale { view, center, center_px, start_d, orig_brushes, sel, mut changed } => {
+                let v = self.view(view);
+                let (ha, va, _) = v.kind.axes();
+                let d = ((x - center_px.0).powi(2) + (y - center_px.1).powi(2)).sqrt();
+                let mut k = d / start_d.max(4.0);
+                if !self.free {
+                    k = (k * 20.0).round() / 20.0; // 5% steps (Alt: smooth)
+                }
+                let k = k.max(0.05);
+                if changed || (k - 1.0).abs() > 1e-4 {
+                    let f = |p: V3| {
+                        let mut q = p;
+                        q.set(ha, tidy(center.get(ha) + (p.get(ha) - center.get(ha)) * k));
+                        q.set(va, tidy(center.get(va) + (p.get(va) - center.get(va)) * k));
+                        q
+                    };
+                    self.apply_vertex_map(&orig_brushes, &sel, &f, &mut changed);
+                    self.message = Some(format!("Scaling vertices: {:.0}%", k * 100.0));
+                } else {
+                    out = 0;
+                }
+                Drag::VScale { view, center, center_px, start_d, orig_brushes, sel, changed }
+            }
             Drag::Vertex { view, grab, anchor, orig_brushes, sel, mut changed } => {
                 let v = self.view(view);
                 let (ha, va, _) = v.kind.axes();
@@ -2492,6 +2651,23 @@ impl Editor {
                 let mut delta = V3::default();
                 delta.set(ha, self.snap(anchor.get(ha) + wh - grab.0) - anchor.get(ha));
                 delta.set(va, self.snap(anchor.get(va) + wv - grab.1) - anchor.get(va));
+                if self.hold_carrying() {
+                    // G with vertices: same dead zone and axis lock as moving brushes
+                    let px = ((wh - grab.0).powi(2) + (wv - grab.1).powi(2)).sqrt() * v.zoom;
+                    if px < MOVE_DEAD_ZONE_PX {
+                        delta = V3::default();
+                    }
+                    if self.axis_locked() {
+                        if self.axis_commit.is_none() && px >= AXIS_COMMIT_PX {
+                            self.axis_commit = Some(if (wh - grab.0).abs() >= (wv - grab.1).abs() { 0 } else { 1 });
+                        }
+                        match self.axis_commit {
+                            Some(0) => delta.set(va, 0.0),
+                            Some(_) => delta.set(ha, 0.0),
+                            None => delta = V3::default(),
+                        }
+                    }
+                }
                 if changed || delta != V3::default() {
                     self.apply_vertex_move(&orig_brushes, &sel, delta, &mut changed);
                 } else {
@@ -2507,7 +2683,14 @@ impl Editor {
     /// Move the selected vertices by `delta` (from the drag-start state). Every
     /// affected brush must stay a valid convex solid, or nothing changes.
     fn apply_vertex_move(&mut self, orig: &[Brush], sel: &[(u32, V3)], delta: V3, changed: &mut bool) {
+        self.apply_vertex_map(orig, sel, &|p| p + delta, changed);
+    }
+
+    /// Send the selected vertices through `f`. A brush that would turn concave
+    /// or flat keeps its old shape (the others still change).
+    fn apply_vertex_map(&mut self, orig: &[Brush], sel: &[(u32, V3)], f: &dyn Fn(V3) -> V3, changed: &mut bool) {
         let mut rebuilt: Vec<Brush> = Vec::new();
+        let mut refused: Vec<u32> = Vec::new();
         for ob in orig {
             let mut any = false;
             let pts: Vec<V3> = ob
@@ -2516,7 +2699,7 @@ impl Editor {
                 .map(|&p| {
                     if sel.iter().any(|&(i, q)| i == ob.id && (q - p).len() < 1e-3) {
                         any = true;
-                        p + delta
+                        f(p)
                     } else {
                         p
                     }
@@ -2527,10 +2710,14 @@ impl Editor {
             }
             let mut nb = ob.clone();
             if !nb.set_points(&pts) {
-                self.message = Some("Can't move there: the brush would become concave or flat".into());
-                return;
+                refused.push(ob.id);
+                nb = ob.clone(); // snaps back to how it was
             }
             rebuilt.push(nb);
+        }
+        if refused.len() == rebuilt.len() && !rebuilt.is_empty() && !*changed {
+            self.message = Some("Can't move there: the brush would become concave or flat".into());
+            return;
         }
         if !*changed {
             self.doc.checkpoint();
@@ -2544,13 +2731,78 @@ impl Editor {
         // Keep moved vertices selected (merged ones collapse into one).
         let mut nsel: Vec<(u32, V3)> = Vec::new();
         for &(id, p) in sel {
-            let q = p + delta;
+            let q = if refused.contains(&id) { p } else { f(p) };
             if self.doc.brush(id).is_some_and(|b| b.has_vertex(q)) && !nsel.iter().any(|&(i, r)| i == id && (r - q).len() < 1e-3) {
                 nsel.push((id, q));
             }
         }
         self.vsel = nsel;
-        self.message = None;
+        self.message = match refused.len() {
+            0 => None,
+            1 => Some("1 brush would have become concave or flat: it stays as it was".into()),
+            n => Some(format!("{n} brushes would have become concave or flat: they stay as they were")),
+        };
+    }
+
+    /// Paste clipboard text from `write_clip` (this model or another one).
+    /// `at_mouse`: centered under the mouse in the 2D view it's over, else in
+    /// the same spot it was copied from. Returns how many brushes came in.
+    pub fn paste(&mut self, text: &str, at_mouse: bool) -> Result<usize, String> {
+        let l = crate::io::read(text)?;
+        if l.brushes.is_empty() {
+            return Err("Nothing to paste".into());
+        }
+        let active = self.doc.active_layer;
+        if self.doc.layer(active).is_some_and(|l| l.locked) {
+            return Err("The active layer is locked: unlock it or pick another layer".into());
+        }
+        self.doc.checkpoint();
+        for (m, props) in l.mat_overrides {
+            if !self.doc.mat_overrides.iter().any(|(k, _)| *k == m) {
+                self.doc.mat_overrides.push((m, props));
+            }
+        }
+        let ids = self.doc.paste(l.brushes, l.groups, active);
+        self.doc.selection = ids.clone();
+        self.vsel.clear();
+        if at_mouse {
+            if let (Some((id, x, y)), Some((lo, hi))) = (self.hover, self.doc.selection_bounds()) {
+                if (1..=3).contains(&id) {
+                    let v = self.view(id);
+                    let (ha, va, _) = v.kind.axes();
+                    let (wh, wv) = v.to_world(x, y);
+                    let mut d = V3::default();
+                    d.set(ha, self.snap(wh - (hi.get(ha) - lo.get(ha)) * 0.5) - lo.get(ha));
+                    d.set(va, self.snap(wv - (hi.get(va) - lo.get(va)) * 0.5) - lo.get(va));
+                    let orig = self.doc.selected_brushes();
+                    let mut changed = true;
+                    self.translate_brushes(&orig, d, &mut changed);
+                }
+            }
+        }
+        if let Some(b) = self.doc.selection_bounds() {
+            self.work = b;
+            self.ripple = Some((b, self.time));
+        }
+        if self.tool != Tool::Select && self.tool != Tool::Block {
+            self.tool = Tool::Select;
+        }
+        let n = ids.len();
+        self.message = Some(format!("Pasted {} brush{}: G moves them", n, if n == 1 { "" } else { "es" }));
+        Ok(n)
+    }
+
+    /// Center of the selected vertices.
+    fn vsel_center(&self) -> Option<V3> {
+        if self.vsel.is_empty() {
+            return None;
+        }
+        let (mut lo, mut hi) = (self.vsel[0].1, self.vsel[0].1);
+        for &(_, p) in &self.vsel {
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        Some((lo + hi) * 0.5)
     }
 
     /// Map the target from box `orig` to box `nb`.
@@ -2634,6 +2886,16 @@ impl Editor {
                 } else {
                     let n = self.sel_box_catch().len();
                     self.message = Some(format!("Selection box: {} brush{} inside. Enter selects (Ctrl+Enter adds), S / G adjust, Esc cancels", n, if n == 1 { "" } else { "es" }));
+                }
+                out |= flags::ALL;
+            }
+            Some(Drag::NewBox { quick: true, .. }) => {
+                // Quick Draw: made as soon as you let go
+                if self.block_box.is_some() {
+                    out |= self.command(cmd::CREATE_BLOCK);
+                    if let Some(b) = self.doc.selection_bounds() {
+                        self.ripple = Some((b, self.time));
+                    }
                 }
                 out |= flags::ALL;
             }
@@ -2728,7 +2990,8 @@ impl Editor {
                 if x1 - x0 > 2.0 || y1 - y0 > 2.0 {
                     let v = self.view(view);
                     let mut add = Vec::new();
-                    for b in self.doc.brushes.iter().filter(|b| self.doc.is_selected(b.id) && b.entity.is_none()) {
+                    let any = self.vertex_pick;
+                    for b in self.doc.brushes.iter().filter(|b| (self.doc.is_selected(b.id) || (any && self.pickable(b))) && b.entity.is_none()) {
                         for &p in &b.verts {
                             let (sx, sy) = v.project(p);
                             if sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1 {
@@ -2739,6 +3002,9 @@ impl Editor {
                     for (bid, p) in add {
                         if !self.vertex_selected(bid, p) {
                             self.vsel.push((bid, p));
+                        }
+                        if !self.doc.is_selected(bid) {
+                            self.doc.selection.push(bid);
                         }
                     }
                 }
@@ -2851,6 +3117,7 @@ impl Editor {
                     || (self.tool == Tool::Select && self.sel_box.is_some())
                     || (self.tool == Tool::Block && self.block_box.is_some());
                 self.axis_flip = false;
+        self.axis_commit = None;
                 self.move_hold = match self.hover {
                     Some((0, x, y)) if id == 0 && ok_tool && self.drag.is_none() && !self.doc.selection.is_empty() => {
                         // 3D view: slide the selection across the floor plane under it
@@ -2890,6 +3157,8 @@ impl Editor {
         if k == key::SHIFT && !repeat {
             if pressed {
                 let ok_tool = matches!(self.tool, Tool::Select | Tool::Block);
+                self.axis_flip = false;
+                self.axis_commit = None;
                 self.shift_hold = match self.hover {
                     Some((hid, x, y)) if self.shift_clone && !k3d && hid == id && (1..=3).contains(&id) && ok_tool
                         && m & (mods::CTRL | mods::ALT) == 0 && self.s_hold.is_none() && self.drag.is_none()
@@ -2908,6 +3177,30 @@ impl Editor {
             if matches!(self.shift_hold, Some((_, _, false))) {
                 self.shift_hold = None; // Shift+S, Shift+arrow…: not a clone
             }
+        }
+        // Vertex tool with vertices selected: S scales them about their center
+        if k == key::S && !k3d && (1..=3).contains(&id) && self.tool == Tool::Vertex && !self.vsel.is_empty() && m & mods::CTRL == 0 {
+            if repeat {
+                return 0;
+            }
+            if pressed {
+                if self.drag.is_none() {
+                    if let (Some(center), Some((hid, x, y))) = (self.vsel_center(), self.hover) {
+                        if hid == id {
+                            let v = self.view(id);
+                            let (ha, va, _) = v.kind.axes();
+                            let cp = v.to_screen(center.get(ha), center.get(va));
+                            let start_d = ((x - cp.0).powi(2) + (y - cp.1).powi(2)).sqrt();
+                            self.drag = Some(Drag::VScale { view: id, center, center_px: cp, start_d, orig_brushes: self.doc.selected_brushes(), sel: self.vsel.clone(), changed: false });
+                            self.message = Some("Scaling vertices: move away from the center to grow, toward it to shrink".into());
+                        }
+                    }
+                }
+            } else if matches!(self.drag, Some(Drag::VScale { .. })) {
+                self.drag = None;
+                self.message = None;
+            }
+            return flags::ALL;
         }
         // Hold S in a 2D view: arrows (or the mouse) resize instead of nudging.
         if !k3d && (1..=3).contains(&id) {
@@ -2980,6 +3273,7 @@ impl Editor {
                 self.alt = pressed;
                 if pressed && (self.move_hold.is_some() || self.shift_hold.is_some()) {
                     self.axis_flip = !self.axis_flip;
+                    self.axis_commit = None; // locking again picks the axis afresh
                     self.message = Some(if self.axis_locked() { "Axis lock on: moves stay on one axis" } else { "Axis lock off: move freely" }.into());
                     self.update_free();
                     return flags::ALL;
@@ -3216,6 +3510,11 @@ impl Editor {
             return 0;
         }
         let Some((id, x, y)) = self.hover else { return 0 };
+        if self.tool == Tool::Vertex && (1..=3).contains(&id) {
+            let Some(center) = self.vsel_center() else { return 0 };
+            self.drag = Some(Drag::VRotate { view: id, center, start_x: x, orig_brushes: self.doc.selected_brushes(), sel: self.vsel.clone(), changed: false });
+            return flags::ALL;
+        }
         if id == 0 {
             // 3D view: turn about the vertical axis, steered like the top view
             let Some(b) = self.doc.selection_bounds() else { return 0 };
@@ -3239,6 +3538,10 @@ impl Editor {
     }
 
     fn end_key_rotate(&mut self) -> u32 {
+        if matches!(self.drag, Some(Drag::VRotate { .. })) {
+            self.drag = None;
+            return flags::ALL;
+        }
         if matches!(self.drag, Some(Drag::Rotate { by_key: true, .. })) {
             self.drag = None;
             self.hold_in_3d = false;
@@ -3255,6 +3558,8 @@ impl Editor {
                 | Some(Drag::Resize { target: Target::Selection, changed: true, .. })
                 | Some(Drag::Rotate { changed: true, .. })
                 | Some(Drag::Vertex { changed: true, .. })
+                | Some(Drag::VRotate { changed: true, .. })
+                | Some(Drag::VScale { changed: true, .. })
                 | Some(Drag::Move3D { changed: true, .. })
                 | Some(Drag::SSize { target: Target::Selection, changed: true, .. })
                 | Some(Drag::TexDrag { moved: true, .. })
@@ -3406,6 +3711,7 @@ impl Editor {
         self.move_hold = None;
         self.hold_in_3d = false;
         self.axis_flip = false;
+        self.axis_commit = None;
         if self.captured {
             return self.toggle_capture();
         }
@@ -3420,8 +3726,15 @@ impl Editor {
             if let Some(h) = self.s_hold.as_mut() {
                 h.used = SUse::Arrows; // don't restart mouse sizing in this hold
             }
+            let vsel_before = match &self.drag {
+                Some(Drag::Vertex { sel, .. }) | Some(Drag::VRotate { sel, .. }) | Some(Drag::VScale { sel, .. }) => Some(sel.clone()),
+                _ => None,
+            };
             if self.drag_changed_doc() {
                 self.doc.revert_to_checkpoint();
+                if let Some(sel) = vsel_before {
+                    self.vsel = sel;
+                }
                 self.prune_vsel();
             }
             self.drag = None;
@@ -3485,6 +3798,15 @@ impl Editor {
 
     /// The 2D view a hold-key action (S sizing, Shift clone, R rotate) is
     /// steering right now, so the host can pin the cursor there.
+    /// The pending block as the shape it will become (None for a plain block).
+    pub fn block_preview(&self) -> Option<geom::Hull> {
+        let (lo, hi) = self.block_box?;
+        if self.block_shape == Shape::Block || self.tool != Tool::Block {
+            return None;
+        }
+        geom::hull(&shapes::points(self.block_shape, lo, hi, self.block_axis.0, self.block_axis.1, self.block_faces))
+    }
+
     /// What a held key is doing right now, for the hint in the corner of the
     /// view: (view 0-3, kind, text). Kinds: 1 move (G), 2 carry a copy (Shift),
     /// 3 rotate (R), 4 size (S), 5 pan.
@@ -3495,6 +3817,12 @@ impl Editor {
         }
         if let Some((v, _, _)) = self.shift_hold {
             return Some((v, 2, format!("[Shift] held: move the mouse to carry a copy ({lock}). Release to drop")));
+        }
+        if let Some(Drag::VRotate { view, .. }) = self.drag {
+            return Some((view, 3, "[R] held: move the mouse left / right to turn the selected vertices. Release to finish".into()));
+        }
+        if let Some(Drag::VScale { view, .. }) = self.drag {
+            return Some((view, 4, "[S] held: away from the center grows, toward it shrinks (Alt: smooth). Release to finish".into()));
         }
         if let Some(Drag::Rotate { view, by_key: true, .. }) = self.drag {
             let v = if self.hold_in_3d { 0 } else { view };
@@ -3516,6 +3844,8 @@ impl Editor {
         match self.drag {
             // panning a 2D view with the middle button keeps going past the edge too
             Some(Drag::Pan { view, .. }) => Some(view),
+            Some(Drag::VRotate { view, .. }) | Some(Drag::VScale { view, .. }) => Some(view),
+            Some(Drag::Vertex { view, .. }) if matches!(self.move_hold, Some((_, _, true))) => Some(view),
             Some(Drag::SSize { view, .. }) => Some(view),
             Some(Drag::Rotate { view, by_key: true, .. }) => Some(view),
             Some(Drag::Move { view, clone: true, .. }) if matches!(self.shift_hold, Some((_, _, true))) => Some(view),
@@ -3701,6 +4031,20 @@ impl Editor {
                 };
                 return self.mirror_selection(axis);
             }
+            cmd::TOGGLE_VERTEX_PICK => {
+                if self.tool == Tool::Vertex {
+                    self.vertex_pick = !self.vertex_pick;
+                } else {
+                    self.command(cmd::TOOL_VERTEX);
+                    self.vertex_pick = true;
+                }
+                self.message = Some(if self.vertex_pick {
+                    "Vertex select: click or box vertices on any brush (Ctrl adds), then G moves, R turns, S scales"
+                } else {
+                    "Vertex tool: drag handles to move vertices"
+                }.into());
+                return flags::ALL | flags::TOOL;
+            }
             cmd::TOGGLE_AXIS_LOCK => {
                 self.axis_lock = !self.axis_lock;
                 return flags::ALL | flags::TOOL;
@@ -3738,7 +4082,7 @@ impl Editor {
                 return flags::ALL | flags::TOOL;
             }
             cmd::BISECT_APPLY => return self.apply_bisect(),
-            cmd::TOOL_SELECT | cmd::TOOL_BLOCK | cmd::TOOL_VERTEX | cmd::TOOL_BISECT | cmd::TOOL_MANNEQUIN | cmd::TOOL_ORIGIN | cmd::TOOL_FACE => {
+            cmd::TOOL_SELECT | cmd::TOOL_BLOCK | cmd::TOOL_VERTEX | cmd::TOOL_BISECT | cmd::TOOL_MANNEQUIN | cmd::TOOL_CAR | cmd::TOOL_ORIGIN | cmd::TOOL_FACE => {
                 self.tool = match c {
                     cmd::TOOL_SELECT => Tool::Select,
                     cmd::TOOL_BLOCK => Tool::Block,
@@ -3746,6 +4090,10 @@ impl Editor {
                     cmd::TOOL_BISECT => Tool::Bisect,
                     cmd::TOOL_MANNEQUIN => {
                         self.place = Entity::Mannequin;
+                        Tool::Entity
+                    }
+                    cmd::TOOL_CAR => {
+                        self.place = Entity::Car;
                         Tool::Entity
                     }
                     cmd::TOOL_ORIGIN => Tool::Origin,
@@ -3807,7 +4155,18 @@ impl Editor {
                 if self.doc.layer(active).is_some_and(|l| !l.visible) {
                     self.doc.set_layer_flags(active, true, false);
                 }
-                let id = self.doc.add_brush(lo, hi);
+                let id = if self.block_shape == Shape::Block {
+                    self.doc.add_brush(lo, hi)
+                } else {
+                    let pts = shapes::points(self.block_shape, lo, hi, self.block_axis.0, self.block_axis.1, self.block_faces);
+                    match self.doc.add_hull_brush(&pts) {
+                        Some(id) => id,
+                        None => {
+                            self.message = Some("That shape is too thin to make".into());
+                            return flags::ALL;
+                        }
+                    }
+                };
                 self.doc.selection = vec![id];
                 self.sel_mode = HandleMode::Scale;
                 self.work = (lo, hi);
@@ -3850,7 +4209,7 @@ impl Editor {
                     format!("Bisect tool ({mode}): draw a cut line across selected brushes")
                 }
             }
-            Tool::Entity => "Mannequin: click a surface in 3D or a spot in a 2D view to place it".to_string(),
+            Tool::Entity => format!("{}: click a surface in 3D or a spot in a 2D view to place it", if self.place == Entity::Car { "Car" } else { "Mannequin" }),
             Tool::Origin => "Origin tool: click or drag to place the model origin".to_string(),
             Tool::Face => format!("Face Select & Paint ({} face{} selected): click a face to select it, right-click to paint, Alt+right-click to wrap",
                 self.fsel.len(), if self.fsel.len() == 1 { "" } else { "s" }),
@@ -3875,7 +4234,7 @@ impl Editor {
         let ents = self.doc.brushes.iter().filter(|b| b.entity.is_some()).count();
         let solids = self.doc.brushes.len() - ents;
         parts.push(if ents > 0 {
-            format!("{} brush{}, {} mannequin{}", solids, if solids == 1 { "" } else { "es" }, ents, if ents == 1 { "" } else { "s" })
+            format!("{} brush{}, {} measurement buddy{}", solids, if solids == 1 { "" } else { "es" }, ents, if ents == 1 { "" } else { "s" }).replace("buddys", "buddies")
         } else {
             format!("{} brush{}", solids, if solids == 1 { "" } else { "es" })
         });
@@ -4787,6 +5146,218 @@ mod tests {
         e.key(1, key::G, true, 0, false);
         assert!(e.axis_locked());
         e.key(1, key::G, false, 0, false);
+    }
+
+    #[test]
+    fn locked_axis_sticks_for_the_hold_and_start_snaps_back() {
+        let mut e = editor();
+        let id = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0));
+        e.doc.selection = vec![id];
+        let p = sp(&e, 1, 16.0, 16.0);
+        e.mouse_move(1, p.0, p.1, 0);
+        e.key(1, key::G, true, 0, false);
+        let q = sp(&e, 1, 16.0, 80.0); // straight up first: commits to the vertical
+        e.mouse_move(1, q.0, q.1, 0);
+        assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(0.0, 64.0, 0.0));
+        let r = sp(&e, 1, 200.0, 96.0); // now mostly sideways: still only vertical
+        e.mouse_move(1, r.0, r.1, 0);
+        assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(0.0, 80.0, 0.0));
+        e.mouse_move(1, p.0 + 3.0, p.1 - 2.0, 0); // back by the start (pixels)
+        assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(0.0, 0.0, 0.0));
+        e.key(1, key::G, false, 0, false);
+    }
+
+    #[test]
+    fn off_grid_brush_returns_exactly_when_dragged_back() {
+        let mut e = editor();
+        e.axis_lock = false;
+        let id = e.doc.add_brush(v3(3.0, 5.0, 0.0), v3(35.0, 37.0, 32.0));
+        e.doc.selection = vec![id];
+        let p = sp(&e, 1, 20.0, 20.0);
+        e.mouse_move(1, p.0, p.1, 0);
+        e.key(1, key::G, true, 0, false);
+        let q = sp(&e, 1, 90.0, 60.0);
+        e.mouse_move(1, q.0, q.1, 0);
+        assert_ne!(e.doc.brush(id).unwrap().bounds().0, v3(3.0, 5.0, 0.0));
+        e.mouse_move(1, p.0 + 1.0, p.1 + 1.0, 0);
+        assert_eq!(e.doc.brush(id).unwrap().bounds().0, v3(3.0, 5.0, 0.0));
+        e.key(1, key::G, false, 0, false);
+    }
+
+    #[test]
+    fn quick_draw_right_drag_makes_a_one_unit_block_on_release() {
+        let mut e = editor();
+        e.command(cmd::TOOL_BLOCK);
+        let (a, b) = (sp(&e, 1, 0.0, 0.0), sp(&e, 1, 64.0, 32.0));
+        e.mouse_press(1, a.0, a.1, button::RIGHT, 0);
+        e.mouse_move(1, b.0, b.1, button::RIGHT);
+        e.mouse_release(1, b.0, b.1, button::RIGHT);
+        assert_eq!(e.doc.brushes.len(), 1);
+        let id = e.doc.brushes[0].id;
+        assert_eq!(e.doc.brush(id).unwrap().bounds(), (v3(0.0, 0.0, 0.0), v3(64.0, 32.0, 16.0)));
+        assert_eq!(e.doc.selection, vec![id]);
+        assert!(e.block_box.is_none());
+        // with a selection, the next one sits on top of it
+        e.grid = 8.0;
+        let (a, b) = (sp(&e, 1, 0.0, 0.0), sp(&e, 1, 32.0, 32.0));
+        e.mouse_press(1, a.0, a.1, button::RIGHT, 0);
+        e.mouse_move(1, b.0, b.1, button::RIGHT);
+        e.mouse_release(1, b.0, b.1, button::RIGHT);
+        let top = e.doc.brushes.last().unwrap().bounds();
+        assert_eq!((top.0.z, top.1.z), (16.0, 24.0));
+        // a right-click without dragging makes nothing
+        e.mouse_press(1, a.0, a.1, button::RIGHT, 0);
+        e.mouse_release(1, a.0, a.1, button::RIGHT);
+        assert_eq!(e.doc.brushes.len(), 2);
+    }
+
+    #[test]
+    fn block_tool_makes_primitives() {
+        let mut e = editor();
+        e.command(cmd::TOOL_BLOCK);
+        e.block_shape = Shape::Cylinder;
+        e.block_faces = 12;
+        drag!(e, 1, sp(&e, 1, 0.0, 0.0), sp(&e, 1, 64.0, 64.0), 0);
+        assert!(e.block_preview().is_some());
+        e.command(cmd::CREATE_BLOCK);
+        let b = e.doc.brushes.last().unwrap();
+        assert_eq!(b.faces.len(), 14);
+        assert!(b.faces.iter().all(|f| f.material == geom::NODRAW));
+        // drawn in the front view: lies along X
+        e.block_shape = Shape::Spike;
+        e.block_faces = 5;
+        e.doc.selection.clear();
+        drag!(e, 2, sp(&e, 2, 200.0, 200.0), sp(&e, 2, 264.0, 264.0), 0);
+        e.command(cmd::CREATE_BLOCK);
+        let b = e.doc.brushes.last().unwrap();
+        assert_eq!(b.faces.len(), 6);
+        assert_eq!(b.faces.iter().filter(|f| f.normal.x < -0.99).count(), 1, "the base faces -X");
+    }
+
+    #[test]
+    fn vertex_select_picks_on_any_brush_and_g_r_s_edit_them() {
+        let mut e = editor();
+        e.axis_lock = false;
+        let a = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(64.0, 64.0, 64.0));
+        let b = e.doc.add_brush(v3(128.0, 0.0, 0.0), v3(192.0, 64.0, 64.0));
+        e.command(cmd::TOGGLE_VERTEX_PICK);
+        assert_eq!(e.tool, Tool::Vertex);
+        assert!(e.vertex_pick);
+        // box the right-hand column of A and the left of B in the top view (both Z levels each)
+        drag!(e, 1, sp(&e, 1, 44.0, -20.0), sp(&e, 1, 148.0, 84.0), 0);
+        assert_eq!(e.vsel.len(), 8);
+        assert!(e.doc.is_selected(a) && e.doc.is_selected(b));
+        // G moves only those vertices: A gets wider, B narrower from the left
+        let p = sp(&e, 1, 96.0, 32.0);
+        e.mouse_move(1, p.0, p.1, 0);
+        e.key(1, key::G, true, 0, false);
+        let q = sp(&e, 1, 112.0, 32.0);
+        e.mouse_move(1, q.0, q.1, 0);
+        e.key(1, key::G, false, 0, false);
+        assert_eq!(e.doc.brush(a).unwrap().bounds().1.x, 80.0);
+        assert_eq!(e.doc.brush(b).unwrap().bounds().0.x, 144.0);
+        assert_eq!(e.vsel.len(), 8, "still selected after the move");
+        // S scales them about their center (in the top view: x and y)
+        let c = e.vsel_center().unwrap();
+        let v = e.view(1);
+        let cp = v.to_screen(c.x, c.y);
+        e.mouse_move(1, cp.0 + 40.0, cp.1, 0);
+        e.key(1, key::S, true, 0, false);
+        e.mouse_move(1, cp.0 + 20.0, cp.1, 0); // half the distance: 50%
+        e.key(1, key::S, false, 0, false);
+        let ab = e.doc.brush(a).unwrap().bounds();
+        assert_eq!((ab.0.y, ab.1.y), (0.0, 64.0), "A's left side never moved");
+        assert!((e.doc.brush(a).unwrap().bounds().1.x - 96.0).abs() < 0.01, "{:?}", e.doc.brush(a).unwrap().bounds());
+        // Esc mid-R puts everything back
+        let before: Vec<Brush> = e.doc.selected_brushes();
+        e.mouse_move(1, cp.0, cp.1, 0);
+        e.key(1, key::R, true, 0, false);
+        e.mouse_move(1, cp.0 - 90.0, cp.1, 0);
+        assert_ne!(e.doc.brush(a).unwrap().verts, before.iter().find(|x| x.id == a).unwrap().verts);
+        e.key(1, key::ESCAPE, true, 0, false);
+        e.key(1, key::R, false, 0, false);
+        assert_eq!(e.doc.brush(a).unwrap().verts, before.iter().find(|x| x.id == a).unwrap().verts);
+        assert_eq!(e.vsel.len(), 8);
+        // a click on one vertex picks just that one
+        let one = e.vsel[0].1;
+        let sp1 = e.view(1).project(one);
+        click!(e, 1, sp1, 0);
+        assert!(e.vsel.iter().all(|&(_, p)| (p.x - one.x).abs() < 1e-3 && (p.y - one.y).abs() < 1e-3));
+    }
+
+    #[test]
+    fn a_vertex_edit_that_would_go_concave_snaps_that_brush_back() {
+        let mut e = editor();
+        let a = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(64.0, 64.0, 64.0));
+        e.command(cmd::TOGGLE_VERTEX_PICK);
+        // one top-right corner column only, then pull it inward past the middle diagonal
+        drag!(e, 1, sp(&e, 1, 56.0, 56.0), sp(&e, 1, 72.0, 72.0), 0);
+        assert_eq!(e.vsel.len(), 2);
+        let before = e.doc.brush(a).unwrap().verts.clone();
+        let orig = e.doc.selected_brushes();
+        let sel = e.vsel.clone();
+        let mut changed = false;
+        e.apply_vertex_map(&orig, &sel, &|p| p - v3(60.0, 60.0, 0.0), &mut changed);
+        assert_eq!(e.doc.brush(a).unwrap().verts, before);
+        assert!(e.message.is_some());
+    }
+
+    #[test]
+    fn copy_paste_between_models_keeps_groups_and_textures() {
+        let mut e = editor();
+        let a = e.doc.add_brush(v3(0.0, 0.0, 0.0), v3(32.0, 32.0, 32.0));
+        let b = e.doc.add_brush(v3(64.0, 0.0, 0.0), v3(96.0, 32.0, 32.0));
+        e.doc.brush_mut(a).unwrap().faces[0].material = "walls/brick".into();
+        e.doc.mat_overrides.push(("walls/brick".into(), "surface=brick".into()));
+        e.doc.selection = vec![a, b];
+        e.command(cmd::GROUP);
+        e.doc.rename_group(e.doc.groups[0].id, "Window");
+        let clip = crate::io::write_clip(&e, "/projects/a/assets/Textures");
+        assert!(clip.contains("source_textures"));
+        // another model
+        let mut f = editor();
+        f.doc.add_brush(v3(0.0, 0.0, 0.0), v3(8.0, 8.0, 8.0));
+        let n = f.paste(&clip, false).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(f.doc.brushes.len(), 3);
+        assert_eq!(f.doc.selection.len(), 2);
+        assert_eq!(f.doc.selection_bounds(), Some((v3(0.0, 0.0, 0.0), v3(96.0, 32.0, 32.0))), "same spot");
+        assert_eq!(f.doc.groups.len(), 1);
+        assert_eq!(f.doc.groups[0].name, "Window");
+        assert!(f.doc.brushes.iter().any(|x| x.faces.iter().any(|fc| fc.material == "walls/brick")));
+        assert_eq!(f.doc.mat_overrides.len(), 1);
+        // under the mouse
+        let p = sp(&f, 1, 300.0, 300.0);
+        f.mouse_move(1, p.0, p.1, 0);
+        f.paste(&clip, true).unwrap();
+        let (lo, hi) = f.doc.selection_bounds().unwrap();
+        assert!(((lo.x + hi.x) * 0.5 - 300.0).abs() <= 16.0 && ((lo.y + hi.y) * 0.5 - 300.0).abs() <= 16.0, "{lo:?} {hi:?}");
+        assert_eq!(f.doc.groups.len(), 2);
+        // one undo takes a paste back
+        f.command(cmd::UNDO);
+        assert_eq!(f.doc.brushes.len(), 3);
+    }
+
+    #[test]
+    fn car_buddy_places_turns_its_footprint_and_saves() {
+        let mut e = editor();
+        e.command(cmd::TOOL_CAR);
+        assert_eq!(e.tool, Tool::Entity);
+        let p = sp(&e, 1, 0.0, 0.0);
+        click!(e, 1, p, 0);
+        let id = e.doc.selection[0];
+        let b = e.doc.brush(id).unwrap();
+        assert_eq!(b.entity, Some(Entity::Car));
+        let (lo, hi) = b.bounds();
+        assert_eq!((hi.x - lo.x, hi.y - lo.y, hi.z - lo.z), (176.0, 96.0, 80.0));
+        // turned 90°, it's long the other way
+        let mut b2 = b.clone();
+        b2.rot[2] = 90.0;
+        let base = b2.base();
+        b2.place_entity(base);
+        let (lo, hi) = b2.bounds();
+        assert!(((hi.x - lo.x) - 96.0).abs() < 0.01 && ((hi.y - lo.y) - 176.0).abs() < 0.01);
+        assert!(crate::io::write(&e).contains("\"car\""));
     }
 
     #[test]

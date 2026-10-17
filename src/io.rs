@@ -91,41 +91,89 @@ pub fn write(ed: &Editor) -> String {
         o.push_str("\t}\n");
     }
     for g in &ed.doc.groups {
-        o.push_str("\t\"group\"\n\t{\n");
-        kv(&mut o, 2, "id", &g.id.to_string());
-        kv(&mut o, 2, "name", &g.name);
-        if let Some(p) = g.parent {
-            kv(&mut o, 2, "parent", &p.to_string());
-        }
-        o.push_str("\t}\n");
+        write_group(&mut o, g);
     }
     for b in &ed.doc.brushes {
-        o.push_str("\t\"brush\"\n\t{\n");
-        kv(&mut o, 2, "id", &b.id.to_string());
-        kv(&mut o, 2, "layer", &b.layer.to_string());
-        if let Some(g) = b.group {
-            kv(&mut o, 2, "group", &g.to_string());
+        write_brush(&mut o, b);
+    }
+    o.push_str("}\n");
+    o
+}
+
+fn write_brush(o: &mut String, b: &Brush) {
+    o.push_str("\t\"brush\"\n\t{\n");
+    kv(o, 2, "id", &b.id.to_string());
+    kv(o, 2, "layer", &b.layer.to_string());
+    if let Some(g) = b.group {
+        kv(o, 2, "group", &g.to_string());
+    }
+    if let Some(e) = b.entity {
+        kv(o, 2, "entity", e.key());
+    }
+    kv(o, 2, "color", &format!("{} {} {}", num(b.color[0]), num(b.color[1]), num(b.color[2])));
+    kv(o, 2, "rotation", &format!("{} {} {}", num(b.rot[0]), num(b.rot[1]), num(b.rot[2])));
+    for &p in &b.verts {
+        kv(o, 2, "v", &vec3(p));
+    }
+    for f in &b.faces {
+        let idx: Vec<String> = f.idx.iter().map(|i| i.to_string()).collect();
+        kv(o, 2, "f", &idx.join(" "));
+        if !f.material.is_empty() {
+            kv(o, 2, "mat", &f.material);
         }
-        if let Some(e) = b.entity {
-            kv(&mut o, 2, "entity", e.key());
+        if f.tex != TexMap::world(f.normal) {
+            let t = &f.tex;
+            kv(o, 2, "t", &format!("{} {} {} {} {} {} {}", vec3(t.u), num(t.shift[0]), vec3(t.v), num(t.shift[1]), num(t.scale[0]), num(t.scale[1]), num(t.rot)));
         }
-        kv(&mut o, 2, "color", &format!("{} {} {}", num(b.color[0]), num(b.color[1]), num(b.color[2])));
-        kv(&mut o, 2, "rotation", &format!("{} {} {}", num(b.rot[0]), num(b.rot[1]), num(b.rot[2])));
-        for &p in &b.verts {
-            kv(&mut o, 2, "v", &vec3(p));
-        }
-        for f in &b.faces {
-            let idx: Vec<String> = f.idx.iter().map(|i| i.to_string()).collect();
-            kv(&mut o, 2, "f", &idx.join(" "));
-            if !f.material.is_empty() {
-                kv(&mut o, 2, "mat", &f.material);
+    }
+    o.push_str("\t}\n");
+}
+
+fn write_group(o: &mut String, g: &Group) {
+    o.push_str("\t\"group\"\n\t{\n");
+    kv(o, 2, "id", &g.id.to_string());
+    kv(o, 2, "name", &g.name);
+    if let Some(p) = g.parent {
+        kv(o, 2, "parent", &p.to_string());
+    }
+    o.push_str("\t}\n");
+}
+
+/// The selection as clipboard text: a small model with just those brushes,
+/// the groups they're in, and the material settings they use. `source` is
+/// the textures folder they came from (so another project can fetch them).
+pub fn write_clip(ed: &Editor, source: &str) -> String {
+    let mut o = String::new();
+    o.push_str("// Bonk! Model Prop-inator! clipboard\n\"BonkModel\"\n{\n");
+    kv(&mut o, 1, "format", &FORMAT_VERSION.to_string());
+    kv(&mut o, 1, "clipboard", "1");
+    if !source.is_empty() {
+        kv(&mut o, 1, "source_textures", source);
+    }
+    let sel: Vec<&Brush> = ed.doc.brushes.iter().filter(|b| ed.doc.is_selected(b.id)).collect();
+    let mut mats: Vec<&str> = sel.iter().flat_map(|b| b.faces.iter().map(|f| f.material.as_str())).collect();
+    mats.sort();
+    mats.dedup();
+    for (m, props) in ed.doc.mat_overrides.iter().filter(|(m, _)| mats.contains(&m.as_str())) {
+        kv(&mut o, 1, "material_override", &format!("{}|{}", m, props));
+    }
+    // groups the brushes are in, and their parents
+    let mut gids: Vec<u32> = Vec::new();
+    for b in &sel {
+        let mut g = b.group;
+        while let Some(id) = g {
+            if gids.contains(&id) {
+                break;
             }
-            if f.tex != TexMap::world(f.normal) {
-                let t = &f.tex;
-                kv(&mut o, 2, "t", &format!("{} {} {} {} {} {} {}", vec3(t.u), num(t.shift[0]), vec3(t.v), num(t.shift[1]), num(t.scale[0]), num(t.scale[1]), num(t.rot)));
-            }
+            gids.push(id);
+            g = ed.doc.group(id).and_then(|x| x.parent);
         }
-        o.push_str("\t}\n");
+    }
+    for g in ed.doc.groups.iter().filter(|g| gids.contains(&g.id)) {
+        write_group(&mut o, g);
+    }
+    for b in sel {
+        write_brush(&mut o, b);
     }
     o.push_str("}\n");
     o

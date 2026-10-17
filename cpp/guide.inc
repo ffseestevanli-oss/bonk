@@ -51,7 +51,7 @@ QList<GuidePage> guidePages(bool hammer) {
 
     // ------------------------------------------------------------ Mouse & Keyboard
     {
-        GuidePage &p = page(QStringLiteral("tools"), MK, QStringLiteral("Tools & hotkeys"), QStringLiteral("tool keys hotkeys shortcuts hammer panel dock layout"));
+        GuidePage &p = page(QStringLiteral("tools"), MK, QStringLiteral("Tools & hotkeys"), QStringLiteral("tool keys hotkeys shortcuts hammer panel dock layout mannequin car measurement buddies"));
         p.keys = {{QStringLiteral("1"), QStringLiteral("Selection tool")},
                   {QStringLiteral("2"), QStringLiteral("Block tool: draw new brushes")},
                   {QStringLiteral("3"), QStringLiteral("Vertex tool")},
@@ -71,10 +71,30 @@ QList<GuidePage> guidePages(bool hammer) {
         p.subs = {{QStringLiteral("Panels"), QStringLiteral("<p>Every panel is a dock: drag its title bar to another edge, onto another panel to make tabs, "
                                                             "or out to float it. Window → Reset Layout puts them back: tools on the left, Texture Picker and "
                                                             "Layers tabbed on the right, the Budget bar along the bottom.</p>")},
-                  {QStringLiteral("Mannequins"), QStringLiteral("<p>Tools → Place Scale Mannequin: click a surface in the 3D view (or a spot in a 2D view) to "
-                                                                "stand a 32×32×72 player-sized figure there. It moves like a brush but is never compiled. "
-                                                                "View → Show Scale Mannequins hides them.</p>")}};
-        p.see = {QStringLiteral("selecting"), QStringLiteral("cheat")};
+                  {QStringLiteral("Measurement Buddies"), QStringLiteral("<p>Two scale references in the tool panel: the <b>Mannequin</b> (32×32×72, the player) "
+                                                                "and a <b>Car</b> (176×96×80, about the size of Half-Life 2's jeep). Click a surface in the 3D view "
+                                                                "(or a spot in a 2D view) to place one. They move, turn and mirror like brushes but are never "
+                                                                "compiled. View → Show Measurement Buddies hides them.</p>")}};
+        p.see = {QStringLiteral("drawing"), QStringLiteral("selecting"), QStringLiteral("cheat")};
+    }
+    {
+        GuidePage &p = page(QStringLiteral("drawing"), MK, QStringLiteral("Drawing & shapes"), QStringLiteral("block draw quick draw right-drag shape primitive cylinder wedge spike cone orb sphere faces sides"));
+        p.keys = {{QStringLiteral("2"), QStringLiteral("Block tool")},
+                  {QStringLiteral("drag"), QStringLiteral("Draw a box in a 2D view; Enter makes it")},
+                  {QStringLiteral("right-drag"), QStringLiteral("Quick Draw: a block one grid unit deep, made as soon as you let go")},
+                  {QStringLiteral("G (hold) / S (hold)"), QStringLiteral("Move / size the box before you make it")},
+                  {QStringLiteral("Esc"), QStringLiteral("Drop the box")}};
+        p.html = QStringLiteral("<p><b>Shape</b> (in the tool panel while the Block tool is on): Block, Cylinder, Wedge, Spike or Orb, each filling "
+                                "the box you draw, as one convex brush. <b>Faces</b> sets how many sides round shapes get (3–32; orbs use 4–16, "
+                                "since every ring adds triangles). The box shows the shape it will become.</p>"
+                                "<p>Round shapes stand along the depth of the view you draw in: drawn in the top view a cylinder stands up, "
+                                "in the front or side view it lies on its side. A wedge always sits on its bottom and rises toward the right "
+                                "of the view you drew it in.</p>"
+                                "<p><b>Quick Draw</b> makes walls and floors fast: right-drag in a 2D view and the block is made at once, "
+                                "one grid unit deep. In the top view it sits on the floor, or on top of what's selected; in the front and side "
+                                "views it starts where the Block tool would. It comes out selected, ready for G, S or R.</p>"
+                                "<p>New brushes are nodraw until you paint them.</p>");
+        p.see = {QStringLiteral("grid"), QStringLiteral("vertices"), QStringLiteral("face")};
     }
     {
         GuidePage &p = page(QStringLiteral("selecting"), MK, QStringLiteral("Selecting"), QStringLiteral("select deselect selection box handles click ctrl"));
@@ -109,7 +129,7 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("groups"), QStringLiteral("moving"), QStringLiteral("sizing")};
     }
     {
-        GuidePage &p = page(QStringLiteral("moving"), MK, QStringLiteral("Moving & copying"), QStringLiteral("move copy clone duplicate nudge drag shift alt g grab mirror axis lock"));
+        GuidePage &p = page(QStringLiteral("moving"), MK, QStringLiteral("Moving & copying"), QStringLiteral("move copy paste cut clipboard clone duplicate nudge drag shift alt g grab mirror axis lock"));
         p.keys = {{QStringLiteral("drag"), QStringLiteral("Move the selection")},
                   {QStringLiteral("Alt+drag"), QStringLiteral("Move any brush, in any tool (slides along the floor in 3D)")},
                   {QStringLiteral("G (hold) + move"), QStringLiteral("Grab: move the selection from anywhere (2D views, or along the floor in 3D); release G to drop it")},
@@ -119,9 +139,16 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("arrows"), QStringLiteral("Nudge one grid step (in 3D, up moves away from you)")},
                   {QStringLiteral("Alt+arrows"), QStringLiteral("Nudge 1 unit")},
                   {QStringLiteral(", / ."), QStringLiteral("Mirror the selection horizontally / vertically (as the view under the mouse sees it)")},
+                  {QStringLiteral("Ctrl+C / Ctrl+X"), QStringLiteral("Copy / cut the selection to the clipboard")},
+                  {QStringLiteral("Ctrl+V"), QStringLiteral("Paste in the same spot (also into another model or project)")},
+                  {QStringLiteral("Ctrl+Shift+V"), QStringLiteral("Paste under the mouse")},
                   {QStringLiteral("Esc"), QStringLiteral("Cancel the move or copy")}};
-        p.html = QStringLiteral("<p><b>Axis lock</b> (on by default): a G or Shift move stays on the axis you're moving along most, which "
-                                "keeps things lined up. Alt while holding frees it for that move; the Axis Lock button under Selection "
+        p.html = QStringLiteral("<p><b>Copy and paste</b> work between models, projects and even two open Bonk windows, like Hammer. Groups come "
+                                "along, pasted brushes land on the active layer, and textures this project doesn't have yet are copied in "
+                                "from the project they came from.</p>"
+                                "<p><b>Axis lock</b> (on by default): a G or Shift move picks the axis you first move along and stays on it "
+                                "for the whole hold, which keeps things lined up. Bring the mouse back near where you started and it sits "
+                                "exactly where it was. Alt while holding frees it for that move; the Axis Lock button under Selection "
                                 "Options turns it off for good.</p>"
                                 "<p>While a key is held, the corner of the view says what it's doing, the cursor shows a badge, and a "
                                 "ripple marks where the brush landed when you let go.</p>"
@@ -196,12 +223,18 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("drag"), QStringLiteral("Square handles move vertices, small yellow ones move edges")},
                   {QStringLiteral("Ctrl+click"), QStringLiteral("Add or remove a vertex")},
                   {QStringLiteral("Ctrl+A"), QStringLiteral("Select all vertices")},
+                  {QStringLiteral("G / R / S (hold)"), QStringLiteral("With vertices selected: move them / turn them / scale them about their center")},
                   {QStringLiteral("4 / B"), QStringLiteral("Bisect tool; again cycles Split → Split & Delete smaller side → larger side")},
                   {QStringLiteral("F"), QStringLiteral("Flip the pending cut: the other side goes (Split: what stays selected)")},
                   {QStringLiteral("Enter"), QStringLiteral("Make the cut")},
                   {QStringLiteral("Shift (hold)"), QStringLiteral("Flip while you press Enter")}};
         p.html = QStringLiteral("<p><b>Vertex tool:</b> click a brush to edit it. Stacked vertices in a 2D view move together; drag on empty "
                                 "space to box-select. Moves that would make the brush concave are refused.</p>"
+                                "<p><b>Vertex select</b> (the ↖ at the end of the Vertex button): clicks and boxes pick vertices on any brush, "
+                                "several brushes at once (Ctrl adds), and nothing moves until you say so: hold <b>G</b> to move them, <b>R</b> "
+                                "to turn them, <b>S</b> to scale them (away from their center grows, toward it shrinks; Alt for smooth "
+                                "steps), or nudge with the arrows. A brush that would turn concave or flat snaps back; the others "
+                                "still change.</p>"
                                 "<p><b>Bisect:</b> draw a cut line across the selected brushes. Its ends snap to the grid and to edge "
                                 "midpoints; drag the yellow ends to adjust.</p><ul>"
                                 "<li><b>Split</b> keeps both pieces. F picks what stays selected: both, the smaller piece or the larger one.</li>"
@@ -340,12 +373,15 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("budget"), QStringLiteral("compiling")};
     }
     {
-        GuidePage &p = page(QStringLiteral("budget"), GD, QStringLiteral("Budget"), QStringLiteral("budget limit triangles vertices materials pieces meter over"));
+        GuidePage &p = page(QStringLiteral("budget"), GD, QStringLiteral("Budget"), QStringLiteral("budget limit triangles vertices materials pieces meter over overlap overlapping duplicate"));
         p.html = QStringLiteral("<p>The Budget bar along the bottom shows what the model costs, live, against Garry's Mod's studiomdl limits:</p><ul>"
                                 "<li><b>Triangles</b> of the busiest material (10,922 each: 32,768 indices)</li>"
                                 "<li><b>Vertices</b> (65,536)</li><li><b>Materials</b> (64)</li><li><b>Collision pieces</b> (20 by default)</li></ul>"
                                 "<p>Hover a meter for the heaviest brushes, click it to select them. Nodraw faces cost nothing, so nodraw "
-                                "faces nobody will see. Bonk warns before compiling something over budget. The limits are in Settings.</p>");
+                                "faces nobody will see. Bonk warns before compiling something over budget. The limits are in Settings.</p>"
+                                "<p><b>Tools → Find Overlapping Brushes</b> lists brushes that share space (touching is fine), exact duplicates "
+                                "first. Click one to select the pair and center the views on it. Visual and collision brushes are checked "
+                                "separately.</p>");
         p.see = {QStringLiteral("collision"), QStringLiteral("compiling")};
     }
     {

@@ -15,22 +15,28 @@ use std::collections::{HashMap, HashSet};
 pub enum Entity {
     /// Scale reference: Source player hull, 32 × 32 × 72, origin at bottom center.
     Mannequin,
+    /// Scale reference: a rough car about the size of Half-Life 2's jeep
+    /// (fits its 118-wide, 90-high clearances), facing +X.
+    Car,
 }
 
 impl Entity {
     pub fn size(self) -> V3 {
         match self {
             Entity::Mannequin => v3(32.0, 32.0, 72.0),
+            Entity::Car => v3(176.0, 96.0, 80.0),
         }
     }
     pub fn key(self) -> &'static str {
         match self {
             Entity::Mannequin => "mannequin",
+            Entity::Car => "car",
         }
     }
     pub fn from_key(k: &str) -> Option<Entity> {
         match k {
             "mannequin" => Some(Entity::Mannequin),
+            "car" => Some(Entity::Car),
             _ => None,
         }
     }
@@ -86,6 +92,8 @@ impl Brush {
                 _ => self.rot[2],
             };
             self.rot[2] = self.rot[2].rem_euclid(360.0);
+            let b = self.base();
+            self.place_entity(b);
         }
     }
 
@@ -114,7 +122,19 @@ impl Brush {
         let Some(kind) = self.entity else { return };
         let s = kind.size();
         let lo = v3(base.x - s.x * 0.5, base.y - s.y * 0.5, base.z);
-        let h = box_hull(lo, lo + s);
+        let h = if kind == Entity::Car && self.rot[2].rem_euclid(360.0) != 0.0 {
+            // long things turn their footprint with them
+            let (sn, cs) = self.rot[2].to_radians().sin_cos();
+            let pts: Vec<V3> = (0..8)
+                .map(|i| {
+                    let (x, y) = (if i & 1 != 0 { s.x } else { -s.x } * 0.5, if i & 2 != 0 { s.y } else { -s.y } * 0.5);
+                    v3(base.x + x * cs - y * sn, base.y + x * sn + y * cs, if i & 4 != 0 { base.z + s.z } else { base.z })
+                })
+                .collect();
+            geom::hull(&pts).unwrap_or_else(|| box_hull(lo, lo + s))
+        } else {
+            box_hull(lo, lo + s)
+        };
         self.verts = h.verts;
         self.faces = h.faces;
     }
@@ -459,6 +479,50 @@ impl Document {
         out
     }
 
+    /// Paste brushes from another model: new ids, the given groups recreated
+    /// (same names), everything on `layer` (entities on a visual layer).
+    /// Returns the new ids.
+    pub fn paste(&mut self, brushes: Vec<Brush>, groups: Vec<Group>, layer: u32) -> Vec<u32> {
+        let mut gmap: Vec<(u32, u32)> = Vec::new();
+        // parents before children
+        let ids: Vec<u32> = groups.iter().map(|g| g.id).collect();
+        let mut pending = groups;
+        let mut guard = 0;
+        while !pending.is_empty() && guard < 64 {
+            guard += 1;
+            let mut rest = Vec::new();
+            for g in pending {
+                // ready once its parent is made (or the parent isn't in the clipboard)
+                let ready = g.parent.is_none_or(|p| gmap.iter().any(|m| m.0 == p) || !ids.contains(&p));
+                if ready {
+                    let nid = self.next_group_id();
+                    let parent = g.parent.and_then(|p| gmap.iter().find(|m| m.0 == p).map(|m| m.1));
+                    self.groups.push(Group { id: nid, name: g.name.clone(), parent });
+                    gmap.push((g.id, nid));
+                } else {
+                    rest.push(g);
+                }
+            }
+            pending = rest;
+        }
+        let visual = if self.layer(layer).is_some_and(|l| l.kind == LayerKind::Collision) {
+            self.layers.iter().find(|l| l.kind == LayerKind::Visual).map(|l| l.id).unwrap_or(layer)
+        } else {
+            layer
+        };
+        let mut out = Vec::new();
+        for b in brushes {
+            let nid = self.take_id();
+            let color = if b.entity.is_some() { b.color } else { palette(nid) };
+            let group = b.group.and_then(|g| gmap.iter().find(|m| m.0 == g).map(|m| m.1));
+            let l = if b.entity.is_some() { visual } else { layer };
+            self.brushes.push(Brush { id: nid, color, layer: l, group, ..b });
+            out.push(nid);
+        }
+        self.rev += 1;
+        out
+    }
+
     // ---------------------------------------------------------------- groups
 
     pub fn group(&self, id: u32) -> Option<&Group> {
@@ -725,7 +789,19 @@ impl Document {
         id
     }
 
-    pub fn add_entity(&mut self, kind: Entity, base: V3) -> u32 {
+    /// A brush around these points (a primitive); None if they have no volume.
+    pub fn add_hull_brush(&mut self, points: &[V3]) -> Option<u32> {
+        let h = geom::hull(points)?;
+        let id = self.take_id();
+        let mut b = Brush::new_box(id, V3::default(), v3(1.0, 1.0, 1.0), palette(id));
+        b.verts = h.verts;
+        b.faces = h.faces;
+        b.layer = self.active_layer;
+        self.brushes.push(b);
+        Some(id)
+    }
+
+        pub fn add_entity(&mut self, kind: Entity, base: V3) -> u32 {
         let id = self.take_id();
         let mut b = Brush::new_entity(id, kind, base, 0.0);
         // Entities aren't collision geometry: keep them on a visual layer.

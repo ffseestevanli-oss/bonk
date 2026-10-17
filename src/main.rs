@@ -12,7 +12,9 @@ mod geom;
 mod gl;
 mod io;
 mod math;
+mod overlap;
 mod render;
+mod shapes;
 mod tex;
 mod texstore;
 mod vtf;
@@ -276,6 +278,103 @@ pub extern "C" fn bonk_set_fov(deg: f32) {
 #[no_mangle]
 pub extern "C" fn bonk_animating() -> c_int {
     with_ed(|ed| ed.ripple.is_some() as c_int)
+}
+
+/// The Vertex tool's vertex select (↖) is on.
+#[no_mangle]
+pub extern "C" fn bonk_vertex_pick() -> c_int {
+    with_ed(|ed| ed.vertex_pick as c_int)
+}
+
+/// The selection as clipboard text (empty if nothing is selected). `source`:
+/// this project's textures folder, so another project can fetch them.
+/// With `cut`, the selection is deleted afterwards (one undo step).
+#[no_mangle]
+pub extern "C" fn bonk_copy(source: *const c_char, cut: c_int) -> *const c_char {
+    let src = path_arg(source).unwrap_or_default();
+    let t = with_ed(|ed| {
+        if ed.doc.selection.is_empty() {
+            return String::new();
+        }
+        let t = io::write_clip(ed, &src);
+        let n = ed.doc.selection.len();
+        if cut != 0 {
+            ed.doc.checkpoint();
+            ed.doc.delete_selected();
+            ed.vsel.clear();
+            ed.message = Some(format!("Cut {} brush{}", n, if n == 1 { "" } else { "es" }));
+        } else {
+            ed.message = Some(format!("Copied {} brush{}", n, if n == 1 { "" } else { "es" }));
+        }
+        t
+    });
+    ret_str(t)
+}
+
+/// Paste clipboard text (at_mouse: under the mouse in a 2D view).
+#[no_mangle]
+pub extern "C" fn bonk_paste(text: *const c_char, at_mouse: c_int) -> u32 {
+    let t = path_arg(text).unwrap_or_default();
+    with_ed(|ed| {
+        if let Err(e) = ed.paste(&t, at_mouse != 0) {
+            ed.message = Some(format!("Can't paste: {e}"));
+        }
+        editor::flags::ALL | editor::flags::TOOL
+    })
+}
+
+/// Tools → Find Overlapping Brushes: one line per pair, "a b volume duplicate".
+#[no_mangle]
+pub extern "C" fn bonk_overlap_scan() -> *const c_char {
+    let t = with_ed(|ed| {
+        let list: Vec<&doc::Brush> = ed.doc.brushes.iter().filter(|b| b.entity.is_none() && ed.pickable(b)).collect();
+        let r = overlap::scan(&list, &|b| ed.doc.is_collision(b) as u8, 1000);
+        r.iter().map(|o| format!("{} {} {:.1} {}\n", o.a, o.b, o.volume, o.duplicate as u8)).collect::<String>()
+    });
+    ret_str(t)
+}
+
+/// Select these brush ids (space-separated) and center the views on them.
+#[no_mangle]
+pub extern "C" fn bonk_select_ids(ids: *const c_char) -> u32 {
+    let t = path_arg(ids).unwrap_or_default();
+    with_ed(|ed| {
+        let ids: Vec<u32> = t.split_whitespace().filter_map(|x| x.parse().ok()).filter(|&id| ed.doc.brush(id).is_some()).collect();
+        if ids.is_empty() {
+            ed.message = Some("Those brushes are gone (deleted or undone)".into());
+            return editor::flags::ALL;
+        }
+        if ed.tool != editor::Tool::Select {
+            ed.command(editor::cmd::TOOL_SELECT);
+        }
+        ed.doc.selection = ids;
+        ed.command(editor::cmd::CENTER_2D) | editor::flags::ALL | editor::flags::TOOL
+    })
+}
+
+/// What the Entity tool places: 0 mannequin, 1 car.
+#[no_mangle]
+pub extern "C" fn bonk_place_kind() -> c_int {
+    with_ed(|ed| (ed.place == doc::Entity::Car) as c_int)
+}
+
+/// Block tool shape (0 block, 1 cylinder, 2 wedge, 3 spike, 4 orb) and faces count.
+#[no_mangle]
+pub extern "C" fn bonk_set_block_shape(shape: c_int, faces: c_int) -> u32 {
+    with_ed(|ed| {
+        ed.block_shape = shapes::Shape::from_index(shape);
+        ed.block_faces = faces.clamp(3, 32) as u32;
+        editor::flags::ALL
+    })
+}
+
+/// out = [shape, faces as set, faces the shape really uses]
+#[no_mangle]
+pub extern "C" fn bonk_block_shape(out: *mut c_int) {
+    let v = with_ed(|ed| [ed.block_shape.index(), ed.block_faces as c_int, ed.block_shape.clamp_faces(ed.block_faces) as c_int]);
+    if !out.is_null() {
+        unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, 3) };
+    }
 }
 
 // ------------------------------------------------------------------ groups
@@ -1132,5 +1231,15 @@ mod bench3 {
         println!("tidy: removed {n}, {left} left, {:?}", t.elapsed());
         with_ed(|ed| ed.doc.undo());
         println!("after undo: {}", with_ed(|ed| ed.doc.groups.len()));
+    }
+
+    #[test]
+    #[ignore]
+    fn overlap_user_model() {
+        let path = std::env::var("BONK_BENCH_MODEL").unwrap_or_default();
+        with_ed(|ed| io::load_file(ed, &path).unwrap());
+        let t = std::time::Instant::now();
+        let r = unsafe { std::ffi::CStr::from_ptr(bonk_overlap_scan()) }.to_string_lossy().into_owned();
+        println!("overlap: {} pairs in {:?}\n{}", r.lines().count(), t.elapsed(), r.lines().take(8).collect::<Vec<_>>().join("\n"));
     }
 }

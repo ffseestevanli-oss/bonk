@@ -28,6 +28,9 @@ or Propper.
 
 - **Hammer-style editing:** four views, brushes you draw, size, move, rotate, mirror, clip
   (Bisect) and edit vertex by vertex, with Hammer-style keys available.
+- **Shapes and quick building:** blocks, cylinders, wedges, spikes and orbs with a sides slider,
+  right-drag Quick Draw for walls and floors, multi-vertex move / rotate / scale, and copy and
+  paste between models and projects (textures come along).
 - **Hold-key editing:** hold G to grab, S to size, R to rotate or Shift to carry a copy, from
   anywhere in a view. Moves lock to one axis (Alt frees them), the corner of the view says what
   the held key does, and the 3D view takes the editing keys too when you're not flying.
@@ -154,7 +157,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the pieces fit together and how t
 - [x] Compiling with Garry's Mod's studiomdl through Proton; export to the addons folder
 - [x] VMF import with materials from folders or Workshop `.gma` files
 - [x] Hold-key editing everywhere: G grab with axis lock, H hide, mirror, 3D nudging, FOV
-- [ ] Modeling power: Quick Draw, primitives, multi-vertex editing, copy between models
+- [x] Modeling power: Quick Draw, primitives, multi-vertex editing, copy between models, overlap check
 - [ ] Simplified collision, mass presets, Workshop publishing
 - [ ] Shader work: shader picker (incl. MonitorScreen), more texture slots, live VMT editing
 - [ ] Animated, scrolling and pulsing materials; material preview in the 3D view

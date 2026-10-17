@@ -2,6 +2,46 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.13.0 — "Modeling power"
+
+### Drawing
+- **Quick Draw:** in the Block tool, right-drag in a 2D view and the block is made as soon as you
+  let go, one grid unit deep. In the top view it sits on the floor or on top of the selection.
+- **Primitives:** a Shape section in the tool panel while the Block tool is on: Block, Cylinder,
+  Wedge, Spike and Orb, each one convex brush filling the box you draw, with a **Faces** slider
+  (3–32 sides; orbs 4–16). Round shapes stand along the depth of the view you draw in. The box
+  previews the shape.
+
+### Vertices
+- **Vertex select** (the ↖ at the end of the Vertex button): click or box vertices on any brush,
+  several brushes at once (Ctrl adds), then hold **G** to move them, **R** to turn them or **S** to
+  scale them about their center (Alt: smooth). A brush that would turn concave or flat snaps
+  back; the rest still change.
+
+### Copy & paste
+- **Ctrl+C / Ctrl+X / Ctrl+V** through the system clipboard: between models, projects and Bonk
+  windows. Ctrl+V pastes in the same spot (like Hammer), **Ctrl+Shift+V** under the mouse. Groups
+  come along, and textures the project doesn't have are copied in from the project they came from.
+
+### Checking
+- **Tools → Find Overlapping Brushes:** brushes that share space (touching is fine), exact
+  duplicates first; click one to select the pair and center the views. Visual and collision are
+  checked separately.
+
+### Measurement Buddies
+- The Entities section is now **Measurement Buddies**, with a **Car** next to the mannequin: a
+  rough buggy about the size of Half-Life 2's jeep (176 × 96 × 80). Like the mannequin, it's
+  never compiled.
+
+### Feel
+- **Axis lock commits:** a G or Shift move picks the axis you first move along and keeps it for the
+  whole hold (Alt still frees it).
+- **Back to the start:** bringing the mouse back near where a G or Shift move started puts the
+  selection exactly where it was, even off the grid.
+- Saving no longer tints the views; the 3D view still says "Project saved!".
+- With the Texture Picker's swatches focused, Ctrl+C / X / V, Delete and F2 still act on texture
+  files.
+
 ## 0.12.1
 
 - **No more 1024 cap on textures.** A power-of-two image of any size up to Source's 4096 limit

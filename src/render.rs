@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Steventechno and the Bonk! contributors
 //! OpenGL renderer for the four viewports.
 
-use crate::doc::{Brush, ENTITY_COLOR};
+use crate::doc::{Brush, Entity, ENTITY_COLOR};
 use crate::editor::*;
 use crate::geom;
 use crate::gl::{self, Gl};
@@ -257,11 +257,30 @@ const MANNEQUIN: [([f32; 3], [f32; 3]); 8] = [
     ([5.0, -3.5, 64.0], [7.0, 3.5, 67.0]),     // visor: shows which way it faces
 ];
 
-/// The mannequin's parts as world-space boxes (8 corners each).
+/// The car: about the size of Half-Life 2's jeep (176 × 96 × 80), facing +X.
+const CAR: [([f32; 3], [f32; 3]); 14] = [
+    ([-80.0, -36.0, 14.0], [80.0, 36.0, 34.0]),  // chassis
+    ([-88.0, -30.0, 18.0], [-80.0, 30.0, 30.0]), // rear bumper
+    ([40.0, -30.0, 34.0], [86.0, 30.0, 46.0]),   // engine
+    ([80.0, -24.0, 20.0], [88.0, 24.0, 32.0]),   // front bumper
+    ([-34.0, -26.0, 34.0], [-10.0, 26.0, 50.0]), // seats
+    ([-38.0, -34.0, 34.0], [-35.0, -31.0, 80.0]), // roll cage posts
+    ([-38.0, 31.0, 34.0], [-35.0, 34.0, 80.0]),
+    ([24.0, -34.0, 34.0], [27.0, -31.0, 76.0]),
+    ([24.0, 31.0, 34.0], [27.0, 34.0, 76.0]),
+    ([-38.0, -34.0, 76.0], [27.0, 34.0, 80.0]),  // roof bar: the top
+    ([40.0, -48.0, 0.0], [72.0, -36.0, 32.0]),   // wheels
+    ([40.0, 36.0, 0.0], [72.0, 48.0, 32.0]),
+    ([-72.0, -48.0, 0.0], [-40.0, -36.0, 32.0]),
+    ([-72.0, 36.0, 0.0], [-40.0, 48.0, 32.0]),
+];
+
+/// A measurement buddy's parts as world-space boxes (8 corners each).
 fn mannequin_parts(b: &Brush) -> Vec<[V3; 8]> {
     let base = b.base();
     let (s, c) = b.rot[2].to_radians().sin_cos();
-    MANNEQUIN
+    let parts: &[([f32; 3], [f32; 3])] = if b.entity == Some(Entity::Car) { &CAR } else { &MANNEQUIN };
+    parts
         .iter()
         .map(|(lo, hi)| {
             let mut out = [V3::default(); 8];
@@ -634,7 +653,17 @@ impl Renderer {
         // Pending block box
         if let Some((lo, hi)) = ed.block_box {
             let c = if light { [0.05, 0.05, 0.05] } else { BLOCK_BOX };
-            rect2(&mut f.overlay, lo.get(ha), lo.get(va), hi.get(ha), hi.get(va), rgb(c, 1.0));
+            if let Some(h) = ed.block_preview() {
+                // the shape it will become, inside a faint box
+                rect2(&mut f.overlay, lo.get(ha), lo.get(va), hi.get(ha), hi.get(va), rgb(c, 0.35));
+                for fc in &h.faces {
+                    for i in 0..fc.idx.len() {
+                        line(&mut f.overlay, p2(h.verts[fc.idx[i]]), p2(h.verts[fc.idx[(i + 1) % fc.idx.len()]]), rgb(c, 1.0));
+                    }
+                }
+            } else {
+                rect2(&mut f.overlay, lo.get(ha), lo.get(va), hi.get(ha), hi.get(va), rgb(c, 1.0));
+            }
         }
 
         // Handles + dimensions for the active box
@@ -923,8 +952,16 @@ impl Renderer {
             }
         }
         if let Some((lo, hi)) = ed.block_box {
-            for (a, b) in box_edges(lo, hi) {
-                line3(&mut f.overlay, a, b, [1.0, 1.0, 0.3, 1.0]);
+            if let Some(h) = ed.block_preview() {
+                for fc in &h.faces {
+                    for i in 0..fc.idx.len() {
+                        line3(&mut f.overlay, h.verts[fc.idx[i]], h.verts[fc.idx[(i + 1) % fc.idx.len()]], [1.0, 1.0, 0.3, 1.0]);
+                    }
+                }
+            } else {
+                for (a, b) in box_edges(lo, hi) {
+                    line3(&mut f.overlay, a, b, [1.0, 1.0, 0.3, 1.0]);
+                }
             }
         }
         // Bisect preview: outline the pieces in their tints

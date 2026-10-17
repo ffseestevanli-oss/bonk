@@ -184,6 +184,14 @@ void bonk_set_axis_lock(int on);
 void bonk_set_collision_solid(int on);
 void bonk_set_sel_box_wait(int on);
 void bonk_set_fov(float deg);
+int bonk_vertex_pick();
+unsigned bonk_set_block_shape(int shape, int faces);
+void bonk_block_shape(int *out);
+int bonk_place_kind();
+const char *bonk_copy(const char *source, int cut);
+unsigned bonk_paste(const char *text, int at_mouse);
+const char *bonk_overlap_scan();
+unsigned bonk_select_ids(const char *ids);
 }
 
 #ifndef BONK_VERSION
@@ -206,7 +214,7 @@ enum Cmd {
     CMD_TOOL_MANNEQUIN, CMD_TOOL_ORIGIN, CMD_TOOL_FACE, CMD_ORIGIN_TO_SEL_BOTTOM, CMD_ORIGIN_TO_SEL_CENTER, CMD_TOGGLE_MANNEQUINS,
     CMD_GROUP, CMD_UNGROUP, CMD_IGNORE_GROUPS, CMD_TOGGLE_NODRAW_2D, CMD_DESELECT, CMD_TOGGLE_EDGES_3D,
     CMD_BISECT_MODE_DELETE_LARGER, CMD_HIDE_TOGGLE, CMD_MIRROR_H, CMD_MIRROR_V, CMD_TOGGLE_AXIS_LOCK, CMD_TOGGLE_BOX_TOUCH,
-    CMD_TOGGLE_COLLISION_SOLID
+    CMD_TOGGLE_COLLISION_SOLID, CMD_TOGGLE_VERTEX_PICK, CMD_TOOL_CAR
 };
 
 const char *kViewNames[4] = {"camera", "top (x/y)", "front (y/z)", "side (x/z)"};
@@ -1180,13 +1188,25 @@ public:
     QString iconName, badge, label;
     bool active = false;
     bool grey = false;
+    bool small = false;           // a companion segment (no badge, icon only)
+    ToolButton *corner = nullptr; // a segment inside this button (the Vertex tool's ↖)
 
     explicit ToolButton(QWidget *parent = nullptr) : QAbstractButton(parent) {
         setCursor(Qt::PointingHandCursor);
         setFocusPolicy(Qt::NoFocus);
     }
 
+    /// Where the corner segment sits: the right end in a wide button, the top-right corner in a square one.
+    void placeCorner() {
+        if (!corner) return;
+        const bool wide = width() > height() * 1.6;
+        const int s = wide ? height() - 6 : std::max(14, height() * 2 / 5);
+        corner->setGeometry(width() - s - 3, 3, s, s);
+        corner->raise();
+    }
+
 protected:
+    void resizeEvent(QResizeEvent *e) override { QAbstractButton::resizeEvent(e); placeCorner(); }
     void enterEvent(QEnterEvent *e) override { hovered = true; update(); QAbstractButton::enterEvent(e); }
     void leaveEvent(QEvent *e) override { hovered = false; update(); QAbstractButton::leaveEvent(e); }
     void paintEvent(QPaintEvent *) override {
@@ -1205,6 +1225,14 @@ protected:
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1), rad - 1, rad - 1);
         }
         const bool wide = width() > height() * 1.6;
+        if (small) {
+            // a companion segment: just the icon, a hairline separating it from its button
+            const qreal s2 = std::round(height() * 0.72);
+            QString sp = toolIconPath(iconName);
+            if (!sp.isEmpty())
+                p.drawPixmap(QRectF((width() - s2) / 2, (height() - s2) / 2, s2, s2).toRect(), QIcon(sp).pixmap(QSize(int(s2), int(s2)), devicePixelRatioF()));
+            return;
+        }
         const qreal is = std::round(height() * 0.68);
         QRectF iconRect = wide ? QRectF(height() * 0.18, (height() - is) / 2 - 1, is, is) : QRectF((width() - is) / 2 - height() * 0.05, height() * 0.07, is, is);
         QString path = toolIconPath(iconName);
@@ -1224,7 +1252,7 @@ protected:
             f.setPixelSize(std::clamp(int(height() * 0.29), 10, 13));
             f.setBold(active);
             p.setFont(f);
-            QRectF tr(iconRect.right() + height() * 0.18, 0, width() - iconRect.right() - height() * 0.18 - 18, height());
+            QRectF tr(iconRect.right() + height() * 0.18, 0, width() - iconRect.right() - height() * 0.18 - 18 - (corner ? corner->width() + 4 : 0), height());
             // labels go away when they don't fit
             if (QFontMetrics(f).horizontalAdvance(label) <= tr.width())
                 p.drawText(tr, Qt::AlignVCenter | Qt::AlignLeft, label);
@@ -1234,7 +1262,8 @@ protected:
         f.setPixelSize(std::clamp(int(height() * 0.25), 8, 12));
         f.setBold(true);
         p.setFont(f);
-        QRectF kr(r.right() - 14, r.bottom() - 14, 12, 13);
+        const qreal inset = corner && wide ? corner->width() + 4 : 0;
+        QRectF kr(r.right() - 14 - inset, r.bottom() - 14, 12, 13);
         p.setPen(QColor(0, 0, 0, 130));
         p.drawText(kr.translated(1, 1), Qt::AlignRight | Qt::AlignBottom, badge);
         p.setPen(Qt::white);
@@ -1284,7 +1313,8 @@ const ToolDef kBrushTools[] = {
     {"bisect-split", "Bisect", "Bisect tool", CMD_TOOL_BISECT, 3, "4", "X"},
 };
 const ToolDef kEntityTools[] = {
-    {"mannequin", "Mannequin", "Scale mannequin (32 × 32 × 72): click a surface to stand one on it", CMD_TOOL_MANNEQUIN, 4, "", ""},
+    {"mannequin", "Mannequin", "Scale mannequin (32 × 32 × 72, the player): click a surface to stand one on it", CMD_TOOL_MANNEQUIN, 4, "", ""},
+    {"car", "Car", "Car (176 × 96 × 80, about Half-Life 2's jeep): click a surface to park one there.\nMeasurement buddies are never compiled.", CMD_TOOL_CAR, 4, "", ""},
 };
 const ToolDef kModelTools[] = {
     {"origin", "Origin", "Origin tool: place the model origin", CMD_TOOL_ORIGIN, 5, "5", "5"},
@@ -1370,14 +1400,70 @@ public:
                     else QObject::connect(b, &QAbstractButton::clicked, this, [ot] { ot(); });
                     entries.push_back({d, b, mode == 0 && inRow == 3});
                     h->addWidget(b);
+                    if (d.cmd == CMD_TOOL_VERTEX) {
+                        // [ Vertex  3 |↖] : the segment turns on vertex select
+                        vertexPick = new ToolButton(b);
+                        vertexPick->small = true;
+                        vertexPick->iconName = QStringLiteral("select");
+                        vertexPick->setToolTip(QStringLiteral("Vertex select: click or box vertices on any brush (Ctrl adds),\n"
+                                                              "then G moves them, R turns them and S scales them.\nClick again to turn it off."));
+                        QObject::connect(vertexPick, &QAbstractButton::clicked, this, [oc] { oc(CMD_TOGGLE_VERTEX_PICK); });
+                        b->corner = vertexPick;
+                        b->placeCorner();
+                    }
                 }
                 if (mode == 0 && inRow == 3) h->addStretch(1);
                 v->addLayout(h);
             }
             v->addSpacing(gCompact ? 3 : 6);
         };
+        vertexPick = nullptr;
         section("Brush Manipulation", kBrushTools, 4);
-        section("Entities", kEntityTools, 1);
+        // Block tool: what it makes (shown while the Block tool is active)
+        shapeBox = new QWidget;
+        {
+            auto *sv = new QVBoxLayout(shapeBox);
+            sv->setContentsMargins(0, 0, 0, 0);
+            sv->setSpacing(gCompact ? 2 : 4);
+            sv->addWidget(new SectionHeader(QStringLiteral("Shape")));
+            shapeCombo = new QComboBox;
+            for (const char *n : {"Block", "Cylinder", "Wedge", "Spike", "Orb"}) shapeCombo->addItem(QString::fromLatin1(n));
+            shapeCombo->setToolTip(QStringLiteral("What the Block tool makes. Round shapes stand along the depth of the view you draw in:\n"
+                                                  "drawn in the top view a cylinder stands up, in the front or side view it lies down.\n"
+                                                  "Right-drag (Quick Draw) makes one a single grid unit deep."));
+            sv->addWidget(shapeCombo);
+            auto *fr = new QHBoxLayout;
+            facesLabel = new QLabel;
+            facesSlider = new QSlider(Qt::Horizontal);
+            facesSlider->setRange(3, 32);
+            facesSlider->setToolTip(QStringLiteral("How many sides round shapes get (orbs use 4–16)"));
+            fr->addWidget(facesLabel);
+            fr->addWidget(facesSlider, 1);
+            sv->addLayout(fr);
+            QSettings st;
+            const int sh = std::clamp(st.value("tools/blockShape", 0).toInt(), 0, 4);
+            const int fc = std::clamp(st.value("tools/blockFaces", 8).toInt(), 3, 32);
+            shapeCombo->setCurrentIndex(sh);
+            facesSlider->setValue(fc);
+            auto apply = [this] {
+                const int sh2 = shapeCombo->currentIndex(), fc2 = facesSlider->value();
+                QSettings st2;
+                st2.setValue("tools/blockShape", sh2);
+                st2.setValue("tools/blockFaces", fc2);
+                const unsigned f = bonk_set_block_shape(sh2, fc2);
+                int out[3] = {0, 0, 0};
+                bonk_block_shape(out);
+                facesLabel->setText(QStringLiteral("Faces %1").arg(out[2]));
+                facesLabel->setEnabled(sh2 == 1 || sh2 == 3 || sh2 == 4);
+                facesSlider->setEnabled(facesLabel->isEnabled());
+                if (repaint) repaint(f);
+            };
+            QObject::connect(shapeCombo, &QComboBox::currentIndexChanged, this, apply);
+            QObject::connect(facesSlider, &QSlider::valueChanged, this, apply);
+            apply();
+        }
+        v->addWidget(shapeBox);
+        section("Measurement Buddies", kEntityTools, 2);
         section("Model Tools", kModelTools, 3);
         section("Selection Options", kSelectionOptions, 3);
         v->addStretch(1);
@@ -1386,15 +1472,23 @@ public:
     }
 
     int layoutMode() const { return mode; }
+    std::function<void(unsigned)> repaint; // after the shape changes
 
     void sync(int tool, int bisectMode, bool hammer, bool grey, bool textureOpen) {
         lastSync = [this, tool, bisectMode, hammer, grey, textureOpen] { sync(tool, bisectMode, hammer, grey, textureOpen); };
         int opts[4] = {0, 1, 1, 0};
         bonk_selection_options(opts);
+        if (shapeBox) shapeBox->setVisible(tool == 1);
+        if (vertexPick) {
+            vertexPick->active = tool == 2 && bonk_vertex_pick();
+            vertexPick->grey = grey;
+            vertexPick->update();
+        }
         for (Entry &e : entries) {
             ToolButton *b = e.button;
             const ToolDef &d = e.def;
             b->active = d.tool >= 0 ? d.tool == tool : textureOpen;
+            if (d.cmd == CMD_TOOL_MANNEQUIN || d.cmd == CMD_TOOL_CAR) b->active = tool == 4 && bonk_place_kind() == (d.cmd == CMD_TOOL_CAR);
             b->grey = grey;
             if (d.cmd == CMD_IGNORE_GROUPS || d.cmd == CMD_TOGGLE_BOX_TOUCH || d.cmd == CMD_TOGGLE_AXIS_LOCK) {
                 QString tip = QString::fromUtf8(d.name);
@@ -1450,6 +1544,11 @@ private:
     std::function<void()> onTexture;
     std::function<void()> lastSync;
     int mode = 0;
+    ToolButton *vertexPick = nullptr;
+    QWidget *shapeBox = nullptr;
+    QComboBox *shapeCombo = nullptr;
+    QSlider *facesSlider = nullptr;
+    QLabel *facesLabel = nullptr;
 
     /// Icons follow the pane's width (3 per row); lists have a fixed height.
     void resizeButtons() {
@@ -3086,6 +3185,19 @@ protected:
         if (keys && keys(e)) return;
         QListWidget::keyPressEvent(e);
     }
+    /// With the swatch grid focused, its own Cut / Copy / Paste / Delete / F2
+    /// (texture files) win over the Edit menu's (brushes, layers).
+    bool event(QEvent *e) override {
+        if (e->type() == QEvent::ShortcutOverride) {
+            auto *k = static_cast<QKeyEvent *>(e);
+            if (k->matches(QKeySequence::Cut) || k->matches(QKeySequence::Copy) || k->matches(QKeySequence::Paste) ||
+                k->matches(QKeySequence::Delete) || k->key() == Qt::Key_F2) {
+                e->accept();
+                return true;
+            }
+        }
+        return QListWidget::event(e);
+    }
     QListWidgetItem *folderAt(const QPoint &pos) const {
         QListWidgetItem *it = itemAt(pos);
         return it && it->data(Qt::UserRole + 1).toInt() == 4 ? it : nullptr;
@@ -4128,6 +4240,131 @@ public:
         for (int ms : {120, 300, 500, 720}) QTimer::singleShot(ms, v, [v] { v->update(); });
     }
 
+    // ---------------------------------------------------------- clipboard
+
+    /// Ctrl+C / Ctrl+X: the selection goes on the system clipboard, so it can
+    /// be pasted into another model, project or Bonk window.
+    void copySelection(bool cut) {
+        const QByteArray src = project.isOpen() ? QFile::encodeName(project.texturesDir()) : QByteArray();
+        const QString text = QString::fromUtf8(bonk_copy(src.constData(), cut));
+        if (!text.isEmpty()) {
+            auto *md = new QMimeData;
+            md->setData(QStringLiteral("application/x-bonk-brushes"), text.toUtf8());
+            md->setText(text);
+            QApplication::clipboard()->setMimeData(md);
+        }
+        handle(F_R3D | F_R2D | F_TOOL);
+    }
+
+    /// Ctrl+V (same spot) / Ctrl+Shift+V (under the mouse). Textures the
+    /// brushes use that this project doesn't have are copied in from the
+    /// project they came from.
+    void pasteClipboard(bool atMouse) {
+        const QMimeData *md = QApplication::clipboard()->mimeData();
+        QString text = md && md->hasFormat(QStringLiteral("application/x-bonk-brushes"))
+                           ? QString::fromUtf8(md->data(QStringLiteral("application/x-bonk-brushes")))
+                           : (md ? md->text() : QString());
+        if (!text.contains(QStringLiteral("BonkModel"))) {
+            statusBar()->showMessage(QStringLiteral("Nothing to paste: copy brushes in Bonk first (Ctrl+C)"), 4000);
+            return;
+        }
+        const int fetched = fetchClipboardTextures(text);
+        const QByteArray t = text.toUtf8();
+        handle(bonk_paste(t.constData(), atMouse), views[1]);
+        if (fetched)
+            statusBar()->showMessage(QStringLiteral("Copied %1 texture%2 in from the project the brushes came from")
+                                         .arg(fetched).arg(fetched == 1 ? QString() : QStringLiteral("s")), 6000);
+    }
+
+    int fetchClipboardTextures(const QString &text) {
+        if (!project.isOpen()) return 0;
+        static const QRegularExpression srcRe(QStringLiteral("\"source_textures\"\\s+\"([^\"]*)\""));
+        static const QRegularExpression matRe(QStringLiteral("\"mat\"\\s+\"([^\"]*)\""));
+        const QString src = srcRe.match(text).captured(1);
+        if (src.isEmpty() || !QFileInfo(src).isDir() || QFileInfo(src).canonicalFilePath() == QFileInfo(project.texturesDir()).canonicalFilePath())
+            return 0;
+        QSet<QString> want;
+        for (auto it = matRe.globalMatch(text); it.hasNext();) {
+            const QString m = it.next().captured(1);
+            if (!m.startsWith(QStringLiteral("tools/"))) want.insert(m);
+        }
+        for (const TexEntry &e : library.entries) want.remove(e.key);
+        if (want.isEmpty()) return 0;
+        QStringList written;
+        library.pauseScans(true);
+        QDirIterator it(src, {QStringLiteral("*.png"), QStringLiteral("*.jpg"), QStringLiteral("*.jpeg"), QStringLiteral("*.PNG"), QStringLiteral("*.JPG"), QStringLiteral("*.JPEG")},
+                        QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString f = it.next();
+            const QString rel = QDir(src).relativeFilePath(f);
+            const QString key = cleanGamePath(rel.left(rel.lastIndexOf(QLatin1Char('.'))));
+            if (!want.contains(key)) continue;
+            const QString dest = project.texturesDir() + QLatin1Char('/') + rel;
+            if (QFileInfo::exists(dest)) continue;
+            QDir().mkpath(QFileInfo(dest).absolutePath());
+            if (QFile::copy(f, dest)) {
+                written << dest;
+                want.remove(key);
+                const QString side = MatProps::sidecarFor(f);
+                if (QFileInfo::exists(side)) QFile::copy(side, MatProps::sidecarFor(dest));
+            }
+        }
+        library.markAsked(written);
+        library.pauseScans(false);
+        return int(written.size());
+    }
+
+    // ---------------------------------------------------------- overlaps
+
+    /// Tools → Find Overlapping Brushes: a list; clicking one selects the pair.
+    void findOverlaps() {
+        const QString r = QString::fromUtf8(bonk_overlap_scan());
+        const QStringList lines = r.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        if (lines.isEmpty()) {
+            QMessageBox::information(this, QStringLiteral("Overlapping brushes"),
+                                     QStringLiteral("No brushes overlap. (Brushes that only touch are fine.)"));
+            return;
+        }
+        auto *d = new QDialog(this);
+        d->setAttribute(Qt::WA_DeleteOnClose);
+        d->setWindowTitle(QStringLiteral("Overlapping brushes"));
+        auto *v = new QVBoxLayout(d);
+        int dups = 0;
+        for (const QString &l : lines) dups += l.section(QLatin1Char(' '), 3, 3) == QStringLiteral("1");
+        auto *info = new QLabel(QStringLiteral("<b>%1</b> pair%2 of brushes share space%3. Click one to select the pair and center the views on it.<br>"
+                                               "Overlaps inside the visual model only waste triangles; in a collision model they make "
+                                               "extra pieces. Visual and collision brushes aren't compared with each other.")
+                                    .arg(lines.size()).arg(lines.size() == 1 ? QString() : QStringLiteral("s"))
+                                    .arg(dups == 1 ? QStringLiteral(", one of them an exact duplicate (usually a leftover to delete)")
+                                         : dups ? QStringLiteral(", %1 of them exact duplicates (usually leftovers to delete)").arg(dups) : QString()));
+        info->setWordWrap(true);
+        v->addWidget(info);
+        auto *list = new QListWidget;
+        for (const QString &l : lines) {
+            const QStringList f = l.split(QLatin1Char(' '));
+            if (f.size() < 4) continue;
+            const bool dup = f[3] == QStringLiteral("1");
+            auto *it = new QListWidgetItem(dup ? QStringLiteral("Duplicate: brush %1 and %2 are the same shape in the same place").arg(f[0], f[1])
+                                               : QStringLiteral("Brush %1 and %2 share %3 units³").arg(f[0], f[1], QLocale().toString(f[2].toDouble(), 'f', 0)));
+            it->setData(Qt::UserRole, f[0] + QLatin1Char(' ') + f[1]);
+            if (dup) it->setForeground(QColor(230, 120, 60));
+            list->addItem(it);
+        }
+        v->addWidget(list, 1);
+        QObject::connect(list, &QListWidget::currentItemChanged, d, [this](QListWidgetItem *it) {
+            if (!it) return;
+            const QByteArray ids = it->data(Qt::UserRole).toString().toUtf8();
+            handle(bonk_select_ids(ids.constData()));
+        });
+        auto *bb = new QDialogButtonBox(QDialogButtonBox::Close);
+        auto *again = bb->addButton(QStringLiteral("Scan Again"), QDialogButtonBox::ActionRole);
+        QObject::connect(bb, &QDialogButtonBox::rejected, d, &QDialog::close);
+        QObject::connect(again, &QPushButton::clicked, d, [this, d] { d->close(); QTimer::singleShot(0, this, [this] { findOverlaps(); }); });
+        v->addWidget(bb);
+        d->resize(560, 420);
+        d->show();
+    }
+
     void command(int c) {
         handle(bonk_command(c));
         if (c == CMD_TOGGLE_BOX_TOUCH || c == CMD_TOGGLE_AXIS_LOCK || c == CMD_TOGGLE_COLLISION_SOLID) {
@@ -4173,7 +4410,7 @@ public:
         toolBlock->setChecked(t == 1);
         toolVertex->setChecked(t == 2);
         toolBisect->setChecked(t == 3);
-        toolMannequin->setChecked(t == 4);
+        toolMannequin->setChecked(t == 4 && !bonk_place_kind());
         toolOrigin->setChecked(t == 5);
         toolFace->setChecked(t == 6);
         toolBisect->setText(bmode == 0 ? QStringLiteral("B&isect Tool (Split)")
@@ -4438,7 +4675,7 @@ public:
         if (f && budget && budget->isAncestorOf(f)) return QStringLiteral("budget");
         if (bonk_editing_collision()) return QStringLiteral("collision");
         switch (bonk_tool()) {
-        case 1: return QStringLiteral("tools");
+        case 1: return QStringLiteral("drawing");
         case 2: case 3: return QStringLiteral("vertices");
         case 6: return QStringLiteral("face");
         default: return QStringLiteral("selecting");
@@ -5878,12 +6115,10 @@ void Viewport::paintOverlay(QPainter &p) {
     };
     if (gridFlash.isValid() && gridFlash.elapsed() < 900)
         cornerLabel(QStringLiteral("Grid %1").arg(double(bonk_grid())), 1.0); // no dimming: just the label
-    // Saved: a dark tint blinks over every view and fades out
-    if (mw->saveFlash.isValid() && mw->saveFlash.elapsed() < 1400) {
+    // Saved: the 3D view says so for a moment, then it fades (no tint over the views)
+    if (id == 0 && mw->saveFlash.isValid() && mw->saveFlash.elapsed() < 1400) {
         const double t = mw->saveFlash.elapsed() / 1400.0;
-        const double tint = t < 0.12 ? t / 0.12 : 1.0 - (t - 0.12) / 0.88;
-        p.fillRect(rect(), QColor(0, 0, 0, int(110 * std::clamp(tint, 0.0, 1.0))));
-        if (id == 0) cornerLabel(QStringLiteral("Project saved!"), std::clamp(1.0 - std::max(0.0, t - 0.6) / 0.4, 0.0, 1.0));
+        if (true) cornerLabel(QStringLiteral("Project saved!"), std::clamp(1.0 - std::max(0.0, t - 0.6) / 0.4, 0.0, 1.0));
     }
     // Mouse 4 / 5 switched tools: the tool's icon by the cursor, fading out
     if (toolFlash.isValid() && toolFlash.elapsed() < 700) {
@@ -6062,6 +6297,7 @@ MainWindow::MainWindow() {
     // Panels are docks: drag a title bar to another edge, stack them as tabs,
     // or float them. Window → Reset Layout puts them back.
     panel = new ToolPanel([this](int c) { command(c); }, [this] { toggleTexture(); }, prefs.toolLayout);
+    panel->repaint = [this](unsigned f) { handle(f); };
     panel->layoutChosen = [this](int m) {
         prefs.toolLayout = m;
         QSettings().setValue("tools/layout", m);
@@ -6188,6 +6424,11 @@ MainWindow::MainWindow() {
     QAction *redo = act(edit, QStringLiteral("&Redo"), QKeySequence(), CMD_REDO);
     redo->setShortcuts({QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z), QKeySequence(Qt::CTRL | Qt::Key_Y)});
     edit->addSeparator();
+    fn(edit, QStringLiteral("Cu&t"), QKeySequence::Cut, [this] { copySelection(true); });
+    fn(edit, QStringLiteral("&Copy"), QKeySequence::Copy, [this] { copySelection(false); });
+    fn(edit, QStringLiteral("&Paste"), QKeySequence::Paste, [this] { pasteClipboard(false); })
+        ->setToolTip(QStringLiteral("Paste in the same spot it was copied from (works across models and projects)"));
+    fn(edit, QStringLiteral("Paste Under the &Mouse"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_V), [this] { pasteClipboard(true); });
     act(edit, QStringLiteral("&Delete"), QKeySequence::Delete, CMD_DELETE);
     act(edit, QStringLiteral("Select &All"), QKeySequence::SelectAll, CMD_SELECT_ALL);
     edit->addSeparator();
@@ -6218,7 +6459,7 @@ MainWindow::MainWindow() {
     view->addSeparator();
     act(view, QStringLiteral("Center 2D Views on Selection"), QKeySequence(Qt::CTRL | Qt::Key_E), CMD_CENTER_2D);
     view->addSeparator();
-    showMannequins = act(view, QStringLiteral("Show Scale &Mannequins"), QKeySequence(), CMD_TOGGLE_MANNEQUINS);
+    showMannequins = act(view, QStringLiteral("Show &Measurement Buddies"), QKeySequence(), CMD_TOGGLE_MANNEQUINS);
     showMannequins->setCheckable(true);
     nodraw2dAct = fn(view, QStringLiteral("Show &Nodraw in 2D Views"), QKeySequence(), [this] {
         prefs.nd2d = !prefs.nd2d;
@@ -6283,6 +6524,7 @@ MainWindow::MainWindow() {
     toolBisect = act(tools, QStringLiteral("B&isect Tool"), QKeySequence(), CMD_TOOL_BISECT);
     tools->addSeparator();
     toolMannequin = act(tools, QStringLiteral("Place Scale &Mannequin"), QKeySequence(), CMD_TOOL_MANNEQUIN);
+    act(tools, QStringLiteral("Place &Car (HL2 jeep size)"), QKeySequence(), CMD_TOOL_CAR);
     tools->addSeparator();
     toolOrigin = act(tools, QStringLiteral("&Origin Tool"), QKeySequence(), CMD_TOOL_ORIGIN);
     toolFace = act(tools, QStringLiteral("&Face Select && Paint Tool"), QKeySequence(), CMD_TOOL_FACE);
@@ -6292,6 +6534,9 @@ MainWindow::MainWindow() {
     tools->addSeparator();
     act(tools, QStringLiteral("&Create Block"), QKeySequence(), CMD_CREATE_BLOCK);
     act(tools, QStringLiteral("&Apply Bisect Cut"), QKeySequence(), CMD_BISECT_APPLY);
+    tools->addSeparator();
+    fn(tools, QStringLiteral("Find &Overlapping Brushes…"), QKeySequence(), [this] { findOverlaps(); })
+        ->setIcon(QIcon(toolIconPath(QStringLiteral("overlap"))));
     auto *group = new QActionGroup(this);
     for (QAction *a : {toolSelect, toolBlock, toolVertex, toolBisect, toolMannequin, toolOrigin, toolFace}) {
         a->setCheckable(true);
@@ -6328,7 +6573,7 @@ MainWindow::MainWindow() {
         float dt = clock.restart() / 1000.0f;
         unsigned f = bonk_tick(dt);
         if (f) handle(f);
-        if (saveFlash.isValid() && saveFlash.elapsed() < 1500) repaintAll();
+        if (saveFlash.isValid() && saveFlash.elapsed() < 1500) views[0]->update();
     });
     timer.start(8);
 
@@ -6491,7 +6736,18 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                     const QStringList a = c.mid(down ? 8 : 6).split(QLatin1Char(','));
                     const int v = a.value(0).toInt();
                     w.handle(bonk_key(v, a.value(1).toInt(0, 0), down, 0, 0), w.views[v]);
-                } else if (c == QStringLiteral("saveflash")) {
+                } else if (c == QStringLiteral("copy")) w.copySelection(false);
+                else if (c == QStringLiteral("paste") || c == QStringLiteral("pastem")) w.pasteClipboard(c.endsWith(QLatin1Char('m')));
+                else if (c == QStringLiteral("overlaps")) w.findOverlaps();
+                else if (c.startsWith(QStringLiteral("clipfile:"))) { // clipfile:path: put a file's text on the clipboard
+                    QFile cf(c.mid(9));
+                    if (cf.open(QIODevice::ReadOnly)) QApplication::clipboard()->setText(QString::fromUtf8(cf.readAll()));
+                } else if (c.startsWith(QStringLiteral("clipsave:"))) { // clipsave:path
+                    QFile cf(c.mid(9));
+                    if (cf.open(QIODevice::WriteOnly)) cf.write(QApplication::clipboard()->text().toUtf8());
+                }
+                else if (c.startsWith(QStringLiteral("shape:"))) bonk_set_block_shape(c.mid(6).section(QLatin1Char(','), 0, 0).toInt(), c.mid(6).section(QLatin1Char(','), 1, 1).toInt());
+                else if (c == QStringLiteral("saveflash")) {
                     w.saveFlash.start();
                 } else if (c.startsWith(QStringLiteral("toolflash:"))) w.quickTool(w.views[1], c.endsWith(QLatin1Char('5')), QPointF(220, 160));
                 else if (c.startsWith(QStringLiteral("mat:"))) {
@@ -6610,6 +6866,8 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                     }
                 }
                 img.save(shot);
+                for (QDialog *dlg : w.findChildren<QDialog *>())
+                    if (dlg->isVisible()) dlg->grab().save(shot + QStringLiteral(".dialog.png"));
                 QApplication::quit();
             });
         });
