@@ -4971,6 +4971,13 @@ public:
             d.select(a.value(0).toInt(), a.value(1, QStringLiteral("-1")).toInt());
         }
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_DROP")) d.devDrop(qEnvironmentVariable("BONK_SPAWNLIST_DROP"));
+        if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_ENTER")) { // developer aid: press Enter in the dialog
+            d.show();
+            QWidget *f = d.focusWidget() ? d.focusWidget() : &d;
+            QKeyEvent dn(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), up(QEvent::KeyRelease, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(f, &dn);
+            QApplication::sendEvent(f, &up);
+        }
         if (qEnvironmentVariableIsSet("BONK_SCREENSHOT")) {
             d.show();
             for (int i = 0; i < 5; ++i) QApplication::processEvents(); // let deferred layouts run

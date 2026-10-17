@@ -844,6 +844,11 @@ public:
         QObject::connect(writeBtn, &QPushButton::clicked, this, [this] { writeNow(); });
         QObject::connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
         rebuildTree();
+        // no default button: Enter in a text field (renaming, a header) mustn't press "+ Subcategory"
+        for (QPushButton *b : findChildren<QPushButton *>()) {
+            b->setAutoDefault(false);
+            b->setDefault(false);
+        }
         resize(1180, 700);
     }
 
@@ -879,6 +884,7 @@ protected:
             moveItems(e->key() == Qt::Key_Left ? -1 : 1);
             return;
         }
+        if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) return; // Enter finishes typing; it never presses a button
         QDialog::keyPressEvent(e);
     }
 

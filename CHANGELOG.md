@@ -2,6 +2,12 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.16.3
+
+- **Fix:** in the Spawnlist Editor, pressing Enter after typing (renaming a category, a header)
+  pressed "+ Subcategory" and added a category. No button is the default any more, so it isn't
+  highlighted either.
+
 ## 0.16.2
 
 - **Drag and drop in the Spawnlist Editor:** drag tiles and headers around the page to rearrange
