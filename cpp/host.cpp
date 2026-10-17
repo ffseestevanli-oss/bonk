@@ -68,6 +68,13 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QOpenGLContext>
+#include <QOpenGLFramebufferObject>
+#include <QOpenGLFunctions>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QStackedWidget>
+#include <QStyledItemDelegate>
 #include <QOpenGLWidget>
 #include <QPainter>
 #include <QPushButton>
@@ -118,6 +125,9 @@ unsigned bonk_focus_lost(int view);
 unsigned bonk_tick(float dt);
 unsigned bonk_command(int cmd);
 int bonk_tool();
+int bonk_render_thumb(int view, const char *path, float yaw, float pitch, float dist, float tx, float ty, float tz, float fov, int w, int h);
+int bonk_model_bounds(const char *path, float *out);
+int bonk_model_fit(const char *path, float yaw, float pitch, float fov, float *out);
 int bonk_is_captured();
 const char *bonk_status();
 int bonk_save(const char *path);
@@ -4661,6 +4671,7 @@ private:
 
 #include "guide.inc"
 #include "importer.inc"
+#include "spawnlist.inc"
 
 // ------------------------------------------------------------------ main window
 
@@ -4895,6 +4906,84 @@ public:
         }
         bonk_new_collision(mode, float(detail));
         handle(F_R3D | F_R2D | F_TOOL);
+    }
+
+    // ---------------------------------------------------------------- spawnlist
+
+    /// A spawn icon: the saved model drawn off screen with a transparent
+    /// background, at 2× and scaled down for smooth edges.
+    QImage renderThumb(const QString &bpmdl, const ThumbCam &cam, int size) {
+        Viewport *v = views[0];
+        if (qEnvironmentVariableIsSet("BONK_SHOT_THUMBS")) { // developer aid: no GL off screen, use thumbnails drawn elsewhere
+            QImage img(qEnvironmentVariable("BONK_SHOT_THUMBS") + QLatin1Char('/') + QFileInfo(bpmdl).completeBaseName() + QStringLiteral(".png"));
+            return img.isNull() ? img : img.scaled(size, size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        }
+        if (!v->context() || !v->isValid()) return QImage();
+        v->makeCurrent();
+        const int ss = std::min(size * 2, 1024);
+        QOpenGLFramebufferObjectFormat fmt;
+        fmt.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+        fmt.setSamples(0);
+        QImage out;
+        {
+            QOpenGLFramebufferObject fbo(ss, ss, fmt);
+            if (fbo.isValid() && fbo.bind()) {
+                QOpenGLFunctions *gl = v->context()->functions();
+                gl->glViewport(0, 0, ss, ss);
+                const QByteArray p = QFile::encodeName(bpmdl);
+                ThumbCam c = cam;
+                float f[4];
+                if (c.dist <= 0 && bonk_model_fit(p.constData(), float(c.yaw), float(c.pitch), float(c.fov), f) == 0) {
+                    c.tx = f[0];
+                    c.ty = f[1];
+                    c.tz = f[2];
+                    c.dist = f[3];
+                }
+                if (bonk_render_thumb(0, p.constData(), float(c.yaw), float(c.pitch), float(std::max(1.0, c.dist)), float(c.tx), float(c.ty), float(c.tz),
+                                      float(c.fov), ss, ss) == 0)
+                    out = fbo.toImage(true).convertToFormat(QImage::Format_ARGB32);
+                fbo.release();
+            }
+        }
+        v->doneCurrent();
+        if (out.isNull()) return out;
+        return out.scaled(size, size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    }
+
+    ThumbRenderer thumbRenderer() {
+        return [this](const QString &f, const ThumbCam &c, int s) { return renderThumb(f, c, s); };
+    }
+
+    /// Tools → Spawnlist Editor…
+    void openSpawnlists() {
+        if (!project.isOpen()) {
+            QMessageBox::information(this, QStringLiteral("Spawnlist Editor"), QStringLiteral("Open a project first: the spawnlist belongs to the project's addon."));
+            return;
+        }
+        if (bonk_is_dirty() && !filePath.isEmpty() && !qEnvironmentVariableIsSet("BONK_SCREENSHOT")) save(); // spawn icons are drawn from the saved models
+        SpawnlistDialog d(this, project, thumbRenderer(), [this](const QString &r) {
+            if (!r.isEmpty()) statusBar()->showMessage(r.startsWith(QLatin1Char('!')) ? r.mid(1) : r, 8000);
+        });
+        if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_SELECT")) {
+            const QStringList a = qEnvironmentVariable("BONK_SPAWNLIST_SELECT").split(QLatin1Char(','));
+            d.select(a.value(0).toInt(), a.value(1, QStringLiteral("-1")).toInt());
+        }
+        if (qEnvironmentVariableIsSet("BONK_SCREENSHOT")) {
+            d.show();
+            for (int i = 0; i < 5; ++i) QApplication::processEvents(); // let deferred layouts run
+            d.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".dialog.png"));
+            return;
+        }
+        d.exec();
+    }
+
+    /// After a compile (and before an export): the spawnlist into the addon, when there is one.
+    void writeSpawnlistQuiet(CompileWindow *cw = nullptr) {
+        if (!project.isOpen()) return;
+        Spawnlists sl;
+        if (!sl.load(project) || sl.empty()) return;
+        const QString r = writeSpawnlists(sl, project, thumbRenderer());
+        if (cw && !r.isEmpty()) cw->note(r.startsWith(QLatin1Char('!')) ? r.mid(1).toHtmlEscaped() : r.toHtmlEscaped());
     }
 
     /// Tools → Set Mass…: the model's weight in game.
@@ -6270,6 +6359,7 @@ public:
         }
         cw->finish(ok, ok ? QStringLiteral("%1 in %2 s").arg(job.title).arg(job.clock.elapsed() / 1000.0, 0, 'f', 1) : why);
         statusBar()->showMessage(ok ? QStringLiteral("Compiled %1. Bonk!").arg(job.title) : QStringLiteral("Compile failed."), 6000);
+        if (ok) writeSpawnlistQuiet(cw);
         if (ok && job.exportAfter) exportToGMod(true);
     }
 
@@ -6312,6 +6402,7 @@ public:
             if (box.clickedButton() == cb) compileModel();
             return;
         }
+        if (!afterCompile) writeSpawnlistQuiet(); // after a compile it's already written
         const QString name = project.name.trimmed();
         if (name.isEmpty() || name.contains(QLatin1Char('/')) || name == QStringLiteral(".") || name == QStringLiteral("..")) return;
         const QString dest = sf.addonsDir() + QLatin1Char('/') + name;
@@ -7423,6 +7514,8 @@ MainWindow::MainWindow() {
     tools->addSeparator();
     fn(tools, QStringLiteral("Find &Overlapping Brushes…"), QKeySequence(), [this] { findOverlaps(); })
         ->setIcon(QIcon(toolIconPath(QStringLiteral("overlap"))));
+    tools->addSeparator();
+    fn(tools, QStringLiteral("S&pawnlist Editor…"), QKeySequence(), [this] { openSpawnlists(); });
     auto *group = new QActionGroup(this);
     for (QAction *a : {toolSelect, toolBlock, toolVertex, toolBisect, toolMannequin, toolOrigin, toolFace}) {
         a->setCheckable(true);
@@ -7626,6 +7719,8 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                 else if (c == QStringLiteral("paste") || c == QStringLiteral("pastem")) w.pasteClipboard(c.endsWith(QLatin1Char('m')));
                 else if (c == QStringLiteral("overlaps")) w.findOverlaps();
                 else if (c.startsWith(QStringLiteral("mass:"))) bonk_set_mass(c.mid(5).toFloat());
+                else if (c == QStringLiteral("spawnlist")) w.openSpawnlists();
+                else if (c == QStringLiteral("spawnwrite")) w.writeSpawnlistQuiet();
                 else if (c == QStringLiteral("coldlg")) { auto *d = new CollisionDialog(&w, w.prefs.simplifyDetail, false); d->setAttribute(Qt::WA_DeleteOnClose); d->show(); }
                 else if (c.startsWith(QStringLiteral("anim:"))) w.importAnimation(c.mid(5).split(QLatin1Char('|')));
                 else if (c.startsWith(QStringLiteral("selusing:"))) { QByteArray k = c.mid(9).toUtf8(); bonk_select_faces_with(k.constData()); w.handle(F_R3D | F_R2D | F_TOOL); }

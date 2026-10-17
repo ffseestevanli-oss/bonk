@@ -160,6 +160,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the pieces fit together and how t
 - [x] Hold-key editing everywhere: G grab with axis lock, H hide, mirror, 3D nudging, FOV
 - [x] Modeling power: Quick Draw, primitives, multi-vertex editing, copy between models, overlap check
 - [x] Simplified collision, joining brushes, mass presets, compiler choice
+- [x] Spawnlist Editor: spawn menu categories, category icons, framed spawn icons, written into the addon
 - [ ] Workshop publishing
 - [x] Shader work: shader picker (incl. MonitorScreen), more texture slots, live VMT editing
 - [x] Animated, scrolling and pulsing materials; texture find / replace; paint by dragging

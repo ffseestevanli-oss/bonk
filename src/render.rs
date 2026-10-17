@@ -826,6 +826,66 @@ impl Renderer {
 
     /// # Safety
     /// GL context of this viewport must be current.
+    /// A spawn icon: the model's visible faces only (nodraw, collision and
+    /// buddies left out), on a transparent background, from `eye` looking at
+    /// `target`. Draws into whatever framebuffer is bound (the caller sets the viewport).
+    pub unsafe fn render_thumb(&self, doc: &crate::doc::Document, eye: V3, target: V3, fov: f32, w: f32, h: f32) {
+        let g = &self.gl;
+        (g.ClearColor)(0.0, 0.0, 0.0, 0.0);
+        (g.Clear)(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+        (g.Enable)(gl::DEPTH_TEST);
+        (g.DepthFunc)(gl::LEQUAL);
+        (g.Enable)(gl::BLEND);
+        (g.BlendFunc)(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+        let fwd = (target - eye).norm();
+        let up = if fwd.z.abs() > 0.999 { v3(0.0, 1.0, 0.0) } else { v3(0.0, 0.0, 1.0) };
+        let proj = M4::perspective(fov.to_radians(), w / h.max(1.0), 1.0, 65536.0);
+        let mvp = proj.mul(&M4::look_at(eye, target, up));
+        let mut lit: Vec<f32> = Vec::new();
+        let mut textured: HashMap<String, (u32, Vec<f32>)> = HashMap::new();
+        self.prune_textures();
+        // what the compiled model has: every visual brush (hidden layers too), untextured in its color
+        for br in doc.brushes.iter().filter(|b| b.entity.is_none() && !doc.is_collision(b)) {
+            for fc in &br.faces {
+                if fc.material == geom::NODRAW {
+                    continue;
+                }
+                if let (Some(tex), Some((tw, th))) = (self.texture(&fc.material), texstore::size(&fc.material)) {
+                    let buf = &mut textured.entry(fc.material.clone()).or_insert_with(|| (tex, Vec::new())).1;
+                    let tm = fc.tex.or_default_for(fc.normal);
+                    for k in 1..fc.idx.len().saturating_sub(1) {
+                        for vi in [fc.idx[0], fc.idx[k], fc.idx[k + 1]] {
+                            let p = br.verts[vi];
+                            let (u, v) = tm.uv(p);
+                            push_lit_uv(buf, p, fc.normal, [1.0, 1.0, 1.0, 1.0], false, (u / tw as f32, v / th as f32));
+                        }
+                    }
+                } else {
+                    for k in 1..fc.idx.len().saturating_sub(1) {
+                        for vi in [fc.idx[0], fc.idx[k], fc.idx[k + 1]] {
+                            push_lit(&mut lit, br.verts[vi], fc.normal, rgb(br.color, 1.0), false);
+                        }
+                    }
+                }
+            }
+        }
+        self.draw_lit(&mvp, &lit);
+        for (name, (tex, data)) in textured.iter() {
+            let a = texstore::alpha(name);
+            if a.0 != 2 {
+                self.draw_lit_tex(&mvp, data, *tex, a, None);
+            }
+        }
+        (g.DepthMask)(0);
+        for (name, (tex, data)) in textured.iter() {
+            let a = texstore::alpha(name);
+            if a.0 == 2 {
+                self.draw_lit_tex(&mvp, data, *tex, a, None);
+            }
+        }
+        (g.DepthMask)(1);
+    }
+
     pub unsafe fn render_3d(&self, ed: &Editor) {
         // one set per frame: selection lookups stay cheap with thousands of brushes
         let selset: std::collections::HashSet<u32> = ed.doc.selection.iter().copied().collect();
@@ -842,7 +902,7 @@ impl Renderer {
         (g.BlendFunc)(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
 
         let cam = &ed.cam;
-        let proj = M4::perspective(FOV_DEG.to_radians(), w / h, 1.0, 65536.0);
+        let proj = M4::perspective(ed.fov.to_radians(), w / h, 1.0, 65536.0);
         let view = M4::look_at(cam.pos, cam.pos + cam.forward(), v3(0.0, 0.0, 1.0));
         let mvp = proj.mul(&view);
 

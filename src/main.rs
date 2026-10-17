@@ -443,6 +443,155 @@ pub extern "C" fn bonk_set_join_exact(on: c_int) {
     with_ed(|ed| ed.join_exact_only = on != 0);
 }
 
+thread_local! {
+    /// Models loaded for spawn icons: path → (modified time, the model)
+    static THUMB_MODELS: RefCell<std::collections::HashMap<String, (std::time::SystemTime, Box<Editor>)>> = RefCell::new(Default::default());
+}
+
+/// Run `f` on the model saved at `path` (loaded once, again when the file changes).
+fn with_thumb_model<R>(path: &str, f: impl FnOnce(&Editor) -> R) -> Option<R> {
+    let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+    THUMB_MODELS.with(|m| {
+        let mut m = m.borrow_mut();
+        let fresh = m.get(path).is_some_and(|(t, _)| *t == mtime);
+        if !fresh {
+            let mut ed = Box::new(Editor::new());
+            io::load_file(&mut ed, path).ok()?;
+            m.insert(path.to_string(), (mtime, ed));
+        }
+        Some(f(&m.get(path)?.1))
+    })
+}
+
+/// The visible part of a saved model (faces that aren't nodraw, visual layers):
+/// out = [min x, y, z, max x, y, z]. Returns 0, or -1 if it can't be read or is empty.
+#[no_mangle]
+pub extern "C" fn bonk_model_bounds(path: *const c_char, out: *mut f32) -> c_int {
+    let Some(p) = path_arg(path) else { return -1 };
+    let b = with_thumb_model(&p, |ed| {
+        let mut bb: Option<(V3, V3)> = None;
+        for br in ed.doc.brushes.iter().filter(|b| b.entity.is_none() && !ed.doc.is_collision(b)) {
+            for f in br.faces.iter().filter(|f| f.material != geom::NODRAW) {
+                for &i in &f.idx {
+                    let v = br.verts[i];
+                    bb = Some(match bb {
+                        Some((l, h)) => (l.min(v), h.max(v)),
+                        None => (v, v),
+                    });
+                }
+            }
+        }
+        bb
+    })
+    .flatten();
+    let Some((l, h)) = b else { return -1 };
+    if !out.is_null() {
+        unsafe { std::ptr::copy_nonoverlapping([l.x, l.y, l.z, h.x, h.y, h.z].as_ptr(), out, 6) };
+    }
+    0
+}
+
+/// Frame the saved model at `path` for a spawn icon seen from yaw / pitch with
+/// `fov` (degrees): out = [target x, y, z, distance], fitting its visible
+/// vertices (not just its box) snugly. Returns 0, or -1.
+#[no_mangle]
+pub extern "C" fn bonk_model_fit(path: *const c_char, yaw: f32, pitch: f32, fov: f32, out: *mut f32) -> c_int {
+    let Some(p) = path_arg(path) else { return -1 };
+    let r = with_thumb_model(&p, |ed| {
+        let pts: Vec<V3> = ed
+            .doc
+            .brushes
+            .iter()
+            .filter(|b| b.entity.is_none() && !ed.doc.is_collision(b))
+            .flat_map(|b| b.faces.iter().filter(|f| f.material != geom::NODRAW).flat_map(move |f| f.idx.iter().map(move |&i| b.verts[i])))
+            .collect();
+        thumb_fit(&pts, yaw, pitch, fov)
+    })
+    .flatten();
+    let Some((t, d)) = r else { return -1 };
+    if !out.is_null() {
+        unsafe { std::ptr::copy_nonoverlapping([t.x, t.y, t.z, d].as_ptr(), out, 4) };
+    }
+    0
+}
+
+/// Target and distance that fit `pts` in a square view from yaw / pitch:
+/// the target is centered on the points' extent across the view, and the
+/// distance is the least that keeps every point inside (with a small margin).
+fn thumb_fit(pts: &[V3], yaw: f32, pitch: f32, fov: f32) -> Option<(V3, f32)> {
+    if pts.is_empty() {
+        return None;
+    }
+    let (sy, cy) = yaw.to_radians().sin_cos();
+    let (sp, cp) = pitch.to_radians().sin_cos();
+    let e = v3(cy * cp, sy * cp, sp); // toward the eye
+    let r = v3(-sy, cy, 0.0);
+    let u = v3(-cy * sp, -sy * sp, cp);
+    let t = (fov.clamp(5.0, 120.0).to_radians() * 0.5).tan() / 1.06;
+    // center on the extent across the view plane, then back off; a second pass
+    // re-centers on the perspective extent
+    let (mut lo, mut hi) = (pts[0], pts[0]);
+    for p in pts {
+        lo = lo.min(*p);
+        hi = hi.max(*p);
+    }
+    let mut c = (lo + hi) * 0.5;
+    let need = |c: V3| pts.iter().fold(8.0f32, |d, p| {
+        let q = *p - c;
+        d.max(q.dot(r).abs().max(q.dot(u).abs()) / t + q.dot(e))
+    });
+    let reach = (hi - lo).len() + 1.0;
+    for _ in 0..8 {
+        let d = need(c);
+        // for this distance, slide across the view so the points' screen extent is
+        // centered: (max + min) of (h - s) / depth falls as s grows, so bisect s
+        let shift = |axis: V3| {
+            let mid = |s: f32| {
+                let (mut a, mut b) = (f32::MAX, f32::MIN);
+                for p in pts {
+                    let q = *p - c;
+                    let v = (q.dot(axis) - s) / (d - q.dot(e)).max(1e-3);
+                    a = a.min(v);
+                    b = b.max(v);
+                }
+                a + b
+            };
+            let (mut s0, mut s1) = (-reach, reach);
+            for _ in 0..40 {
+                let m = (s0 + s1) * 0.5;
+                if mid(m) > 0.0 { s0 = m } else { s1 = m }
+            }
+            (s0 + s1) * 0.5
+        };
+        let (sx, sy) = (shift(r), shift(u));
+        c = c + r * sx + u * sy;
+    }
+    Some((c, need(c)))
+}
+
+/// Draw a spawn icon of the saved model at `path` into the bound framebuffer,
+/// with `view`'s GL context current: orbiting `target` at yaw / pitch (degrees)
+/// and distance, fov in degrees. Returns 0, or -1.
+#[no_mangle]
+pub extern "C" fn bonk_render_thumb(view: c_int, path: *const c_char, yaw: f32, pitch: f32, dist: f32, tx: f32, ty: f32, tz: f32, fov: f32, w: c_int, h: c_int) -> c_int {
+    let Some(p) = path_arg(path) else { return -1 };
+    let target = v3(tx, ty, tz);
+    let (sy, cy) = yaw.to_radians().sin_cos();
+    let (sp, cp) = pitch.to_radians().sin_cos();
+    let eye = target + v3(cy * cp, sy * cp, sp) * dist.max(1.0);
+    let ok = with_thumb_model(&p, |ed| {
+        RENDERERS.with(|rs| {
+            if let Some(r) = rs.borrow()[vid(view)].as_ref() {
+                unsafe { r.render_thumb(&ed.doc, eye, target, fov.clamp(5.0, 120.0), w as f32, h as f32) };
+                true
+            } else {
+                false
+            }
+        })
+    });
+    if ok == Some(true) { 0 } else { -1 }
+}
+
 /// Block tool shape (0 block, 1 cylinder, 2 wedge, 3 spike, 4 orb) and faces count.
 #[no_mangle]
 pub extern "C" fn bonk_set_block_shape(shape: c_int, faces: c_int) -> u32 {
@@ -1406,5 +1555,40 @@ mod bench3 {
         let t = std::time::Instant::now();
         let r = unsafe { std::ffi::CStr::from_ptr(bonk_overlap_scan()) }.to_string_lossy().into_owned();
         println!("overlap: {} pairs in {:?}\n{}", r.lines().count(), t.elapsed(), r.lines().take(8).collect::<Vec<_>>().join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod thumb_tests {
+    use super::*;
+
+    #[test]
+    fn thumb_fit_frames_every_point_and_centers_them() {
+        // an L-shaped spread of points
+        let pts = [v3(0.0, 0.0, 0.0), v3(400.0, 0.0, 0.0), v3(0.0, 40.0, 0.0), v3(0.0, 0.0, 100.0), v3(400.0, 40.0, 10.0)];
+        for (yaw, pitch) in [(-60.0f32, 20.0f32), (30.0, 45.0), (0.0, 0.0)] {
+            let (c, d) = thumb_fit(&pts, yaw, pitch, 30.0).unwrap();
+            let (sy, cy) = yaw.to_radians().sin_cos();
+            let (sp, cp) = pitch.to_radians().sin_cos();
+            let e = v3(cy * cp, sy * cp, sp);
+            let r = v3(-sy, cy, 0.0);
+            let u = v3(-cy * sp, -sy * sp, cp);
+            let t = (15.0f32).to_radians().tan();
+            let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+            for p in &pts {
+                let q = *p - c;
+                let depth = d - q.dot(e);
+                let (x, y) = (q.dot(r) / depth / t, q.dot(u) / depth / t);
+                assert!(x.abs() <= 1.0 && y.abs() <= 1.0, "point off screen at {yaw},{pitch}: {x} {y}");
+                x0 = x0.min(x);
+                x1 = x1.max(x);
+                y0 = y0.min(y);
+                y1 = y1.max(y);
+            }
+            // snug: the larger extent nearly fills the view, and it's centered
+            assert!((x1 - x0).max(y1 - y0) > 1.8, "too loose at {yaw},{pitch}: {}", (x1 - x0).max(y1 - y0));
+            assert!(((x0 + x1) * 0.5).abs() < 0.05 && ((y0 + y1) * 0.5).abs() < 0.05, "off center at {yaw},{pitch}: {x0} {x1} {y0} {y1}");
+        }
+        assert!(thumb_fit(&[], 0.0, 0.0, 30.0).is_none());
     }
 }

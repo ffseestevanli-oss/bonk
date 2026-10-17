@@ -2,6 +2,24 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.16.0 — "Spawnlists"
+
+- **Spawnlist Editor (Tools → Spawnlist Editor…):** your models in GMod's spawn menu, as a pack.
+  Categories nest (drag to reorder or nest), and each page has headers ("Beds - Full") and model
+  tiles, laid out the way the game shows them. One spawnlist named after the project to start;
+  add more top-level lists if you want them.
+- **Spawn icons you frame:** click a model, then drag to turn it, right-drag to move it in the
+  frame, wheel to zoom. Fit frames it snugly from that angle; Use for Whole Category copies the
+  angle to every model there. Transparent background, like GMod's. Tile size 64, 128, 256 or 512.
+- **Category icons:** a built-in shape (house, folder, box, bed, chair, door, car, tree…), a Silk
+  icon or an image, with a tint and a sub-icon in any corner, previewed at the game's 16 × 16.
+- **Silk icons on request:** Import Silk Icons… copies GMod's icon16 set (famfamfam Silk) from a
+  folder you downloaded; Bonk doesn't ship it.
+- **In the addon, Workshop-ready:** compiling (and exporting, or Write to Addon) writes
+  `lua/autorun/client/bonk_spawnlist_<project>.lua`, the category icons and the spawn icons
+  (`materials/spawnicons/models/…png`, plus `_<size>.png` for bigger tiles).
+- **Fix:** the Field of View setting now changes the 3D view (it only changed the setting).
+
 ## 0.15.0 — "Physics"
 
 - **Simplified collision.** + Collision (or Tools → New Collision Layer, or Generate when compiling

@@ -440,7 +440,44 @@ QList<GuidePage> guidePages(bool hammer) {
                                                                    "log for everything. Too many collision pieces or vertices show up in the Budget bar first.</p>")},
                   {QStringLiteral("Which way it faces"), QStringLiteral("<p>The side of the model facing <b>south</b> in the top view (toward the "
                                                                         "bottom of the screen) is the side that faces you when you spawn the prop.</p>")}};
-        p.see = {QStringLiteral("budget"), QStringLiteral("material"), QStringLiteral("collision")};
+        p.see = {QStringLiteral("budget"), QStringLiteral("material"), QStringLiteral("collision"), QStringLiteral("spawnlist")};
+    }
+    {
+        GuidePage &p = page(QStringLiteral("spawnlist"), GD, QStringLiteral("Spawnlists & spawn icons"),
+                            QStringLiteral("spawnlist spawn menu spawnicon icon thumbnail category header silk icon16 lua props"));
+        p.html = QStringLiteral("<p><b>Tools → Spawnlist Editor…</b> builds the project's spawn menu entry: categories (with their own "
+                                "icons), headers, and your models with spawn icons you frame yourself. It goes into the addon as a small Lua "
+                                "file, so it works from the Workshop too: players find your props under Spawnlists, like any pack.</p>"
+                                "<p>Every project starts with one spawnlist named after it. <b>+ Subcategory</b> nests one under the selected "
+                                "category; <b>+ Spawnlist</b> adds another top-level list, if you want more than one. Drag categories to "
+                                "reorder or nest them; double-click to rename.</p>"
+                                "<p>The middle pane is the category's page, laid out as in game. <b>Add Models…</b> picks from the project's "
+                                "models, <b>Add Header</b> adds a line like \"Beds - Full\". ◀ ▶ (or Ctrl+←/→) move the selection, Delete "
+                                "removes it.</p>");
+        p.subs = {{QStringLiteral("Spawn icons"), QStringLiteral("<p>Click a model to frame its icon: drag to turn it, right-drag (or Shift+drag) to "
+                                                                 "move it in the frame, wheel to zoom. <b>Fit</b> frames the whole model snugly from "
+                                                                 "the current angle; <b>Use for Whole Category</b> gives every model in the category "
+                                                                 "the same angle and size. The icon has a transparent background, like GMod's.</p>"
+                                                                 "<p><b>Icon size</b> is the tile size in the spawn menu: 64 is GMod's usual, 128 or 256 "
+                                                                 "suits big models like houses. Icons are drawn from the saved models, so Bonk saves "
+                                                                 "your model before opening the editor.</p>")},
+                  {QStringLiteral("Category icons"), QStringLiteral("<p>Pick a base: a built-in shape, a Silk icon or an image file; tint it; and add "
+                                                                    "a sub-icon in a corner (a star on the house, say). The preview shows it at the "
+                                                                    "game's 16 × 16 pixels. A plain Silk icon is GMod's own; anything else is written "
+                                                                    "into the addon as a PNG.</p>")},
+                  {QStringLiteral("Silk icons"), QStringLiteral("<p>GMod's category icons are the famfamfam Silk set (icon16). Bonk doesn't include "
+                                                                "it, to stay small: download Silk (famfamfam.com, CC BY 2.5), unzip it, and use "
+                                                                "<b>Import Silk Icons…</b> on its icons folder. Bonk keeps a copy in "
+                                                                "~/.local/share/bonk/silk for every project.</p>")},
+                  {QStringLiteral("What's written"), QStringLiteral("<p>Compiling (and exporting, or <b>Write to Addon</b>) writes "
+                                                                    "<tt>lua/autorun/client/bonk_spawnlist_&lt;project&gt;.lua</tt>, the category icons in "
+                                                                    "<tt>materials/&lt;project&gt;/spawnlist</tt>, and each model's spawn icon in "
+                                                                    "<tt>materials/spawnicons/models/…</tt>: the 64 × 64 one, plus "
+                                                                    "<tt>&lt;name&gt;_&lt;size&gt;.png</tt> for bigger tiles. The spawnlist itself is kept in "
+                                                                    "the project as <tt>spawnlist.json</tt>.</p>"
+                                                                    "<p>If GMod shows an icon of its own for a model, it drew one earlier and keeps it in "
+                                                                    "garrysmod/materials/spawnicons; delete that file to see yours.</p>")}};
+        p.see = {QStringLiteral("compiling"), QStringLiteral("projects")};
     }
     {
         GuidePage &p = page(QStringLiteral("settings"), GD, QStringLiteral("Settings"), QStringLiteral("settings preferences interface size compact nodraw background colors hammer keys"));

@@ -87,6 +87,7 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/host.cpp");
     println!("cargo:rerun-if-changed=cpp/guide.inc");
     println!("cargo:rerun-if-changed=cpp/importer.inc");
+    println!("cargo:rerun-if-changed=cpp/spawnlist.inc");
     println!("cargo:rerun-if-changed=assets");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=QMAKE");
