@@ -2,6 +2,13 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 0.13.5
+
+- **Collision edges stand out while you edit the collision model:** thick, light lines with a dark
+  outline, hidden where something is in front (they used to show through everything in the same
+  orange as the faces). Each piece gets a slightly different shade so neighbors read apart; in the
+  Solid look the edges are a light version of each piece's color.
+
 ## 0.13.4
 
 - **WASD / QE fly the 3D camera again whenever the 3D view has the keys**, in mouselook or not

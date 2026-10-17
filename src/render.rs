@@ -163,6 +163,9 @@ struct Flat {
     tris: Vec<f32>,
     /// depth-tested brush outlines (3D view)
     edges: Vec<f32>,
+    /// collision outlines while editing collision: drawn thick, dark under bright, depth-tested
+    col_dark: Vec<f32>,
+    col_bright: Vec<f32>,
     overlay: Vec<f32>,
 }
 
@@ -884,6 +887,10 @@ impl Renderer {
                 let nodraw = fc.material == geom::NODRAW && !solid;
                 let mut col = if solid {
                     br.color
+                } else if collision && editing_col {
+                    // each piece a slightly different shade, so neighbors read apart
+                    let k = 0.72 + 0.4 * ((br.id.wrapping_mul(2654435761) >> 24) as f32 / 255.0);
+                    [(COLLISION_COL[0] * k).min(1.0), (COLLISION_COL[1] * k).min(1.0), (COLLISION_COL[2] * k).min(1.0)]
                 } else if collision {
                     COLLISION_COL
                 } else if nodraw {
@@ -947,6 +954,13 @@ impl Renderer {
             // while you edit it) keep their outlines
             let outline = ed.show_edges_3d || sel || (collision && editing_col);
             for (a, b) in br.edges().into_iter().map(|(i, j)| (br.verts[i], br.verts[j])).filter(|_| outline) {
+                if collision && editing_col && !sel {
+                    // editing collision: thick two-tone edges that hide behind what's in front
+                    let bright = if solid { mix(br.color, [1.0, 1.0, 1.0], 0.55) } else { [1.0, 0.93, 0.8] };
+                    line3(&mut f.col_dark, a, b, [0.04, 0.03, 0.02, 0.95]);
+                    line3(&mut f.col_bright, a, b, rgb(bright, 1.0));
+                    continue;
+                }
                 let target = if sel || (collision && !solid) { &mut f.overlay } else { &mut f.edges };
                 line3(target, a, b, if collision && !sel && !solid { rgb(COLLISION_COL, 0.9) } else { ec });
             }
@@ -1029,6 +1043,23 @@ impl Renderer {
             }
         }
         self.draw_flat(&mvp, &f.edges, gl::LINES);
+        // collision edges while editing it: about 3px dark with a 2px bright core. Thick
+        // lines by drawing the same lines nudged a pixel at a time (core GL has no wide lines).
+        if !f.col_dark.is_empty() {
+            let nudge = |dx: f32, dy: f32| {
+                let t = M4([1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 2.0 * dx / w.max(1.0), 2.0 * dy / h.max(1.0), 0.0, 1.0]);
+                t.mul(&mvp)
+            };
+            // the dark outline doesn't write depth, so the bright core lands on top of it
+            (g.DepthMask)(0);
+            for (dx, dy) in [(-1.5, 0.0), (1.5, 0.0), (0.0, -1.5), (0.0, 1.5), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
+                self.draw_flat(&nudge(dx, dy), &f.col_dark, gl::LINES);
+            }
+            (g.DepthMask)(1);
+            for (dx, dy) in [(0.0, 0.0), (0.5, 0.0), (0.0, 0.5), (0.5, 0.5)] {
+                self.draw_flat(&nudge(dx, dy), &f.col_bright, gl::LINES);
+            }
+        }
         // translucent collision hulls and textures: don't write depth so what's behind shows
         (g.DepthMask)(0);
         for (name, (tex, data)) in textured.iter() {
