@@ -78,6 +78,25 @@ struct SteamStatus {
 
 /// gmad and gmpublish: Garry's Mod's Linux builds if it has them, else the
 /// Windows ones through Proton (like studiomdl).
+/// Text from a program run in a terminal (`script`), minus the terminal's
+/// escape codes: cursor moves become line breaks, colours and titles go.
+QString terminalText(const QByteArray &raw) {
+    QString t = QString::fromLocal8Bit(raw);
+    static const QRegularExpression osc(QStringLiteral("\x1b\\][^\x07\x1b]*(\x07|\x1b\\\\)"));
+    static const QRegularExpression cup(QStringLiteral("\x1b\\[[0-9;]*[Hf]"));
+    static const QRegularExpression csi(QStringLiteral("\x1b\\[[0-?]*[ -/]*[@-~]"));
+    static const QRegularExpression other(QStringLiteral("\x1b[()][0-9A-Za-z]|\x1b[=>78DEM]"));
+    t.remove(osc);
+    t.replace(cup, QStringLiteral("\n"));
+    t.remove(csi);
+    t.remove(other);
+    t.remove(QLatin1Char('\r'));
+    t.remove(QChar(0x1b));
+    static const QRegularExpression blank(QStringLiteral("\n[ \t]*\n+"));
+    t.replace(blank, QStringLiteral("\n"));
+    return t.trimmed().isEmpty() ? QString() : t;
+}
+
 struct WorkshopTools {
     QString gmad, gmpublish; // paths
     bool gmadNative = false, gmpublishNative = false;
@@ -139,6 +158,12 @@ struct WorkshopTools {
             env << QStringLiteral("STEAM_COMPAT_DATA_PATH=") + prefix << QStringLiteral("STEAM_COMPAT_CLIENT_INSTALL_PATH=") + steamRoot
                 << QStringLiteral("WINEDEBUG=-all");
             cmd << proton << QStringLiteral("run") << tool << args;
+            // Windows console programs only print to a terminal under Wine: give them one
+            if (inFlatpak || !QStandardPaths::findExecutable(QStringLiteral("script")).isEmpty()) {
+                QStringList q;
+                for (QString a : cmd) q << QLatin1Char('\'') + a.replace(QLatin1Char('\''), QStringLiteral("'\\''")) + QLatin1Char('\'');
+                cmd = {QStringLiteral("script"), QStringLiteral("-qefc"), q.join(QLatin1Char(' ')), QStringLiteral("/dev/null")};
+            }
         }
         auto *p = new QProcess(parent);
         p->setProcessChannelMode(QProcess::MergedChannels);
@@ -971,11 +996,12 @@ private:
         proc = tools.start(this, true, {QStringLiteral("list")}, pj.dir());
         listCommand = QStringLiteral("$ %1 %2\n").arg(proc->program(), proc->arguments().join(QLatin1Char(' ')));
         QObject::connect(proc, &QProcess::readyRead, this, [this] { procOut += proc->readAll(); });
-        QObject::connect(proc, &QProcess::finished, this, [this] {
+        QObject::connect(proc, &QProcess::finished, this, [this](int code, QProcess::ExitStatus st) {
             proc->deleteLater();
             proc = nullptr;
-            lastListOutput = listCommand + QString::fromLocal8Bit(procOut);
-            QList<WorkshopItem> got = parseGmpublishList(QString::fromLocal8Bit(procOut), &duplicates);
+            const QString text = terminalText(procOut);
+            lastListOutput = listCommand + text + (st == QProcess::NormalExit ? QStringLiteral("\n(exit code %1)").arg(code) : QStringLiteral("\n(it crashed)"));
+            QList<WorkshopItem> got = parseGmpublishList(text, &duplicates);
             if (got.isEmpty()) {
                 // gmpublish couldn't list them: your public Workshop page can
                 countLabel->setText(QStringLiteral("gmpublish didn't list them; asking your Steam profile…"));
@@ -1273,8 +1299,8 @@ void WorkshopDialog::publish() {
         QProcess *p = tools.start(self, r.publishTool, r.args, pj.dir());
         auto out = std::make_shared<QString>();
         QObject::connect(p, &QProcess::readyRead, self, [=] {
-            const QString t = QString::fromLocal8Bit(p->readAll());
-            *out += t;
+            const QString t = terminalText(p->readAll());
+            *out += t + QLatin1Char('\n');
             for (const QString &l : t.split(QLatin1Char('\n'), Qt::SkipEmptyParts))
                 if (!protonChatter(l.trimmed()) && dlg) dlg->line(l.trimmed());
         });

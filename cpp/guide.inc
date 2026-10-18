@@ -525,7 +525,10 @@ QList<GuidePage> guidePages(bool hammer) {
                                                                        "accept (those are left out).</p>")},
                   {QStringLiteral("The tools"), QStringLiteral("<p>gmad and gmpublish come with Garry's Mod. Bonk uses its Linux builds when "
                                                                "it has them, otherwise the Windows ones through Proton, like studiomdl. The "
-                                                               "publishing window shows their output.</p>")}};
+                                                               "publishing window shows their output. Under Proton they only print "
+                                                               "inside a terminal, so Bonk runs them in one with <i>script</i> (part of "
+                                                               "util-linux, on nearly every Linux). If your addons don't list, the "
+                                                               "<i>details</i> link under the list shows what gmpublish said.</p>")}};
         p.see = {QStringLiteral("compiling"), QStringLiteral("spawnlist")};
     }
     {

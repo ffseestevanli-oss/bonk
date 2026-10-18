@@ -2,6 +2,14 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 1.0 Beta 3
+
+- **gmpublish works through Proton:** it was reaching Steam all along, but Windows console programs
+  only print when they have a terminal under Wine, so Bonk saw nothing. gmad and gmpublish now run
+  in one (`script`, from util-linux), and the terminal's escape codes are cleaned out of what they
+  print. Listing and publishing both use it.
+- The details box shows gmpublish's exit code.
+
 ## 1.0 Beta 2
 
 - **Manage Workshop lists your addons even when gmpublish can't reach Steam:** it reads them from
