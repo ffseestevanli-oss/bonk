@@ -2,6 +2,16 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 1.0 Beta 2
+
+- **Manage Workshop lists your addons even when gmpublish can't reach Steam:** it reads them from
+  your public profile's Workshop page instead (your Steam account from loginusers.vdf). The count
+  under the list says when it did ("from your profile").
+- **"Couldn't list your addons: details"** shows exactly what gmpublish printed (with the command),
+  with a Copy button, so the reason it can't reach Steam can be found.
+- Fix: closing Manage Workshop while it was still fetching thumbnails could crash Bonk.
+- gmpublish through Proton also gets `STEAM_COMPAT_APP_ID=4000`.
+
 ## 1.0 Beta 1 — "Variants"
 
 Bonk leaves alpha: everything planned for 1.0 is in.

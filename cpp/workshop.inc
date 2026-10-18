@@ -18,6 +18,7 @@ struct SteamStatus {
     bool unsure = false; // can't tell from inside a Flatpak sandbox
     QString persona;     // display name
     QString account;     // login name
+    QString steamId;     // SteamID64 (for the public Workshop page)
 
     void detect(const SteamFind &sf) {
         running = false;
@@ -39,11 +40,13 @@ struct SteamStatus {
         QFile f(sf.steamRoot + QStringLiteral("/config/loginusers.vdf"));
         if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
         const QString t = QString::fromUtf8(f.readAll());
-        static const QRegularExpression block(QStringLiteral("\"\\d{10,}\"\\s*\\{([^}]*)\\}"));
+        static const QRegularExpression block(QStringLiteral("\"(\\d{10,})\"\\s*\\{([^}]*)\\}"));
         static const QRegularExpression kv(QStringLiteral("\"(\\w+)\"\\s+\"([^\"]*)\""));
-        QString firstPersona, firstAccount;
+        QString firstPersona, firstAccount, firstId;
         for (auto it = block.globalMatch(t); it.hasNext();) {
-            const QString b = it.next().captured(1);
+            const auto bm = it.next();
+            const QString id = bm.captured(1);
+            const QString b = bm.captured(2);
             QString p, a;
             bool recent = false;
             for (auto k = kv.globalMatch(b); k.hasNext();) {
@@ -55,15 +58,18 @@ struct SteamStatus {
             if (firstPersona.isEmpty()) {
                 firstPersona = p;
                 firstAccount = a;
+                firstId = id;
             }
             if (recent) {
                 persona = p;
                 account = a;
+                steamId = id;
             }
         }
         if (persona.isEmpty()) {
             persona = firstPersona;
             account = firstAccount;
+            steamId = firstId;
         }
     }
 };
@@ -123,7 +129,7 @@ struct WorkshopTools {
     QProcess *start(QObject *parent, bool publish, const QStringList &args, const QString &workdir) const {
         const bool native = publish ? gmpublishNative : gmadNative;
         const QString tool = publish ? gmpublish : gmad;
-        QStringList env = {QStringLiteral("SteamAppId=4000"), QStringLiteral("SteamGameId=4000")};
+        QStringList env = {QStringLiteral("SteamAppId=4000"), QStringLiteral("SteamGameId=4000"), QStringLiteral("STEAM_COMPAT_APP_ID=4000")};
         QStringList cmd;
         if (native) {
             env << QStringLiteral("LD_LIBRARY_PATH=") + QFileInfo(tool).absolutePath() + QLatin1Char(':') + QFileInfo(tool).absolutePath() + QStringLiteral("/..");
@@ -182,6 +188,65 @@ QList<WorkshopItem> parseGmpublishList(const QString &out, int *duplicates = nul
         items << it;
     }
     return items;
+}
+
+/// Your Workshop items from your public Steam profile's Workshop page
+/// (steamcommunity.com/profiles/<id>/myworkshopfiles): each item's ID and title.
+QList<WorkshopItem> parseWorkshopPage(const QString &html) {
+    QList<WorkshopItem> out;
+    static const QRegularExpression title(QStringLiteral("class=\"workshopItemTitle[^\"]*\"[^>]*>([^<]*)<"));
+    static const QRegularExpression idRe(QStringLiteral("filedetails/\\?id=(\\d{6,})"));
+    for (auto it = title.globalMatch(html); it.hasNext();) {
+        const auto m = it.next();
+        // the item's link comes just before its title
+        const QString before = html.mid(std::max<qsizetype>(0, m.capturedStart() - 3000), std::min<qsizetype>(3000, m.capturedStart()));
+        QString id;
+        for (auto i = idRe.globalMatch(before); i.hasNext();) id = i.next().captured(1);
+        if (id.isEmpty() || std::any_of(out.begin(), out.end(), [&](const WorkshopItem &w) { return w.id == id; })) continue;
+        QString t = m.captured(1).trimmed();
+        t.replace(QStringLiteral("&amp;"), QStringLiteral("&")).replace(QStringLiteral("&#39;"), QStringLiteral("'")).replace(QStringLiteral("&quot;"), QStringLiteral("\""));
+        t.replace(QStringLiteral("&lt;"), QStringLiteral("<")).replace(QStringLiteral("&gt;"), QStringLiteral(">"));
+        out << WorkshopItem{id, t, QString(), 0};
+    }
+    return out;
+}
+
+/// Read your Workshop items from your public profile page with curl (a few pages).
+/// Works without gmpublish, as long as the profile's Workshop items are public.
+QList<WorkshopItem> fetchPublicWorkshopList(const QString &steamId, QString *why) {
+    QList<WorkshopItem> all;
+    if (steamId.isEmpty()) {
+        if (why) *why = QStringLiteral("no Steam account found in loginusers.vdf");
+        return all;
+    }
+    if (QStandardPaths::findExecutable(QStringLiteral("curl")).isEmpty()) {
+        if (why) *why = QStringLiteral("curl isn't installed");
+        return all;
+    }
+    if (qEnvironmentVariableIsSet("BONK_WORKSHOP_PAGE")) { // developer aid: a saved page instead of Steam's site
+        QFile f(qEnvironmentVariable("BONK_WORKSHOP_PAGE"));
+        if (f.open(QIODevice::ReadOnly)) return parseWorkshopPage(QString::fromUtf8(f.readAll()));
+    }
+    for (int page = 1; page <= 10; ++page) {
+        QProcess p;
+        p.start(QStringLiteral("curl"), {QStringLiteral("-s"), QStringLiteral("-L"), QStringLiteral("-m"), QStringLiteral("20"),
+                                         QStringLiteral("https://steamcommunity.com/profiles/%1/myworkshopfiles/?appid=4000&browsefilter=myfiles&numperpage=30&p=%2")
+                                             .arg(steamId).arg(page)});
+        if (!p.waitForFinished(25000)) {
+            if (why) *why = QStringLiteral("Steam's site didn't answer");
+            break;
+        }
+        const QList<WorkshopItem> got = parseWorkshopPage(QString::fromUtf8(p.readAllStandardOutput()));
+        int added = 0;
+        for (const WorkshopItem &w : got)
+            if (!std::any_of(all.begin(), all.end(), [&](const WorkshopItem &x) { return x.id == w.id; })) {
+                all << w;
+                ++added;
+            }
+        if (added < 30) break; // the last page
+    }
+    if (all.isEmpty() && why && why->isEmpty()) *why = QStringLiteral("no public Workshop items on your profile (or it's private)");
+    return all;
 }
 
 /// Steam's public Workshop lookup (GetPublishedFileDetails) → titles, thumbnails, dates.
@@ -507,6 +572,7 @@ public:
         : QDialog(parent), pj(pj), render(std::move(render)), setGrid(std::move(setGrid)), compile(std::move(compile)) {
         setWindowTitle(QStringLiteral("Manage Workshop — %1").arg(pj.name));
         tools.find(sf);
+        steamId = st.steamId;
         wp.load(pj);
         auto *root = new QHBoxLayout(this);
         root->setContentsMargins(0, 0, 0, 0);
@@ -539,7 +605,8 @@ public:
         lv->addWidget(list, 1);
         auto *foot = new QHBoxLayout;
         countLabel = new QLabel;
-        countLabel->setEnabled(false);
+        countLabel->setWordWrap(true);
+        QObject::connect(countLabel, &QLabel::linkActivated, this, [this] { showListDetails(); });
         auto *refreshBtn = new QPushButton(QStringLiteral("Refresh"));
         foot->addWidget(countLabel, 1);
         foot->addWidget(refreshBtn);
@@ -676,6 +743,16 @@ public:
         if (!qEnvironmentVariableIsSet("BONK_SCREENSHOT")) QTimer::singleShot(0, this, [this] { fetchList(); });
     }
 
+    ~WorkshopDialog() override {
+        // closing while gmpublish or curl still runs: stop them first, so their
+        // "finished" doesn't reach a half-gone window
+        for (QProcess *p : findChildren<QProcess *>()) {
+            p->disconnect();
+            p->kill();
+            p->waitForFinished(2000);
+        }
+    }
+
     /// Developer aid: press Publish (with change notes / a title filled in).
     void devPublish(const QString &text) {
         if (current.isEmpty()) title->setText(text.isEmpty() ? title->text() : text);
@@ -683,6 +760,12 @@ public:
         publish();
     }
     void devSelect(const QString &id) { select(id); }
+    void devRefresh() {
+        fetchList();
+        QElapsedTimer t;
+        t.start();
+        while (proc && t.elapsed() < 10000) QApplication::processEvents(QEventLoop::AllEvents, 50);
+    }
     void devSnap(const QString &shot) {
         SnapThumbDialog d(this, pj, render, setGrid);
         d.show();
@@ -719,6 +802,30 @@ private:
     QList<QPushButton *> tagButtons;
     QProcess *proc = nullptr;
     QByteArray procOut;
+    QString lastListOutput, steamId, listCommand;
+    bool listedFromProfile = false;
+
+    /// What gmpublish said when it was asked for the list (to show and send along).
+    void showListDetails() {
+        QDialog d(this);
+        d.setWindowTitle(QStringLiteral("gmpublish list"));
+        auto *v = new QVBoxLayout(&d);
+        v->addWidget(hintLabel(QStringLiteral("What <b>%1 list</b> printed%2. If Steam isn't reachable from it, publishing won't work either: send this "
+                                              "to whoever helps you with Bonk.")
+                                   .arg(QFileInfo(tools.gmpublish).fileName().toHtmlEscaped(),
+                                        tools.gmpublishNative ? QString() : QStringLiteral(" (through Proton: %1)").arg(tildePath(tools.proton).toHtmlEscaped()))));
+        auto *log = new QPlainTextEdit(lastListOutput.isEmpty() ? QStringLiteral("(nothing)") : lastListOutput);
+        log->setReadOnly(true);
+        log->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        v->addWidget(log, 1);
+        auto *bb = new QDialogButtonBox(QDialogButtonBox::Close);
+        auto *copy = bb->addButton(QStringLiteral("Copy"), QDialogButtonBox::ActionRole);
+        QObject::connect(copy, &QPushButton::clicked, &d, [log] { QApplication::clipboard()->setText(log->toPlainText()); });
+        QObject::connect(bb, &QDialogButtonBox::rejected, &d, &QDialog::reject);
+        v->addWidget(bb);
+        d.resize(720, 420);
+        d.exec();
+    }
 
     QStringList checkedTags() const {
         QStringList t;
@@ -751,9 +858,11 @@ private:
             list->addItem(li);
             if (it.id == current) li->setSelected(true);
         }
+        countLabel->setToolTip(QString());
         countLabel->setText(items.isEmpty() ? QStringLiteral("No addons listed yet")
                                             : QStringLiteral("%1 addon%2%3").arg(items.size()).arg(items.size() == 1 ? QString() : QStringLiteral("s"))
-                                                  .arg(duplicates ? QStringLiteral(" · %1 duplicate%2 hidden").arg(duplicates).arg(duplicates == 1 ? QString() : QStringLiteral("s")) : QString()));
+                                                  .arg(duplicates ? QStringLiteral(" · %1 duplicate%2 hidden").arg(duplicates).arg(duplicates == 1 ? QString() : QStringLiteral("s")) : QString())
+                                                  + (listedFromProfile ? QStringLiteral(" · <a href='details'>from your profile</a>") : QString()));
     }
 
     /// Update `id`, or a new submission ("").
@@ -850,22 +959,38 @@ private:
     // ---- the list: gmpublish, then Steam's public details
 
     void fetchList() {
+        if (proc) return;
         QString why;
-        if (!tools.ready(&why) || proc) {
-            if (!why.isEmpty()) countLabel->setText(why);
+        if (!tools.ready(&why)) { // no gmpublish: the profile page still lists them
+            lastListOutput = why;
+            listFromProfile();
             return;
         }
         countLabel->setText(QStringLiteral("Asking Steam for your addons…"));
         procOut.clear();
         proc = tools.start(this, true, {QStringLiteral("list")}, pj.dir());
+        listCommand = QStringLiteral("$ %1 %2\n").arg(proc->program(), proc->arguments().join(QLatin1Char(' ')));
         QObject::connect(proc, &QProcess::readyRead, this, [this] { procOut += proc->readAll(); });
         QObject::connect(proc, &QProcess::finished, this, [this] {
             proc->deleteLater();
             proc = nullptr;
+            lastListOutput = listCommand + QString::fromLocal8Bit(procOut);
             QList<WorkshopItem> got = parseGmpublishList(QString::fromLocal8Bit(procOut), &duplicates);
             if (got.isEmpty()) {
-                countLabel->setText(QStringLiteral("gmpublish didn't list any addons (is Steam signed in?)"));
-                return;
+                // gmpublish couldn't list them: your public Workshop page can
+                countLabel->setText(QStringLiteral("gmpublish didn't list them; asking your Steam profile…"));
+                QApplication::processEvents();
+                QString why;
+                got = fetchPublicWorkshopList(steamId, &why);
+                duplicates = 0;
+                listedFromProfile = !got.isEmpty();
+                if (got.isEmpty()) {
+                    countLabel->setText(QStringLiteral("<a href='details'>Couldn't list your addons: details</a>"));
+                    countLabel->setToolTip(QStringLiteral("gmpublish listed nothing, and your profile page: %1").arg(why));
+                    return;
+                }
+            } else {
+                listedFromProfile = false;
             }
             // keep what we knew about each
             for (WorkshopItem &n : got)
@@ -881,9 +1006,38 @@ private:
             fetchDetails();
         });
         QObject::connect(proc, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
-            if (e == QProcess::FailedToStart && proc) countLabel->setText(QStringLiteral("Couldn't start gmpublish"));
+            if (e != QProcess::FailedToStart || !proc) return;
+            lastListOutput = listCommand + QStringLiteral("Couldn't start it: ") + proc->errorString();
+            proc->deleteLater();
+            proc = nullptr;
+            listFromProfile();
         });
         proc->start();
+    }
+
+    /// The list from your public profile page alone.
+    void listFromProfile() {
+        countLabel->setText(QStringLiteral("Asking your Steam profile for your addons…"));
+        QApplication::processEvents();
+        QString why;
+        QList<WorkshopItem> got = fetchPublicWorkshopList(steamId, &why);
+        duplicates = 0;
+        listedFromProfile = !got.isEmpty();
+        if (got.isEmpty()) {
+            countLabel->setText(QStringLiteral("<a href='details'>Couldn't list your addons: details</a>"));
+            countLabel->setToolTip(why);
+            return;
+        }
+        for (WorkshopItem &n : got)
+            if (const WorkshopItem *o = item(n.id)) {
+                n.preview = o->preview;
+                n.updated = o->updated;
+            }
+        items = got;
+        saveCache();
+        fillList();
+        select(current.isEmpty() ? wp.id : current);
+        fetchDetails();
     }
 
     void saveCache() { QSettings().setValue("workshop/items", QJsonDocument(itemsToJson(items)).toJson(QJsonDocument::Compact)); }

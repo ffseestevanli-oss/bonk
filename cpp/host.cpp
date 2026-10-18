@@ -5483,6 +5483,7 @@ public:
                 d.fakeList(QString::fromUtf8(a.readAll()), b.readAll());
             }
             d.show();
+            if (qEnvironmentVariableIsSet("BONK_WORKSHOP_REFRESH")) d.devRefresh();
             if (qEnvironmentVariableIsSet("BONK_WORKSHOP_SELECT")) d.devSelect(qEnvironmentVariable("BONK_WORKSHOP_SELECT"));
             if (qEnvironmentVariableIsSet("BONK_WORKSHOP_SNAP")) d.devSnap(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".snap.png"));
             for (int i = 0; i < 5; ++i) QApplication::processEvents();
