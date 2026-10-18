@@ -379,6 +379,7 @@ struct Prefs {
     bool joinExactOnly = false;  // Ctrl+J only joins when the shape stays exactly the same
     double simplifyDetail = 8.0; // simplified collision: what counts as a detail (units)
     bool launchGmod = false;     // start Garry's Mod after exporting
+    bool openAfterPublish = true; // show the Workshop page after publishing
     QString studiomdl;           // a custom studiomdl.exe (empty = Garry's Mod's own)
     bool startScreen = true;     // show the start screen when Bonk opens
     // Garry's Mod
@@ -428,6 +429,7 @@ struct Prefs {
         joinExactOnly = s.value("editing/joinExactOnly", false).toBool();
         simplifyDetail = s.value("collision/simplifyDetail", 8.0).toDouble();
         launchGmod = s.value("gmod/launchAfterExport", false).toBool();
+        openAfterPublish = s.value("workshop/openAfterPublish", true).toBool();
         studiomdl = s.value("gmod/studiomdl").toString();
         startScreen = s.value("ui/startScreen", true).toBool();
         gmodPath = s.value("gmod/path").toString();
@@ -480,6 +482,7 @@ struct Prefs {
         s.setValue("editing/joinExactOnly", joinExactOnly);
         s.setValue("collision/simplifyDetail", simplifyDetail);
         s.setValue("gmod/launchAfterExport", launchGmod);
+        s.setValue("workshop/openAfterPublish", openAfterPublish);
         s.setValue("gmod/studiomdl", studiomdl);
         s.setValue("ui/startScreen", startScreen);
         s.setValue("gmod/path", gmodPath);
@@ -1026,6 +1029,9 @@ public:
         launchGmod = new QCheckBox(QStringLiteral("Start Garry's Mod after exporting, to test it right away"));
         launchGmod->setToolTip(QStringLiteral("Through Steam (steam://rungameid/4000). If it's already running, change map to load new models."));
         gf->addRow(launchGmod);
+        openAfterPublish = new QCheckBox(QStringLiteral("Open the addon's Workshop page after publishing"));
+        openAfterPublish->setToolTip(QStringLiteral("In Steam when it's running, otherwise in your browser."));
+        gf->addRow(openAfterPublish);
         studiomdl = new QLineEdit;
         studiomdl->setPlaceholderText(QStringLiteral("Garry's Mod's own bin/studiomdl.exe"));
         studiomdl->setToolTip(QStringLiteral("Another studiomdl.exe to compile with (e.g. StudioMDL CE), run through Proton the same way.\n"
@@ -1042,6 +1048,7 @@ public:
             if (!f.isEmpty()) studiomdl->setText(f);
         });
         QObject::connect(launchGmod, &QCheckBox::toggled, this, [this](bool v) { if (!syncing) { p.launchGmod = v; changed(); } });
+        QObject::connect(openAfterPublish, &QCheckBox::toggled, this, [this](bool v) { if (!syncing) { p.openAfterPublish = v; changed(); } });
         QObject::connect(studiomdl, &QLineEdit::textChanged, this, [this](const QString &v) { if (!syncing) { p.studiomdl = v.trimmed(); changed(); } });
         gmodTab->addWidget(gmBox);
         gmodTab->addStretch(1);
@@ -1223,7 +1230,7 @@ private:
     QLabel *lowPreview, *ndWidthLabel, *ndFlowLabel;
     QPushButton *ndColor;
     QSlider *ndIntensity, *ndSpeed, *ndWidth, *ndFlow;
-    QCheckBox *nd2d, *selTouch, *exportAfter, *selWait, *axisLock, *askResize, *launchGmod, *joinExact;
+    QCheckBox *nd2d, *selTouch, *exportAfter, *selWait, *axisLock, *askResize, *launchGmod, *joinExact, *openAfterPublish;
     QLineEdit *studiomdl;
     QLineEdit *gmodPath;
     QComboBox *proton;
@@ -1328,6 +1335,7 @@ private:
         proton->setCurrentIndex(std::max(0, proton->findData(v.protonPath)));
         exportAfter->setChecked(v.exportAfterCompile);
         launchGmod->setChecked(v.launchGmod);
+        openAfterPublish->setChecked(v.openAfterPublish);
         studiomdl->setText(v.studiomdl);
         joinExact->setChecked(v.joinExactOnly);
         grid->setValue(v.gridIntensity);

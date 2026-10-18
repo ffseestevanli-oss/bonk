@@ -97,6 +97,19 @@ QString terminalText(const QByteArray &raw) {
     return t.trimmed().isEmpty() ? QString() : t;
 }
 
+/// Show a Workshop item's page: in Steam when it's running, else the browser.
+/// Returns the URL it opened.
+QString openWorkshopPage(const QString &id, bool steamRunning) {
+    const QString web = QStringLiteral("https://steamcommunity.com/sharedfiles/filedetails/?id=") + id;
+    const QString url = steamRunning ? QStringLiteral("steam://url/CommunityFilePage/") + id : web;
+    if (qEnvironmentVariableIsSet("BONK_SCREENSHOT")) { // developer aid: log it instead
+        qInfo("open %s", qPrintable(url));
+        return url;
+    }
+    if (!QDesktopServices::openUrl(QUrl(url)) && steamRunning) QDesktopServices::openUrl(QUrl(web));
+    return url;
+}
+
 struct WorkshopTools {
     QString gmad, gmpublish; // paths
     bool gmadNative = false, gmpublishNative = false;
@@ -598,6 +611,7 @@ public:
         setWindowTitle(QStringLiteral("Manage Workshop — %1").arg(pj.name));
         tools.find(sf);
         steamId = st.steamId;
+        steamRunning = st.running || st.unsure;
         wp.load(pj);
         auto *root = new QHBoxLayout(this);
         root->setContentsMargins(0, 0, 0, 0);
@@ -828,6 +842,7 @@ private:
     QProcess *proc = nullptr;
     QByteArray procOut;
     QString lastListOutput, steamId, listCommand;
+    bool steamRunning = true;
     bool listedFromProfile = false;
 
     /// What gmpublish said when it was asked for the list (to show and send along).
@@ -1287,6 +1302,7 @@ void WorkshopDialog::publish() {
                        update ? QStringLiteral("Steam may take a few minutes to show the update.")
                               : QStringLiteral("New items start out hidden on the Workshop: make it public from its page when you're ready."));
             if (status) status(update ? QStringLiteral("Updated %1 on the Workshop").arg(id) : QStringLiteral("Published to the Workshop as %1").arg(id));
+            if (QSettings().value("workshop/openAfterPublish", true).toBool()) openWorkshopPage(id, steamRunning);
             fetchList();
             if (!update) select(id);
             return;

@@ -513,7 +513,9 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "<li><b>Update</b>: click an addon on the left (the project's own is picked for you). Write change notes, and "
                                 "tick <i>Replace the thumbnail too</i> to send a new one. Title, description, type and tags are changed on "
                                 "the Workshop page.</li></ul>"
-                                "<p>New items start out hidden on the Workshop: make yours public from its page when you're ready.</p>");
+                                "<p>When it's done, Bonk opens the addon's Workshop page in Steam (or your browser) so you can see it's up; "
+                                "turn that off in Settings → Garry's Mod. New items start out hidden on the Workshop: make yours public from "
+                                "its page when you're ready.</p>");
         p.subs = {{QStringLiteral("Thumbnails"), QStringLiteral("<p>The Workshop wants a 512 × 512 JPG. <b>Choose Image…</b> converts any PNG or "
                                                                 "JPG; <b>Snap from Model…</b> takes a picture of one of the project's models with "
                                                                 "the spawn icon camera (drag to turn, right-drag to move, wheel to zoom), on a "

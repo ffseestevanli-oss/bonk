@@ -2,6 +2,12 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 1.0 Beta 4
+
+- **Publishing opens the addon's Workshop page** when it's done, in Steam (or your browser if Steam
+  isn't running), so you can see it's up. Settings → Garry's Mod → *Open the addon's Workshop page
+  after publishing* (on by default).
+
 ## 1.0 Beta 3
 
 - **gmpublish works through Proton:** it was reaching Steam all along, but Windows console programs
