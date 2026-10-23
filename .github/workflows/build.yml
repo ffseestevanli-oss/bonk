@@ -33,7 +33,7 @@ jobs:
       - name: Install Qt 6
         run: |
           sudo apt-get update
-          sudo apt-get install -y qt6-base-dev qt6-base-dev-tools qt6-wayland libgl-dev pkg-config file
+          sudo apt-get install -y qt6-base-dev qt6-base-dev-tools qt6-wayland qt6-svg-dev qt6-image-formats-plugins libgl-dev pkg-config file
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build --release

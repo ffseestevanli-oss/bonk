@@ -2,7 +2,7 @@
 # Bonk as an AppImage (Qt inside), from a release build:
 #   cargo build --release && packaging/appimage/build-appimage.sh
 # Needs Qt 6 development files (qmake6) with the xcb and Wayland platform
-# plugins, and downloads linuxdeploy and its Qt plugin the first time.
+# plugins and Qt SVG (Ubuntu: qt6-svg-dev), and downloads linuxdeploy and its Qt plugin the first time.
 # Writes Bonk-<version>-x86_64.AppImage in target/appimage.
 set -euo pipefail
 src="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -26,6 +26,10 @@ fetch linuxdeploy-plugin-appimage-x86_64.AppImage https://github.com/linuxdeploy
 rm -rf "$out"
 app="$out/AppDir"
 install -Dm755 "$bin" "$app/usr/bin/bonk"
+# the tool panel's icons and the window icon sit next to the program (where Bonk looks)
+install -d "$app/usr/bin/icons"
+install -m644 "$src"/assets/tools/*.svg "$app/usr/bin/icons/"
+install -m644 "$src/assets/bonk.svg" "$app/usr/bin/bonk.svg"
 install -Dm644 "$src/assets/bonk.svg" "$app/usr/share/icons/hicolor/scalable/apps/$id.svg"
 install -Dm644 "$src/packaging/linux/$id.desktop" "$app/usr/share/applications/$id.desktop"
 install -Dm644 "$src/packaging/linux/$id.SpawnlistCreator.desktop" "$app/usr/share/applications/$id.SpawnlistCreator.desktop"
@@ -34,6 +38,9 @@ install -Dm644 "$src/packaging/linux/$id.mime.xml" "$app/usr/share/mime/packages
 
 export PATH="$tools:$PATH"
 export QMAKE="${QMAKE:-$(command -v qmake6 || command -v qmake)}"
+# the icons are SVG: bring Qt's SVG image and icon plugins along
+export EXTRA_QT_MODULES="${EXTRA_QT_MODULES-svg}"
+export EXTRA_QT_PLUGINS="${EXTRA_QT_PLUGINS-svg;iconengines;imageformats}"
 # Wayland sessions run Bonk through XWayland (mouselook needs cursor warping), so xcb
 # is the one that matters; the Wayland plugins come along for BONK_WAYLAND=1.
 export EXTRA_PLATFORM_PLUGINS="${EXTRA_PLATFORM_PLUGINS-libqwayland-egl.so;libqwayland-generic.so}"

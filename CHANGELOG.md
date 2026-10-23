@@ -43,6 +43,7 @@ All notable changes to Bonk! Model Prop-inator!, newest first.
 - Labels in Selection Options (Ignore Groups, Box: Inside) no longer disappear: a label too long for
   its button gets smaller, then shortened.
 - Deleting brushes could leave faint ghosts in the 2D views: every edit redraws all four now.
+- The AppImage and Flatpak had no tool panel icons: the icons (and Qt's SVG support) are packed in now.
 
 ## 1.0 Beta 4
 

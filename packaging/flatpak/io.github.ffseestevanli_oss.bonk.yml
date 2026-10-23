@@ -30,6 +30,8 @@ modules:
       # no crate dependencies: builds offline
       - QMAKE="$(command -v qmake6 || command -v qmake)" cargo build --release --offline
       - install -Dm755 target/release/bonk /app/bin/bonk
+      - install -d /app/bin/icons && install -m644 assets/tools/*.svg /app/bin/icons/  # tool panel icons, next to the program
+      - install -Dm644 assets/bonk.svg /app/bin/bonk.svg
       - install -Dm644 assets/bonk.svg /app/share/icons/hicolor/scalable/apps/io.github.ffseestevanli_oss.bonk.svg
       - install -Dm644 packaging/linux/io.github.ffseestevanli_oss.bonk.desktop /app/share/applications/io.github.ffseestevanli_oss.bonk.desktop
       - install -Dm644 packaging/linux/io.github.ffseestevanli_oss.bonk.SpawnlistCreator.desktop /app/share/applications/io.github.ffseestevanli_oss.bonk.SpawnlistCreator.desktop
