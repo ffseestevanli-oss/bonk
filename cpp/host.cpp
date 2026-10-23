@@ -1454,29 +1454,47 @@ public:
     /// Wayland, and measuring from the home point then counted the same
     /// motion again and again (brushes flying off, rotations spinning).
     struct RelMouse {
-        QPointF last;
+        QPointF last;    // the previous event's position
+        QPointF before;  // while a warp is on its way: where the cursor was
         bool valid = false, warpPending = false;
-        void start(QPointF at) { last = at; valid = true; warpPending = false; }
-        void reset() { valid = false; warpPending = false; }
+        int stale = 0;   // events since the warp that still came from before it
+        void start(QPointF at) { last = at; valid = true; warpPending = false; stale = 0; }
+        void reset() { valid = false; warpPending = false; stale = 0; }
     };
     RelMouse rel;
     /// The movement since the last event; puts the cursor back home when it
-    /// strays (where the system allows it).
+    /// strays (where the system allows it). After a warp, events can still
+    /// arrive from before it landed: each is measured from whichever point it
+    /// is nearer, the old position or home, so the warp itself is never
+    /// counted as a movement (that read as the view snapping back).
     QPointF relDelta(QPointF pos, QPoint home) {
         if (!rel.valid) {
             rel.start(pos);
             return {};
         }
-        if (rel.warpPending && QLineF(pos, QPointF(home)).length() < 1.0) {
-            rel.warpPending = false; // our own warp arriving
-            rel.last = pos;
-            return {};
+        QPointF d;
+        if (rel.warpPending) {
+            const QPointF fromOld = pos - rel.before, fromHome = pos - QPointF(home);
+            if (QLineF({}, fromOld).length() < QLineF({}, fromHome).length() && rel.stale < 8) {
+                d = fromOld; // still from before the warp
+                rel.before = pos;
+                ++rel.stale;
+                rel.last = pos;
+                return d;
+            }
+            // the warp landed (or the system ignores warps: carry on from here)
+            d = rel.stale < 8 ? fromHome : fromOld;
+            rel.warpPending = false;
+            rel.stale = 0;
+        } else {
+            d = pos - rel.last;
         }
-        const QPointF d = pos - rel.last;
         rel.last = pos;
         if (QLineF(pos, QPointF(home)).length() > 32.0) {
             QCursor::setPos(mapToGlobal(home));
             rel.warpPending = true;
+            rel.before = pos;
+            rel.stale = 0;
         }
         return d;
     }

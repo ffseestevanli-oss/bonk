@@ -36,7 +36,9 @@ All notable changes to Bonk! Model Prop-inator!, newest first.
 - **Held-key moves no longer run away:** grabbing, sizing and rotating with G / S / R (and
   mouselook) measured each mouse move from where the cursor should have been put back, which
   Wayland doesn't allow, so the same motion was counted again and again (brushes flew off,
-  rotations spun). Each move now counts from the last one.
+  rotations spun). Each move now counts from the last one. When Bonk puts the cursor back, events
+  still on their way are measured from where they came from, so the view no longer snaps back to
+  the middle (mouselook, panning and G).
 - Labels in Selection Options (Ignore Groups, Box: Inside) no longer disappear: a label too long for
   its button gets smaller, then shortened.
 - Deleting brushes could leave faint ghosts in the 2D views: every edit redraws all four now.
