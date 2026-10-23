@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Bonk! Model Prop-inator!
+GenericName=Model Editor
+Comment=Hammer-style brush modeler for Garry's Mod and Source engine props
+Exec=bonk %f
+Icon=io.github.ffseestevanli_oss.bonk
+MimeType=application/x-bonk-model;application/x-bonk-project;
+Terminal=false
+Categories=Graphics;3DGraphics;Development;
+Keywords=bonk;hammer;source;model;mdl;brush;prop;gmod;
+StartupNotify=true
+StartupWMClass=bonk

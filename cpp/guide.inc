@@ -61,6 +61,11 @@ QList<GuidePage> guidePages(bool hammer) {
                   {QStringLiteral("T"), QStringLiteral("Texture Picker: show it, bring it to the front, or hide it")},
                   {QStringLiteral("F1"), QStringLiteral("This guide, open at the page for the tool you're using")},
                   {QStringLiteral("F9"), QStringLiteral("Compile the model")},
+                  {QStringLiteral("J"), QStringLiteral("Join the selected brushes into one")},
+                  {QStringLiteral("A"), QStringLiteral("2D views: Axis Lock on / off (Advanced mode)")},
+                  {QStringLiteral("Shift+Z"), QStringLiteral("The 3D view fills the views' area; again for all four")},
+                  {QStringLiteral("F4"), QStringLiteral("The 3D view full screen, nothing else; again to come back")},
+                  {QStringLiteral("`"), QStringLiteral("Walk mode: walk the model on its collision, first person")},
                   {QStringLiteral("mouse 4 / mouse 5"), QStringLiteral("Back / forward side buttons: Selection tool / Face Select & Paint")}};
         if (hammer)
             p.keys += {{QStringLiteral("Shift+S / Shift+B / Shift+V / Shift+X"), QStringLiteral("Hammer-style: Selection / Block / Vertex / Bisect")},
@@ -68,7 +73,13 @@ QList<GuidePage> guidePages(bool hammer) {
         p.html = QStringLiteral("<p>The tool panel on the left shows every tool; right-click it to choose Icons, List or Compact list. "
                                 "%1</p>").arg(hammer ? QStringLiteral("Hammer-style keys are on (Settings → Tools &amp; keys), so Shift+S/B/V/X/A work too.")
                                                      : QStringLiteral("Settings → Tools &amp; keys can add Hammer's Shift+S / B / V / X / A as well."));
-        p.subs = {{QStringLiteral("Panels"), QStringLiteral("<p>Every panel is a dock: drag its title bar to another edge, onto another panel to make tabs, "
+        p.subs = {{QStringLiteral("Simple and Advanced"), QStringLiteral("<p>Bonk starts in <b>Simple</b> mode, which keeps the panel short: no Vertex "
+                                                                         "select, Origin tool or Axis Lock, the selection box takes what it touches, no "
+                                                                         "Prefabs or Variants, no Import VMF, and collision shows solid. "
+                                                                         "Settings → Editing → <b>Advanced mode</b> brings everything back.</p>"
+                                                                         "<p>While you edit a collision layer, Paint and Texture step aside (they don't apply "
+                                                                         "to collision); Paint switches to Select.</p>")},
+                  {QStringLiteral("Panels"), QStringLiteral("<p>Every panel is a dock: drag its title bar to another edge, onto another panel to make tabs, "
                                                             "or out to float it. Window → Reset Layout puts them back: tools on the left, Texture Picker and "
                                                             "Layers tabbed on the right, the Budget bar along the bottom.</p>")},
                   {QStringLiteral("Measurement Buddies"), QStringLiteral("<p>Two scale references in the tool panel: the <b>Mannequin</b> (32×32×72, the player) "
@@ -205,11 +216,15 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("sizing"), QStringLiteral("moving")};
     }
     {
-        GuidePage &p = page(QStringLiteral("view3d"), MK, QStringLiteral("3D view & flying"), QStringLiteral("camera fly mouselook orbit pan zoom wasd edges 2d views"));
+        GuidePage &p = page(QStringLiteral("view3d"), MK, QStringLiteral("3D view & flying"), QStringLiteral("camera fly mouselook orbit pan zoom wasd edges 2d views speed walk walk mode first person jump crouch fullscreen full screen f4 expand shift+z"));
         p.keys = {{QStringLiteral("Z"), QStringLiteral("Mouselook (flying) on / off")},
                   {QStringLiteral("W / A / S / D"), QStringLiteral("Fly, whenever the 3D view has the keys (mouselook or not)")},
                   {QStringLiteral("Q / E"), QStringLiteral("Down / up")},
-                  {QStringLiteral("Shift"), QStringLiteral("Fly faster")},
+                  {QStringLiteral("Shift"), QStringLiteral("Fly three times faster")},
+                  {QStringLiteral("Alt"), QStringLiteral("Fly at half speed")},
+                  {QStringLiteral("Shift+Z"), QStringLiteral("Expand the 3D view to the whole views' area (again: all four views)")},
+                  {QStringLiteral("F4"), QStringLiteral("3D view full screen (again: back)")},
+                  {QStringLiteral("`"), QStringLiteral("Walk mode")},
                   {QStringLiteral("right-drag"), QStringLiteral("Look around")},
                   {QStringLiteral("middle-drag"), QStringLiteral("Orbit around what's in the center of the view")},
                   {QStringLiteral("Shift+middle-drag"), QStringLiteral("Pan")},
@@ -220,6 +235,12 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "<p>Out of mouselook, WASD / QE still fly, and the 3D view takes the editing keys too: H, G (slides along the "
                                 "floor), R (turns about the vertical), the mirror keys, and the arrows nudge. S sizing and Shift copying stay in the 2D views, "
                                 "where there's a clear edge to grab.</p>"
+                                "<p>Flying starts at a minimum speed and eases up to a maximum while you keep moving: Settings → Tools &amp; Keys → "
+                                "<b>Flying</b> sets both and how quickly it speeds up.</p>"
+                                "<p><b>Walk mode</b> (the <b>`</b> key) puts you in the model as the player: 72 units tall with eyes at 64, "
+                                "WASD walks (Shift runs), Space jumps, Ctrl crouches, the mouse aims, and steps up to 18 units are "
+                                "climbed. You walk on the collision model, so it's a quick test of what players will bump into. ` or "
+                                "Esc ends it and puts the camera back. A model without collision has nothing to walk on, so ` does nothing.</p>"
                                 "<p>View → 3D field of view sets how wide it sees (75° by default, up to 120°; View → Unlock goes further).</p>"
                                 "<p>View → Show Edges in 3D turns the black brush outlines off for a cleaner look; selected brushes keep "
                                 "their red borders.</p>");
@@ -299,7 +320,7 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("projects"), QStringLiteral("material"), QStringLiteral("collision")};
     }
     {
-        GuidePage &p = page(QStringLiteral("textures"), GD, QStringLiteral("Textures & the Picker"), QStringLiteral("texture picker swatch import folder color resize zoom convert vtf drop dolphin"));
+        GuidePage &p = page(QStringLiteral("textures"), GD, QStringLiteral("Textures & the Picker"), QStringLiteral("texture picker swatch import folder color resize zoom convert vtf drop dolphin hide other models filter"));
         p.keys = {{QStringLiteral("T"), QStringLiteral("Show / hide the Texture Picker")},
                   {QStringLiteral("click"), QStringLiteral("Make a swatch the current texture")},
                   {QStringLiteral("double-click"), QStringLiteral("Texture: Material Properties. Folder: open it")},
@@ -311,14 +332,18 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "Clicking a swatch also switches to Face Select &amp; Paint (Settings can turn that off).</p>");
         p.subs = {{QStringLiteral("Folders"), QStringLiteral("<p>The picker works like a file manager: double-click a folder to open it, use the "
                                                              "breadcrumb to go back, drag swatches onto folders to move them. Moving or renaming a texture "
-                                                             "updates every model in the project that uses it.</p>")},
+                                                             "updates every model in the project that uses it.</p>"
+                                                             "<p><b>Hide other models' textures</b> leaves out textures only the project's other models "
+                                                             "use (this model's own stay), and the models/ folder (other models' skins).</p>")},
                   {QStringLiteral("Animated textures"), QStringLiteral("<p><b>Import Animation…</b> makes a texture that plays frames: pick several "
                                                                        "images (they're used in name order, frame2 before frame10), one sprite sheet (you say how "
                                                                        "many columns and rows), or a GIF (its speed comes along). The frames are kept as one tall "
                                                                        "image with a ▶ badge, play in the 3D view, and compile to a multi-frame VTF with an "
                                                                        "AnimatedTexture proxy. Material Properties → Animation sets the frame rate.</p>")},
                   {QStringLiteral("Color textures"), QStringLiteral("<p>The Color tile makes a solid color as a texture (a tiny 16×16 PNG in "
-                                                                    "colors/, named by its hex code; rename it if you like).</p>")},
+                                                                    "colors/, named by its hex code; rename it if you like). Compiled, its material is "
+                                                                    "named after the model, <tt>house_colors_ffffff</tt>, so two models' colors "
+                                                                    "never share a file.</p>")},
                   {QStringLiteral("Resize offer"), QStringLiteral("<p>Source needs power-of-two sizes (64, 128 … 2048, 4096; width and height can differ). "
                                                                   "Images that aren't are offered a resize to the nearest one; the originals go to "
                                                                   "assets/Original Textures. Power-of-two images are never touched, whatever their size.</p>")},
@@ -439,14 +464,16 @@ QList<GuidePage> guidePages(bool hammer) {
     {
         GuidePage &p = page(QStringLiteral("collision"), GD, QStringLiteral("Collision models"), QStringLiteral("collision physics phy convex pieces ghost layer"));
         p.html = QStringLiteral("<p>The collision model is what Garry's Mod uses for physics: picking the prop up, bullets, things landing on it. "
-                                "<b>+ Collision</b> in the Layers pane (or Tools → New Collision Layer) asks how to start it: <b>Complex</b>, "
-                                "a copy of every visual brush, or <b>Simplified</b>: walls, floors, roofs and stairs stay (stairs become "
+                                "<b>+ Collision</b> in the Layers pane (or Tools → New Collision Layer) starts one as <b>Complex</b>, "
+                                "a copy of every visual brush. In Advanced mode it asks first, and offers <b>Simplified</b>: walls, floors, roofs and stairs stay (stairs become "
                                 "ramps), windows with a pane or frame are filled in solid, open doorways stay open, loose little details go, "
-                                "and pieces that line up are merged. The Detail size (Grid 8 by default) sets what counts as little; the "
+                                "and pieces that line up are merged; corners stay square. The Detail size (Grid 8 by default) sets what counts as little; the "
                                 "dialog shows how many pieces each way gives. While a collision layer is active, the visual model "
                                 "is a see-through ghost (the slider sets how visible) and the 3D view tells you you're editing collision.</p>"
                                 "<p>Each collision brush is one convex piece. Keep them few and simple: studiomdl allows 20 by default "
-                                "(Bonk raises the limit when it needs to).</p>"
+                                "(Bonk raises the limit when it needs to). Compiling notes anything over 128 pieces; under 500 that has "
+                                "worked fine in testing, from 500 up it warns that studiomdl may refuse.</p>"
+                                "<p>Try it out with walk mode (the <b>`</b> key): you walk on the collision model.</p>"
                                 "<p><b>Collision look</b> (View menu, or the button under the layers): <i>Ghosted</i> draws collision as orange "
                                 "glass; <i>Solid</i> draws each piece opaque in its own color, so you can see where one ends and the next "
                                 "begins. It only changes the look.</p>"
@@ -535,7 +562,7 @@ QList<GuidePage> guidePages(bool hammer) {
     }
     {
         GuidePage &p = page(QStringLiteral("spawnlist"), GD, QStringLiteral("Spawnlists & spawn icons"),
-                            QStringLiteral("spawnlist spawn menu spawnicon icon thumbnail category header silk icon16 lua props"));
+                            QStringLiteral("spawnlist spawn menu spawnicon icon thumbnail category header silk icon16 lua props badge addons creator standalone"));
         p.html = QStringLiteral("<p><b>Tools → Spawnlist Editor…</b> builds the project's spawn menu entry: categories (with their own "
                                 "icons), headers, and your models with spawn icons you frame yourself. It goes into the addon as a small Lua "
                                 "file, so it works from the Workshop too: players find your props under Spawnlists, like any pack.</p>"
@@ -543,7 +570,8 @@ QList<GuidePage> guidePages(bool hammer) {
                                 "category; <b>+ Spawnlist</b> adds another top-level list, if you want more than one. Drag categories to "
                                 "reorder or nest them; double-click to rename.</p>"
                                 "<p>The middle pane is the category's page, laid out as in game. <b>Add Models…</b> picks from the project's "
-                                "models, <b>Add Header</b> adds a line like \"Beds - Full\". Drag tiles and headers to rearrange them, or "
+                                "models (in Advanced mode its <b>From Addons</b> tab adds compiled models from any addon folder you choose, "
+                                "with spawn icons drawn from the models and their textures), <b>Add Header</b> adds a line like \"Beds - Full\". Drag tiles and headers to rearrange them, or "
                                 "drop them on a category on the left to move them there (hold Ctrl to copy). ◀ ▶ (or Ctrl+←/→) "
                                 "move the selection too; Delete removes it.</p>");
         p.subs = {{QStringLiteral("Spawn icons"), QStringLiteral("<p>Click a model to frame its icon: drag to turn it, right-drag (or Shift+drag) to "
@@ -554,6 +582,15 @@ QList<GuidePage> guidePages(bool hammer) {
                                                                  "usual, 128 or 256 suits big models, and a wide tile (256 × 128) suits a long house. "
                                                                  "Pick a preset or type any size; a new shape frames the model again. Icons are drawn from the saved models, so Bonk saves "
                                                                  "your model before opening the editor.</p>")},
+                  {QStringLiteral("Badges"), QStringLiteral("<p>A model's icon can carry a <b>badge</b>: a built-in shape, a Silk icon or an "
+                                                            "image, up to 32 × 32 on a 64 × 64 icon (bigger tiles scale it), in the corner you "
+                                                            "pick. A star for what's new, a lock for what's done.</p>")},
+                  {QStringLiteral("Spawnlist Creator"), QStringLiteral("<p><b>Bonk! Spawnlist Creator</b> (its own launcher, or <tt>bonk --spawnlist</tt>) "
+                                                                       "is this editor on its own, for any addon folder with models/ and materials/ "
+                                                                       "in it: categories, headers, tile sizes, icons and badges for its compiled "
+                                                                       "models. <b>Write Spawnlist</b> puts the Lua, category icons and spawn icons "
+                                                                       "into that addon folder; the Creator's own notes stay in "
+                                                                       "~/.local/share/bonk/spawnlist-creator.</p>")},
                   {QStringLiteral("Category icons"), QStringLiteral("<p>Pick a base: a built-in shape, a Silk icon or an image file; tint it; and add "
                                                                     "a sub-icon in a corner (a star on the house, say). The preview shows it at the "
                                                                     "game's 16 × 16 pixels. A plain Silk icon is GMod's own; anything else is written "
@@ -575,12 +612,19 @@ QList<GuidePage> guidePages(bool hammer) {
     }
     {
         GuidePage &p = page(QStringLiteral("settings"), GD, QStringLiteral("Settings"),
-                            QStringLiteral("settings preferences interface size compact low resolution pixel font bonk pixel nodraw stripe rainbow background colors hammer keys tabs"));
+                            QStringLiteral("settings preferences interface size compact low resolution pixel font bonk pixel nodraw stripe rainbow background colors hammer keys tabs simple advanced mode fly speed lerp"));
         p.keys = {{QStringLiteral("Ctrl+Shift+,"), QStringLiteral("Configure Bonk!")}};
         p.html = QStringLiteral("<p>Settings come in tabs: <b>Editing</b>, <b>Tools & Keys</b>, <b>Appearance</b>, <b>Garry's Mod</b> and "
                                 "<b>Advanced</b> (the budget limits). It opens on the tab you used last. Changes preview live; Cancel puts "
                                 "everything back.</p>");
-        p.subs = {{QStringLiteral("Interface size"), QStringLiteral("<p>Appearance → Interface size. Auto makes the interface compact on screens under "
+        p.subs = {{QStringLiteral("Advanced mode"), QStringLiteral("<p>Editing → <b>Advanced mode</b>: off (Simple, the default) hides Vertex select, the "
+                                                                   "Origin tool, Axis Lock, the selection box options, Prefabs and Variants, Import VMF, the "
+                                                                   "Visual ghost and Collision look, Simplified collision and addon models in the Spawnlist "
+                                                                   "Editor. On shows all of it.</p>")},
+                  {QStringLiteral("Flying"), QStringLiteral("<p>Tools &amp; Keys → Flying: the speed a move starts at, the speed it eases up to, and how "
+                                                            "quickly (the lerp: 0 stays at the minimum, about 3 takes a second, 20 and up is almost "
+                                                            "instant). Alt halves it while held, Shift triples it.</p>")},
+                  {QStringLiteral("Interface size"), QStringLiteral("<p>Appearance → Interface size. Auto makes the interface compact on screens under "
                                                                     "1440p and regular above. <b>Compact (Low Resolution)</b> goes further for small "
                                                                     "screens: tighter panels and <b>Bonk Pixel</b>, Bonk's own pixel font, so every letter "
                                                                     "lands on whole pixels. Pick its size: 6, 12 or 18 px. The preview shows it at "

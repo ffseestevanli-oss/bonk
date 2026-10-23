@@ -2,6 +2,45 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 1.0 Beta 5
+
+### New
+- **Walk mode:** press **`** to walk around the model on its collision, first person: GMod's player
+  size (72 tall, eyes at 64), WASD (Shift runs), Space jumps, Ctrl crouches, steps up to 18 climbed.
+  ` or Esc ends it. Without a collision model nothing happens.
+- **Bonk! Spawnlist Creator:** the Spawnlist Editor on its own (its own launcher, or
+  `bonk --spawnlist`) for any addon folder with models/ and materials/: categories, headers, tile
+  sizes, category icons, and spawn icons drawn from the compiled models. **Write Spawnlist** puts it
+  into the addon.
+- **Badges on spawn icons:** a shape, Silk icon or image, up to 32 × 32, in any corner.
+- **From Addons** (Spawnlist Editor → Add Models, Advanced): compiled models from an addon folder
+  you pick, drawn with their own textures.
+- **Simple / Advanced mode** (Settings → Editing; Simple by default): Simple hides Vertex select, the
+  Origin tool, Axis Lock, the selection box options, Prefabs and Variants, Import VMF, the Visual
+  ghost and Collision look (collision shows solid), Simplified collision and From Addons.
+- **F4:** the 3D view full screen. **Shift+Z:** the 3D view fills the views' area. Again to go back.
+- **Flying speed** (Settings → Tools & Keys): a minimum and maximum speed and how quickly it eases
+  up; **Alt** flies at half speed.
+- **Texture Picker → Hide other models' textures**, and the models/ folder with them.
+- **AppImage and Flatpak** builds from GitHub Actions on every release tag.
+
+### Changed
+- **J** joins brushes (was Ctrl+J). **A** turns Axis Lock on and off in the 2D views.
+- Color materials are named after the model: `house_colors_ffffff.vmt`.
+- Collision under 500 pieces gets a gentler note when compiling; 500 and up, the full warning.
+- Editing collision hides Paint and Texture (Paint switches to Select).
+- **Simplified collision keeps inside corners square:** trim around a corner or a counter along two
+  walls isn't wrapped in one piece across the corner any more.
+
+### Fixed
+- **Held-key moves no longer run away:** grabbing, sizing and rotating with G / S / R (and
+  mouselook) measured each mouse move from where the cursor should have been put back, which
+  Wayland doesn't allow, so the same motion was counted again and again (brushes flew off,
+  rotations spun). Each move now counts from the last one.
+- Labels in Selection Options (Ignore Groups, Box: Inside) no longer disappear: a label too long for
+  its button gets smaller, then shortened.
+- Deleting brushes could leave faint ghosts in the 2D views: every edit redraws all four now.
+
 ## 1.0 Beta 4
 
 - **Publishing opens the addon's Workshop page** when it's done, in Steam (or your browser if Steam

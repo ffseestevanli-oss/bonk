@@ -10,7 +10,7 @@
   Garry's Mod's own studiomdl through Proton.
 </p>
 
-<p align="center"><b>Beta:</b> 1.0 Beta 1. Everything planned for 1.0 is in; tell us what breaks.</p>
+<p align="center"><b>Beta:</b> 1.0 Beta 5. Everything planned for 1.0 is in; tell us what breaks.</p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue"></a>
@@ -50,6 +50,11 @@ or Propper.
   bring its materials along from a `materials` folder or a Workshop `.gma`.
 - **Projects:** one folder per addon, shared textures, and a start screen with recent projects
   and models.
+- **Walk it:** press <kbd>`</kbd> to walk around your model on its collision, as the player would
+  (jump, crouch, climb steps).
+- **Spawnlists:** spawn menu categories, framed spawn icons with badges, written into the addon;
+  and the standalone **Bonk! Spawnlist Creator** for any addon folder.
+- **Simple or Advanced:** Bonk starts simple; Settings → Advanced mode shows every expert tool.
 - **Help built in:** Help → Bonk! Guide (F1) has every key and tool, a search box and a cheat
   sheet.
 
@@ -67,6 +72,12 @@ Bonk only touches the Garry's Mod folder for three things: running its `studiomd
 by gmpublish, to list and upload your Workshop addons; Bonk asks before using it, and fetches your
 addons' thumbnails and dates from Steam's public Workshop lookup.
 
+## Downloads
+
+Each release on the [Releases page](../../releases) has an **AppImage** (make it executable and
+run it) and a **Flatpak** bundle (`flatpak install --user Bonk.flatpak`), built by GitHub Actions
+from the tagged source. Or build it yourself:
+
 ## Building
 
 ### The easy way
@@ -80,7 +91,7 @@ On immutable systems (Bazzite, SteamOS, Silverblue/Kinoite, Bluefin, Aurora, ope
 nothing is installed on the base system: the build runs inside a distrobox or toolbox container.
 
 ```sh
-git clone https://github.com/steventechno/bonk.git
+git clone https://github.com/ffseestevanli-oss/bonk.git
 cd bonk
 ./"Build Bonk.sh"
 ```
@@ -149,6 +160,10 @@ src/export.rs     SMD export for studiomdl
 src/vmf.rs        KeyValues, VMF import, VMT parsing
 src/vtf.rs        VTF 7.2 writer with DXT1 / DXT5 compression
 src/vtfread.rs    VTF 7.0–7.5 reader
+src/mdl.rs        compiled model (.mdl / .vvd / .vtx) reader, for spawn icons of addon models
+src/walk.rs       walk mode: the player against the collision model
+src/collision.rs  simplified collision, joining brushes
+packaging/        AppImage script, Flatpak test manifest, desktop files and AppStream metadata
 src/gl.rs         tiny GL function loader
 src/math.rs       vectors and matrices
 ```
@@ -171,6 +186,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the pieces fit together and how t
 - [x] Shader work: shader picker (incl. MonitorScreen), more texture slots, live VMT editing
 - [x] Animated, scrolling and pulsing materials; texture find / replace; paint by dragging
 - [x] Skins (material swaps, hidden brushes), bodygroups, LODs and a model preview
+- [x] Simple / Advanced modes, walk mode, the Spawnlist Creator, AppImage and Flatpak builds
 - [ ] Flathub release
 
 Every release is listed in [CHANGELOG.md](CHANGELOG.md).

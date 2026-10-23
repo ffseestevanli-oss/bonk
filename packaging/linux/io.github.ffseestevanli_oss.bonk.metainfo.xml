@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ffseestevanli_oss.bonk</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Bonk! Model Prop-inator!</name>
+  <summary>Build Garry's Mod props from brushes, Hammer style</summary>
+  <developer id="io.github.ffseestevanli_oss">
+    <name>Steventechno</name>
+  </developer>
+  <description>
+    <p>
+      Bonk! is a brush modeler for Source engine props: draw blocks, cylinders, wedges and arches
+      in four Hammer-style views, texture them, and compile them into a model for Garry's Mod with
+      the game's own studiomdl (run through Proton).
+    </p>
+    <ul>
+      <li>Hammer-style editing: blocks, primitives, vertex editing, clipping, grouping and layers</li>
+      <li>Textures from images, with Source material properties, animation and live VMTs</li>
+      <li>Collision models: complex, or simplified automatically, and a walk mode to try them</li>
+      <li>Skins, bodygroups and levels of detail, with a model preview</li>
+      <li>Prefabs, spawnlists with spawn icons, and the standalone Spawnlist Creator</li>
+      <li>Export to the Garry's Mod addons folder and publish to the Steam Workshop</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.ffseestevanli_oss.bonk.desktop</launchable>
+  <url type="homepage">https://github.com/ffseestevanli-oss/bonk</url>
+  <url type="bugtracker">https://github.com/ffseestevanli-oss/bonk/issues</url>
+  <url type="vcs-browser">https://github.com/ffseestevanli-oss/bonk</url>
+  <provides>
+    <binary>bonk</binary>
+    <mediatype>application/x-bonk-model</mediatype>
+    <mediatype>application/x-bonk-project</mediatype>
+  </provides>
+  <categories>
+    <category>Graphics</category>
+    <category>3DGraphics</category>
+  </categories>
+  <keywords>
+    <keyword>Garry's Mod</keyword>
+    <keyword>Source engine</keyword>
+    <keyword>Hammer</keyword>
+    <keyword>model</keyword>
+    <keyword>prop</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#f07ab4</color>
+    <color type="primary" scheme_preference="dark">#7a0f3f</color>
+  </branding>
+  <requires>
+    <display_length compare="ge">1024</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0-beta.5" date="2026-10-23" type="development">
+      <description>
+        <p>Simple and Advanced modes, walk mode, the Spawnlist Creator, models from other addons in
+        spawnlists, sharper simplified collision, fly speed settings and many fixes.</p>
+      </description>
+    </release>
+    <release version="1.0.0-beta.4" date="2026-10-18" type="development">
+      <description>
+        <p>Publishing opens the addon's Workshop page when it's done.</p>
+      </description>
+    </release>
+    <release version="1.0.0-beta.3" date="2026-10-18" type="development">
+      <description>
+        <p>Workshop publishing works through Proton.</p>
+      </description>
+    </release>
+  </releases>
+</component>

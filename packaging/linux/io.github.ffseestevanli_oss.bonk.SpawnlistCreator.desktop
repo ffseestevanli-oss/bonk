@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Bonk! Spawnlist Creator
+GenericName=Spawnlist Creator
+Comment=Garry's Mod spawnlists and spawn icons for any addon folder
+Exec=bonk --spawnlist %f
+Icon=io.github.ffseestevanli_oss.bonk
+Terminal=false
+Categories=Graphics;Development;
+Keywords=bonk;spawnlist;spawnmenu;spawn icon;gmod;addon;
+StartupNotify=true
+StartupWMClass=bonk

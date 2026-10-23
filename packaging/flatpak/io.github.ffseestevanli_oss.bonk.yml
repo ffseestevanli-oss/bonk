@@ -1,0 +1,44 @@
+# Flatpak TEST builds of Bonk (GitHub Actions makes a .flatpak bundle from it).
+# Written with AI help: Flathub's rules don't allow an AI-written or AI-assisted
+# manifest in a Flathub submission, so don't submit this one; write that by hand.
+#
+# Local build:  flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.ffseestevanli_oss.bonk.yml
+app-id: io.github.ffseestevanli_oss.bonk
+runtime: org.kde.Platform
+runtime-version: '6.8'
+sdk: org.kde.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: bonk
+finish-args:
+  - --share=ipc
+  - --share=network        # Steam's public Workshop lookups (thumbnails, dates)
+  - --socket=x11           # Bonk runs through XWayland on Wayland: mouselook warps the cursor
+  - --socket=wayland
+  - --device=dri
+  - --filesystem=home      # projects, and Steam's / Garry's Mod's folders
+  - --talk-name=org.freedesktop.Flatpak  # flatpak-spawn --host: Proton runs studiomdl, gmad and gmpublish
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+modules:
+  - name: bonk
+    buildsystem: simple
+    build-options:
+      env:
+        CARGO_HOME: /run/build/bonk/cargo
+    build-commands:
+      # no crate dependencies: builds offline
+      - QMAKE="$(command -v qmake6 || command -v qmake)" cargo build --release --offline
+      - install -Dm755 target/release/bonk /app/bin/bonk
+      - install -Dm644 assets/bonk.svg /app/share/icons/hicolor/scalable/apps/io.github.ffseestevanli_oss.bonk.svg
+      - install -Dm644 packaging/linux/io.github.ffseestevanli_oss.bonk.desktop /app/share/applications/io.github.ffseestevanli_oss.bonk.desktop
+      - install -Dm644 packaging/linux/io.github.ffseestevanli_oss.bonk.SpawnlistCreator.desktop /app/share/applications/io.github.ffseestevanli_oss.bonk.SpawnlistCreator.desktop
+      - install -Dm644 packaging/linux/io.github.ffseestevanli_oss.bonk.metainfo.xml /app/share/metainfo/io.github.ffseestevanli_oss.bonk.metainfo.xml
+      - install -Dm644 packaging/linux/io.github.ffseestevanli_oss.bonk.mime.xml /app/share/mime/packages/io.github.ffseestevanli_oss.bonk.xml
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - .flatpak-builder
+          - build-dir

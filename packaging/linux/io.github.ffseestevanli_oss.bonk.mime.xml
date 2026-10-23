@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-bonk-model">
+    <comment>Bonk! model</comment>
+    <glob pattern="*.bpmdl"/>
+  </mime-type>
+  <mime-type type="application/x-bonk-project">
+    <comment>Bonk! project</comment>
+    <glob pattern="*.bonkpj"/>
+  </mime-type>
+</mime-info>

@@ -3,6 +3,7 @@ name: Build and test
 on:
   push:
   pull_request:
+  workflow_dispatch: # "Run workflow" on the Actions tab: builds the AppImage and Flatpak too
 
 jobs:
   linux:
@@ -22,3 +23,61 @@ jobs:
         with:
           name: bonk-linux-x86_64
           path: target/release/bonk
+
+  # Packages: on version tags (v1.0.0-beta.5…) and when run by hand.
+  appimage:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt 6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev qt6-base-dev-tools qt6-wayland libgl-dev pkg-config file
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release
+      - name: AppImage
+        run: packaging/appimage/build-appimage.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bonk-appimage
+          path: target/appimage/*.AppImage
+
+  flatpak:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.8
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        with:
+          bundle: Bonk.flatpak
+          manifest-path: packaging/flatpak/io.github.ffseestevanli_oss.bonk.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+
+  # A version tag gets a GitHub release with the packages attached (a pre-release
+  # for betas). Release notes: edit them on the release page afterwards.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, appimage, flatpak]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Gather
+        run: |
+          mkdir -p upload
+          find dist -name '*.AppImage' -exec cp {} upload/ \;
+          find dist -name '*.flatpak' -exec cp {} upload/ \;
+          ls -la upload
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: upload/*
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          fail_on_unmatched_files: true

@@ -8465,13 +8465,21 @@ void onFatalSignal(int sig) {
 
 // ------------------------------------------------------------------ Spawnlist Creator
 
+/// The app id when running as a Flatpak or an AppImage (their desktop files
+/// and icon carry it), "" for a build from source.
+QString packagedId() {
+    if (!qEnvironmentVariableIsEmpty("FLATPAK_ID")) return qEnvironmentVariable("FLATPAK_ID");
+    if (!qEnvironmentVariableIsEmpty("APPIMAGE")) return QStringLiteral("io.github.ffseestevanli_oss.bonk");
+    return QString();
+}
+
 /// The standalone Spawnlist Creator: Bonk's Spawnlist Editor on any addon
 /// folder (one with models/ and materials/), spawn icons drawn off screen.
 /// Its own settings for each addon are kept in ~/.local/share/bonk/spawnlist-creator,
 /// so nothing but the finished spawnlist is written into the addon.
 int runSpawnlistCreator(QString addon) {
     QApplication::setApplicationDisplayName(QStringLiteral("Bonk! Spawnlist Creator"));
-    QApplication::setDesktopFileName(QStringLiteral("bonk-spawnlist"));
+    QApplication::setDesktopFileName(packagedId().isEmpty() ? QStringLiteral("bonk-spawnlist") : packagedId() + QStringLiteral(".SpawnlistCreator"));
     QSettings st;
     auto hasModels = [](const QString &d) {
         for (const QString &e : QDir(d).entryList(QDir::Dirs | QDir::NoDotAndDotDot))
@@ -8643,6 +8651,7 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
         if (creator) return runSpawnlistCreator(addon);
     }
 
+    if (!packagedId().isEmpty()) QApplication::setDesktopFileName(packagedId());
     MainWindow w;
     w.show();
 
