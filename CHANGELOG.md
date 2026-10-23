@@ -2,6 +2,15 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 1.0 Beta 7
+
+- **Missing textures are found again:** a model moved to another project (or out of its own) kept
+  only its textures' names, so it opened bare and re-importing didn't help (the images had to land
+  under exactly the same name). Opening it now looks for them in your other projects and offers to
+  **copy them in** under those names, material settings included; or **Find in a Folder…** matches
+  images by name in any folder. **Tools → Find Missing Textures…** runs it any time. With no project
+  open, Bonk offers to open the one that has them.
+
 ## 1.0 Beta 6
 
 - **The Spawnlist Creator saves and opens files:** **Save** (Ctrl+S), **Save As…** and **Open…**

@@ -6056,6 +6056,9 @@ public:
         QString pj = findProjectFor(filePath);
         if (!pj.isEmpty() && QFileInfo(pj).absoluteFilePath() != project.file) setProject(pj, false);
         handle(F_R3D | F_R2D | F_TOOL);
+        // textures it uses that the project doesn't have (it moved): offer to find them
+        if (qEnvironmentVariableIsSet("BONK_SCREENSHOT")) findMissingTextures(false);
+        else QTimer::singleShot(0, this, [this] { findMissingTextures(false); });
         return true;
     }
 
@@ -6282,6 +6285,167 @@ public:
         if (box.clickedButton() == nb) newProject();
         else if (box.clickedButton() == ob) openProject();
         return project.isOpen();
+    }
+
+    // ---- missing textures: a model moved out of its project, or into another one
+
+    /// Textures the open model uses that the project doesn't have.
+    QStringList missingTextures() const {
+        QStringList out;
+        for (const QString &m : QString::fromUtf8(bonk_used_materials()).split(QLatin1Char('\n'), Qt::SkipEmptyParts))
+            if (!m.startsWith(QStringLiteral("tools/")) && !library.find(m) && !out.contains(m)) out << m;
+        return out;
+    }
+
+    /// The images under a textures folder, by material name (how Bonk names them).
+    static QHash<QString, QString> texturesByKey(const QString &root) {
+        QHash<QString, QString> map;
+        QDirIterator it(root, {QStringLiteral("*.png"), QStringLiteral("*.jpg"), QStringLiteral("*.jpeg"), QStringLiteral("*.PNG"),
+                               QStringLiteral("*.JPG"), QStringLiteral("*.JPEG")}, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString f = it.next();
+            const QString rel = QDir(root).relativeFilePath(f);
+            const QString key = cleanGamePath(rel.left(rel.size() - QFileInfo(f).suffix().size() - 1));
+            if (!map.contains(key)) map.insert(key, f);
+        }
+        return map;
+    }
+
+    /// Other projects' textures folders: recent projects and those in Bonk Projects.
+    QStringList otherTextureRoots() const {
+        QStringList pjs = recentProjects();
+        QDirIterator it(defaultProjectsDir(), {QStringLiteral("*.bonkpj")}, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString f = it.next();
+            if (QDir(defaultProjectsDir()).relativeFilePath(f).count(QLatin1Char('/')) <= 3) pjs << f;
+        }
+        QStringList roots;
+        for (const QString &pj : pjs) {
+            const QString root = QFileInfo(pj).absolutePath() + QStringLiteral("/assets/Textures");
+            if (project.isOpen() && QFileInfo(root) == QFileInfo(project.texturesDir())) continue;
+            if (QFileInfo(root).isDir() && !roots.contains(root)) roots << root;
+        }
+        return roots;
+    }
+
+    /// Copy an image (and its material settings) into the project as `key`.
+    bool copyTextureIn(const QString &src, const QString &key) {
+        const QString dest = project.texturesDir() + QLatin1Char('/') + key + QLatin1Char('.') + QFileInfo(src).suffix().toLower();
+        QDir().mkpath(QFileInfo(dest).absolutePath());
+        if (QFileInfo::exists(dest)) return true;
+        if (!QFile::copy(src, dest)) return false;
+        const QString side = MatProps::sidecarFor(src);
+        if (QFileInfo::exists(side)) QFile::copy(side, MatProps::sidecarFor(dest));
+        return true;
+    }
+
+    /// After opening a model (or from Tools): its textures that aren't in the
+    /// project are looked for in the other projects, then in a folder you pick,
+    /// and copied in under the names the model uses.
+    void findMissingTextures(bool fromMenu) {
+        const bool dev = qEnvironmentVariableIsSet("BONK_SCREENSHOT");
+        QStringList missing = missingTextures();
+        if (missing.isEmpty()) {
+            if (fromMenu) statusBar()->showMessage(QStringLiteral("Every texture this model uses is in the project. Bonk!"), 4000);
+            return;
+        }
+        // where they are: the first other project that has each one
+        QHash<QString, QString> found;   // key → image
+        QStringList where;               // projects they came from
+        for (const QString &root : otherTextureRoots()) {
+            const QHash<QString, QString> map = texturesByKey(root);
+            bool used = false;
+            for (const QString &k : missing)
+                if (!found.contains(k) && map.contains(k)) {
+                    found.insert(k, map.value(k));
+                    used = true;
+                }
+            if (used) where << QFileInfo(root).dir().absolutePath().section(QLatin1Char('/'), -2, -2);
+            if (found.size() == missing.size()) break;
+        }
+        if (!project.isOpen()) {
+            if (dev) return;
+            // no project: open the one that has them, or make / open one
+            QString pjFile;
+            for (const QString &f : found) {
+                pjFile = findProjectFor(f);
+                if (!pjFile.isEmpty()) break;
+            }
+            QMessageBox box(QMessageBox::Question, QStringLiteral("Textures not found"),
+                            QStringLiteral("This model uses %1 texture%2, and no project is open to find them in.")
+                                .arg(missing.size()).arg(missing.size() == 1 ? QString() : QStringLiteral("s")),
+                            QMessageBox::Cancel, this);
+            QPushButton *openIt = pjFile.isEmpty() ? nullptr
+                                  : box.addButton(QStringLiteral("Open %1").arg(QFileInfo(pjFile).completeBaseName()), QMessageBox::AcceptRole);
+            QPushButton *other = box.addButton(QStringLiteral("Choose a Project…"), QMessageBox::AcceptRole);
+            box.exec();
+            if (openIt && box.clickedButton() == openIt) setProject(pjFile, false);
+            else if (box.clickedButton() == other && ensureProject()) findMissingTextures(fromMenu);
+            return;
+        }
+        const QString list = [&] {
+            QStringList l;
+            for (int i = 0; i < missing.size() && i < 8; ++i) l << missing[i];
+            return l.join(QStringLiteral(", ")) + (missing.size() > 8 ? QStringLiteral("…") : QString());
+        }();
+        QMessageBox box(QMessageBox::Question, QStringLiteral("Textures not in this project"),
+                        QStringLiteral("<b>This model uses %1 texture%2 that %3 doesn't have.</b>")
+                            .arg(missing.size()).arg(missing.size() == 1 ? QString() : QStringLiteral("s"), project.name.toHtmlEscaped()),
+                        QMessageBox::NoButton, this);
+        QString info = list.toHtmlEscaped() + QStringLiteral("<br><br>");
+        if (!found.isEmpty())
+            info += QStringLiteral("Found %1 of them in %2. Copy them in? They keep their names, so the model finds them.")
+                        .arg(found.size()).arg(where.join(QStringLiteral(", ")).toHtmlEscaped());
+        else
+            info += QStringLiteral("They aren't in your other projects. Point Bonk at a folder with the images (an old project's "
+                                   "assets/Textures, or any folder): they're matched by name and copied in under the names the model uses.");
+        box.setInformativeText(info);
+        QPushButton *copyBtn = found.isEmpty() ? nullptr : box.addButton(QStringLiteral("Copy Them In"), QMessageBox::AcceptRole);
+        QPushButton *folderBtn = box.addButton(QStringLiteral("Find in a Folder…"), QMessageBox::ActionRole);
+        box.addButton(QStringLiteral("Not Now"), QMessageBox::RejectRole);
+        if (copyBtn) box.setDefaultButton(copyBtn);
+        QAbstractButton *clicked = nullptr;
+        QString folder;
+        if (dev) { // developer aid: copy what was found, or search BONK_MISSING_FOLDER
+            folder = qEnvironmentVariable("BONK_MISSING_FOLDER");
+            clicked = copyBtn && folder.isEmpty() ? static_cast<QAbstractButton *>(copyBtn) : static_cast<QAbstractButton *>(folderBtn);
+        } else {
+            box.exec();
+            clicked = box.clickedButton();
+        }
+        if (clicked == folderBtn) {
+            if (folder.isEmpty())
+                folder = QFileDialog::getExistingDirectory(this, QStringLiteral("Folder with the missing textures"),
+                                                           QSettings().value("files/importDir", QDir::homePath()).toString());
+            if (folder.isEmpty()) return;
+            found.clear();
+            const QHash<QString, QString> map = texturesByKey(folder);
+            QHash<QString, QStringList> byName; // file name → images, for folders laid out differently
+            for (auto it = map.begin(); it != map.end(); ++it) byName[it.key().section(QLatin1Char('/'), -1)] << it.value();
+            for (const QString &k : missing) {
+                if (map.contains(k)) found.insert(k, map.value(k));
+                else if (byName.value(k.section(QLatin1Char('/'), -1)).size() == 1) found.insert(k, byName.value(k.section(QLatin1Char('/'), -1)).first());
+            }
+        } else if (clicked != copyBtn || !copyBtn) {
+            return;
+        }
+        int n = 0;
+        QStringList failed;
+        library.pauseScans(true);
+        for (auto it = found.begin(); it != found.end(); ++it) {
+            if (copyTextureIn(it.value(), it.key())) ++n;
+            else failed << it.key();
+        }
+        library.pauseScans(false);
+        library.scan();
+        const QStringList still = missingTextures();
+        if (dev) fprintf(stderr, "missing-textures copied %d, still missing %lld\n", n, (long long)still.size());
+        handle(F_R3D | F_R2D);
+        QString msg = QStringLiteral("Copied %1 texture%2 into %3.").arg(n).arg(n == 1 ? QString() : QStringLiteral("s"), project.name);
+        if (!still.isEmpty()) msg += QStringLiteral(" %1 still missing: %2").arg(still.size()).arg(still.join(QStringLiteral(", ")));
+        if (!failed.isEmpty()) msg += QStringLiteral(" Couldn't copy: %1").arg(failed.join(QStringLiteral(", ")));
+        if (dev || still.isEmpty()) statusBar()->showMessage(msg, 8000);
+        else QMessageBox::information(this, QStringLiteral("Textures"), msg + QStringLiteral("<br><br>Tools → Find Missing Textures… tries again."));
     }
 
     /// Import button: pick images, then copy them in.
@@ -8386,6 +8550,7 @@ MainWindow::MainWindow() {
     tools->addSeparator();
     fn(tools, QStringLiteral("Find &Overlapping Brushes…"), QKeySequence(), [this] { findOverlaps(); })
         ->setIcon(QIcon(toolIconPath(QStringLiteral("overlap"))));
+    fn(tools, QStringLiteral("Find Missing &Textures…"), QKeySequence(), [this] { findMissingTextures(true); });
     tools->addSeparator();
     fn(tools, QStringLiteral("S&pawnlist Editor…"), QKeySequence(), [this] { openSpawnlists(); });
     auto *group = new QActionGroup(this);

@@ -320,7 +320,7 @@ QList<GuidePage> guidePages(bool hammer) {
         p.see = {QStringLiteral("projects"), QStringLiteral("material"), QStringLiteral("collision")};
     }
     {
-        GuidePage &p = page(QStringLiteral("textures"), GD, QStringLiteral("Textures & the Picker"), QStringLiteral("texture picker swatch import folder color resize zoom convert vtf drop dolphin hide other models filter"));
+        GuidePage &p = page(QStringLiteral("textures"), GD, QStringLiteral("Textures & the Picker"), QStringLiteral("texture picker swatch import folder color resize zoom convert vtf drop dolphin hide other models filter missing moved relink find"));
         p.keys = {{QStringLiteral("T"), QStringLiteral("Show / hide the Texture Picker")},
                   {QStringLiteral("click"), QStringLiteral("Make a swatch the current texture")},
                   {QStringLiteral("double-click"), QStringLiteral("Texture: Material Properties. Folder: open it")},
@@ -349,7 +349,14 @@ QList<GuidePage> guidePages(bool hammer) {
                                                                   "assets/Original Textures. Power-of-two images are never touched, whatever their size.</p>")},
                   {QStringLiteral("Converting to VTF"), QStringLiteral("<p>Convert All writes VTFs into the addon folder. Compiling converts whatever "
                                                                        "the model uses, so you rarely need to. A banner warns when an image changed "
-                                                                       "after its VTF was made.</p>")}};
+                                                                       "after its VTF was made.</p>")},
+                  {QStringLiteral("Missing textures"), QStringLiteral("<p>A model only names its textures (walls/red_brick); the images live in "
+                                                                      "the project's assets/Textures. Move a model to another project (or out of "
+                                                                      "one) and its textures stay behind. When you open it, Bonk looks for them in "
+                                                                      "your other projects and offers to <b>copy them in</b> under the same names. "
+                                                                      "Not there? <b>Find in a Folder…</b> matches images by name (any folder, any "
+                                                                      "layout) and copies them in under the names the model uses. "
+                                                                      "<b>Tools → Find Missing Textures…</b> does it any time.</p>")}};
         p.see = {QStringLiteral("face"), QStringLiteral("material")};
     }
     {
