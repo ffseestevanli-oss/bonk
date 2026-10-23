@@ -72,6 +72,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QOpenGLContext>
+#include <QOffscreenSurface>
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLFunctions>
 #include <QJsonArray>
@@ -2486,7 +2487,8 @@ struct Project {
     QString texturesDir() const { return dir() + QStringLiteral("/assets/Textures"); }
     QString originalsDir() const { return dir() + QStringLiteral("/assets/Original Textures"); }
     QString modelsDir() const { return dir() + QStringLiteral("/Model Projects"); }
-    QString addonDir() const { return dir() + QStringLiteral("/addon/") + name; }
+    QString addonOverride; // the Spawnlist Creator works on an addon folder directly
+    QString addonDir() const { return addonOverride.isEmpty() ? dir() + QStringLiteral("/addon/") + name : addonOverride; }
     QString buildDir() const { return dir() + QStringLiteral("/.build"); }
     QString materialsFor(const QString &modelPath) const {
         QString p = modelMaterials;
@@ -8461,6 +8463,105 @@ void onFatalSignal(int sig) {
 }
 } // namespace
 
+// ------------------------------------------------------------------ Spawnlist Creator
+
+/// The standalone Spawnlist Creator: Bonk's Spawnlist Editor on any addon
+/// folder (one with models/ and materials/), spawn icons drawn off screen.
+/// Its own settings for each addon are kept in ~/.local/share/bonk/spawnlist-creator,
+/// so nothing but the finished spawnlist is written into the addon.
+int runSpawnlistCreator(QString addon) {
+    QApplication::setApplicationDisplayName(QStringLiteral("Bonk! Spawnlist Creator"));
+    QApplication::setDesktopFileName(QStringLiteral("bonk-spawnlist"));
+    QSettings st;
+    auto hasModels = [](const QString &d) {
+        for (const QString &e : QDir(d).entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+            if (e.compare(QStringLiteral("models"), Qt::CaseInsensitive) == 0) return true;
+        return false;
+    };
+    const bool dev = qEnvironmentVariableIsSet("BONK_SCREENSHOT");
+    while (addon.isEmpty() || !hasModels(addon)) {
+        if (dev) return 1;
+        if (!addon.isEmpty())
+            QMessageBox::information(nullptr, QStringLiteral("Bonk! Spawnlist Creator"),
+                                     QStringLiteral("%1 has no models folder. Pick an addon folder: the one with models/ and materials/ in it.")
+                                         .arg(tildePath(addon).toHtmlEscaped()));
+        addon = QFileDialog::getExistingDirectory(nullptr, QStringLiteral("Bonk! Spawnlist Creator — choose an addon folder"),
+                                                  st.value("creator/lastAddon", QDir::homePath()).toString());
+        if (addon.isEmpty()) return 0;
+    }
+    addon = QFileInfo(addon).canonicalFilePath();
+    st.setValue("creator/lastAddon", addon);
+    // the editor's own data (categories, angles…), per addon
+    const QString name = QFileInfo(addon).fileName();
+    const QString state = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/bonk/spawnlist-creator/") +
+                          spawnSlug(name) + QLatin1Char('-') + QString::number(qHash(addon), 16);
+    QDir().mkpath(state);
+    Project pj;
+    pj.name = name;
+    pj.file = state + QLatin1Char('/') + spawnSlug(name) + QStringLiteral(".bonkpj");
+    pj.addonOverride = addon;
+    {
+        QFile info(state + QStringLiteral("/addon.txt"));
+        if (info.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) info.write(addon.toUtf8() + '\n');
+    }
+    // GL off screen for the spawn icons
+    QOffscreenSurface surface;
+    surface.setFormat(QSurfaceFormat::defaultFormat());
+    surface.create();
+    QOpenGLContext ctx;
+    ctx.setFormat(QSurfaceFormat::defaultFormat());
+    const bool gl = ctx.create() && ctx.makeCurrent(&surface);
+    static QOpenGLContext *sCtx = nullptr;
+    sCtx = gl ? &ctx : nullptr;
+    if (gl) {
+        bonk_view_init(0, [](const char *n) -> const void * { return sCtx ? reinterpret_cast<const void *>(sCtx->getProcAddress(n)) : nullptr; });
+        ctx.doneCurrent();
+    }
+    ThumbRenderer render = [&](const QString &src, const ThumbCam &cam, int w, int h) -> QImage {
+        if (qEnvironmentVariableIsSet("BONK_SHOT_THUMBS")) { // developer aid: no GL here, thumbnails drawn elsewhere
+            QImage img(qEnvironmentVariable("BONK_SHOT_THUMBS") + QLatin1Char('/') + QFileInfo(src).completeBaseName() + QStringLiteral(".png"));
+            return img.isNull() ? img : img.scaled(w, h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        }
+        if (!gl || !ctx.makeCurrent(&surface)) return QImage();
+        const double up = std::min(2.0, 1024.0 / std::max(w, h));
+        const int sw = std::max(1, int(w * up)), sh = std::max(1, int(h * up));
+        QOpenGLFramebufferObjectFormat fmt;
+        fmt.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+        QImage out;
+        {
+            QOpenGLFramebufferObject fbo(sw, sh, fmt);
+            if (fbo.isValid() && fbo.bind()) {
+                ctx.functions()->glViewport(0, 0, sw, sh);
+                ThumbCam c = cam;
+                if (c.dist <= 0) c = fitCam(src, c, double(w) / h);
+                const QByteArray p = QFile::encodeName(src);
+                if (bonk_render_thumb(0, p.constData(), float(c.yaw), float(c.pitch), float(std::max(1.0, c.dist)), float(c.tx), float(c.ty), float(c.tz),
+                                      float(c.fov), sw, sh) == 0)
+                    out = fbo.toImage(true).convertToFormat(QImage::Format_ARGB32);
+                fbo.release();
+            }
+        }
+        ctx.doneCurrent();
+        return out.isNull() ? out : out.scaled(w, h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    };
+    SpawnlistDialog d(nullptr, pj, render, [](const QString &) {});
+    d.setStandalone(addon);
+    if (dev) {
+        if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_SELECT")) {
+            const QStringList a = qEnvironmentVariable("BONK_SPAWNLIST_SELECT").split(QLatin1Char(','));
+            d.select(a.value(0).toInt(), a.value(1, QStringLiteral("-1")).toInt());
+        }
+        if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_ADDONS")) d.devPickModels();
+        if (qEnvironmentVariableIsSet("BONK_CREATOR_WRITE")) d.devWrite();
+        d.show();
+        for (int i = 0; i < 5; ++i) QApplication::processEvents();
+        d.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".creator.png"));
+        return 0;
+    }
+    d.exec();
+    return 0;
+}
+
 extern "C" int bonk_qt_run(int *argc, char **argv) {
     for (int sig : {SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL}) signal(sig, onFatalSignal);
     // Mouselook needs cursor warping, which native Wayland does not allow for
@@ -8529,6 +8630,18 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
     // Alt is the "no snapping" modifier, so it must not jump into the menu bar
     // when released after a drag.
     app.setStyle(new NoAltMenuStyle(QStyleFactory::create(QApplication::style()->name())));
+
+    // bonk --spawnlist [addon folder] (or the bonk-spawnlist launcher): just the Spawnlist Creator
+    {
+        bool creator = QFileInfo(QString::fromLocal8Bit(argv[0])).fileName().startsWith(QStringLiteral("bonk-spawnlist"));
+        QString addon;
+        for (int i = 1; i < *argc; ++i) {
+            const QString a = QString::fromLocal8Bit(argv[i]);
+            if (a == QStringLiteral("--spawnlist")) creator = true;
+            else if (creator && !a.startsWith(QLatin1Char('-'))) addon = a;
+        }
+        if (creator) return runSpawnlistCreator(addon);
+    }
 
     MainWindow w;
     w.show();

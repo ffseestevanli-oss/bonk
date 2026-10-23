@@ -497,6 +497,27 @@ EOF
     chmod 755 "$1"
 }
 
+write_creator_desktop() {  # file, icon value: the standalone Spawnlist Creator (bonk --spawnlist)
+    mkdir -p "$(dirname "$1")"
+    cat > "$1" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Bonk! Spawnlist Creator
+GenericName=Spawnlist Creator
+Comment=Garry's Mod spawnlists and spawn icons for any addon folder
+Exec=$(exec_line) --spawnlist %f
+Path=$(desktop_str "$OUT")
+Icon=$(desktop_str "$2")
+Terminal=false
+Categories=Graphics;Development;
+Keywords=bonk;spawnlist;spawnmenu;spawn icon;gmod;garrys mod;addon;
+StartupNotify=true
+StartupWMClass=bonk
+EOF
+    chmod 755 "$1"
+}
+
 # Can the built program start on this system without the container?
 native_runnable() {
     command -v ldd >/dev/null 2>&1 || return 1
@@ -688,6 +709,7 @@ if [ -d "$SRC/assets/tools" ]; then
 fi
 [ -f "$SRC/LICENSE" ] && install -m 644 "$SRC/LICENSE" "$OUT/LICENSE" && ok "LICENSE (GPL-3.0-or-later)"
 write_desktop "$OUT/Bonk.desktop" "$OUT/$APP_ID.svg" && ok "Bonk.desktop"
+write_creator_desktop "$OUT/Bonk Spawnlist Creator.desktop" "$OUT/$APP_ID.svg" && ok "Bonk Spawnlist Creator.desktop"
 # Clean up launchers left by Anvil-era builds in the same folder.
 rm -f "$OUT/Anvil.desktop" "$OUT/anvil" "$OUT/anvil.svg"
 
@@ -711,6 +733,7 @@ ok "BUILD-INFO.txt"
 
 # ------------------------------------------------------------ app menu ---
 MENU_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/$APP_ID.desktop"
+CREATOR_MENU_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/$APP_ID-spawnlist.desktop"
 ICON_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps/$APP_ID.svg"
 MENU_MSG=""
 OLD_MENU="${XDG_DATA_HOME:-$HOME/.local/share}/applications/anvil.desktop"
@@ -724,15 +747,17 @@ fi
 if [ -f "$MENU_FILE" ]; then
     # Already in the menu from an earlier build: keep it pointing at this build.
     write_desktop "$MENU_FILE" "$APP_ID"
+    write_creator_desktop "$CREATOR_MENU_FILE" "$APP_ID"
     install -Dm 644 "$OUT/$APP_ID.svg" "$ICON_FILE"
-    MENU_MSG="The application-menu entry was updated."
+    MENU_MSG="The application-menu entries were updated."
     ok "Updated the application-menu entry"
 elif ask "Bonk! builder" "$APP_NAME was built successfully.
 
 Add it to your application menu too?"; then
     install -Dm 644 "$OUT/$APP_ID.svg" "$ICON_FILE"
     write_desktop "$MENU_FILE" "$APP_ID"
-    MENU_MSG="It was added to your application menu."
+    write_creator_desktop "$CREATOR_MENU_FILE" "$APP_ID"
+    MENU_MSG="It was added to your application menu (with the Spawnlist Creator)."
     ok "Added to the application menu"
 fi
 if [ -n "$MENU_MSG" ]; then

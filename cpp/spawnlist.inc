@@ -38,6 +38,10 @@ struct SpawnItem {
     int wide = 64, tall = 64; // the tile in the spawn menu (64 × 64 is GMod's usual)
     bool square() const { return wide == tall; }
     ThumbCam cam;
+    /// A small badge drawn on the spawn icon: shape:<name> | silk:<name> | file:<path> ("" = none),
+    /// up to 32 × 32 (on a 64 × 64 icon; bigger tiles scale it), in a corner (0 TL, 1 TR, 2 BL, 3 BR)
+    QString badge;
+    int badgeSize = 16, badgeCorner = 1;
 };
 
 /// A category icon: a base (a built-in shape, a Silk icon or an image),
@@ -84,6 +88,7 @@ QJsonObject catToJson(const SpawnCategory &c) {
             o["wide"] = it.wide;
             o["tall"] = it.tall;
             o["cam"] = it.cam.toJson();
+            if (!it.badge.isEmpty()) o["badge"] = QJsonObject{{"icon", it.badge}, {"size", it.badgeSize}, {"corner", it.badgeCorner}};
         }
         items.append(o);
     }
@@ -106,6 +111,10 @@ SpawnCategory catFromJson(const QJsonObject &o) {
         it.wide = std::clamp(i.value("wide").toInt(size), 16, 1024);
         it.tall = std::clamp(i.value("tall").toInt(size), 16, 1024);
         it.cam = ThumbCam::fromJson(i.value("cam").toObject());
+        const QJsonObject b = i.value("badge").toObject();
+        it.badge = b.value("icon").toString();
+        it.badgeSize = std::clamp(b.value("size").toInt(16), 4, 32);
+        it.badgeCorner = std::clamp(b.value("corner").toInt(1), 0, 3);
         c.items << it;
     }
     for (const QJsonValue &v : o.value("children").toArray()) c.children << catFromJson(v.toObject());
@@ -280,6 +289,20 @@ QImage renderIcon(const IconSpec &spec, int s, const QString &projectDir) {
     return img;
 }
 
+/// A spawn icon with its item's badge drawn on (sized for a 64 × 64 icon, scaled with the picture).
+QImage withBadge(QImage icon, const SpawnItem &it, const QString &projectDir) {
+    if (it.badge.isEmpty() || icon.isNull()) return icon;
+    const double k = std::min(icon.width(), icon.height()) / 64.0;
+    const int s = std::max(4, int(std::lround(std::clamp(it.badgeSize, 4, 32) * k)));
+    const QImage b = iconPart(it.badge, s, QColor(), projectDir);
+    icon = icon.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    const int m = std::max(1, int(std::lround(2 * k))); // a little room from the edge
+    const int x = (it.badgeCorner % 2) ? icon.width() - s - m : m, y = (it.badgeCorner / 2) ? icon.height() - s - m : m;
+    QPainter p(&icon);
+    p.drawImage(x, y, b);
+    return icon;
+}
+
 /// A name usable in file names and Lua ids.
 QString spawnSlug(const QString &s) {
     QString o;
@@ -329,10 +352,13 @@ QString writeSpawnlists(const Spawnlists &sl, const Project &pj, const ThumbRend
     int next = base;
     int icons = 0, thumbs = 0;
     QStringList errors;
-    QString lua = QStringLiteral("-- Written by Bonk! Model Prop-inator! for %1.\n"
-                                 "-- Edit the spawnlist in Bonk (Tools > Spawnlist Editor), not this file: it's rewritten on compile.\n"
-                                 "hook.Add( \"PopulatePropMenu\", %2, function()\n")
-                      .arg(pj.name, luaStr(QStringLiteral("bonk_spawnlist_") + slug));
+    QString lua = (pj.addonOverride.isEmpty()
+                       ? QStringLiteral("-- Written by Bonk! Model Prop-inator! for %1.\n"
+                                        "-- Edit the spawnlist in Bonk (Tools > Spawnlist Editor), not this file: it's rewritten on compile.\n")
+                       : QStringLiteral("-- Written by the Bonk! Spawnlist Creator for %1.\n"
+                                        "-- Edit the spawnlist in the Spawnlist Creator, not this file: Write Spawnlist rewrites it.\n"))
+                      .arg(pj.name) +
+                  QStringLiteral("hook.Add( \"PopulatePropMenu\", %1, function()\n").arg(luaStr(QStringLiteral("bonk_spawnlist_") + slug));
     QSet<QString> doneThumbs;
     std::function<void(const SpawnCategory &, int, const QString &)> walk = [&](const SpawnCategory &c, int parent, const QString &path) {
         const int id = next++;
@@ -362,7 +388,7 @@ QString writeSpawnlists(const Spawnlists &sl, const Project &pj, const ThumbRend
             QString stem = it.model;
             if (stem.endsWith(QStringLiteral(".mdl"))) stem.chop(4);
             const QString src = QFileInfo(it.source).isRelative() ? pj.dir() + QLatin1Char('/') + it.source : it.source;
-            const QImage big = render(src, it.cam, it.wide, it.tall);
+            const QImage big = withBadge(render(src, it.cam, it.wide, it.tall), it, pj.dir());
             if (big.isNull()) {
                 errors << QStringLiteral("couldn't draw %1").arg(it.model);
                 continue;
@@ -370,7 +396,7 @@ QString writeSpawnlists(const Spawnlists &sl, const Project &pj, const ThumbRend
             const QString file = addon + QStringLiteral("/materials/spawnicons/") + stem;
             QDir().mkpath(QFileInfo(file).absolutePath());
             // a square tile's own picture scales down; a wide or tall one is framed again square
-            const QImage base = it.square() ? big : render(src, fitCam(src, it.cam, 1.0), 64, 64);
+            const QImage base = it.square() ? big : withBadge(render(src, fitCam(src, it.cam, 1.0), 64, 64), it, pj.dir());
             if (!base.isNull()) base.scaled(64, 64, Qt::IgnoreAspectRatio, Qt::SmoothTransformation).save(file + QStringLiteral(".png"));
             if (it.square() && it.wide != 64) big.save(file + QStringLiteral("_%1.png").arg(it.wide));
             else if (!it.square()) big.save(file + QStringLiteral("_%1x%2.png").arg(it.wide).arg(it.tall));
@@ -810,7 +836,7 @@ public:
         auto *silk = new QPushButton(QStringLiteral("Import Silk Icons…"));
         silk->setToolTip(QStringLiteral("GMod's icon16 set (famfamfam Silk, CC BY 2.5). Point at the folder you unzipped;\n"
                                         "Bonk keeps a copy in ~/.local/share/bonk/silk so every project can use it."));
-        auto *writeBtn = new QPushButton(QStringLiteral("Write to Addon"));
+        writeBtn = new QPushButton(QStringLiteral("Write to Addon"));
         writeBtn->setToolTip(QStringLiteral("Write the Lua, icons and spawn icons into the addon folder now\n(compiling and exporting do it too)"));
         auto *closeBtn = new QPushButton(QStringLiteral("Close"));
         bb->addWidget(silk);
@@ -875,6 +901,21 @@ public:
 
     /// Developer aid: "page:<rows>:<at>" or "cat:<rows>:<tree index>", rows like 0+2; a trailing ":c" copies.
     void devPickModels() { pickModels(); }
+    void devWrite() { writeNow(); }
+
+    /// The standalone Spawnlist Creator: the models are the addon's own, and
+    /// "Write Spawnlist" puts the finished spawnlist into that addon folder.
+    QString standaloneAddon;
+    QPushButton *writeBtn = nullptr;
+    void setStandalone(const QString &addon) {
+        standaloneAddon = addon;
+        setWindowTitle(QStringLiteral("Bonk! Spawnlist Creator — %1").arg(pj.name));
+        setWindowFlags(Qt::Window | Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
+        if (writeBtn) {
+            writeBtn->setText(QStringLiteral("Write Spawnlist"));
+            writeBtn->setToolTip(QStringLiteral("Write the spawnlist (Lua), category icons and spawn icons into %1").arg(tildePath(addon)));
+        }
+    }
     void devDrop(const QString &spec) {
         const QStringList a = spec.split(QLatin1Char(':'));
         QList<int> rows;
@@ -923,6 +964,9 @@ private:
     QHash<QString, QImage> thumbCache;
     // icon pane
     QComboBox *baseKind, *baseName, *subKind, *subName, *corner;
+    QComboBox *badgeKind = nullptr, *badgeName = nullptr, *badgeCorner = nullptr;
+    QSpinBox *badgeSize = nullptr;
+    std::function<void(const SpawnItem &)> syncBadge;
     QPushButton *tintBtn, *clearTint, *fileBtn, *subFileBtn;
     QLabel *iconBig, *iconReal;
     // header pane
@@ -1152,7 +1196,7 @@ private:
     void pickModels() {
         SpawnCategory *c = current();
         if (!c) return;
-        const bool addons = QSettings().value("ui/advanced", false).toBool(); // From Addons is an Advanced feature
+        const bool addons = standaloneAddon.isEmpty() && QSettings().value("ui/advanced", false).toBool(); // From Addons is an Advanced feature
         QDialog d(this);
         d.setWindowTitle(QStringLiteral("Add models"));
         auto *v = new QVBoxLayout(&d);
@@ -1185,7 +1229,8 @@ private:
             return std::make_pair(w, l);
         };
         auto *projList = new QListWidget;
-        const auto projModels = projectModels(pj);
+        // the Creator lists the addon's own compiled models
+        const auto projModels = standaloneAddon.isEmpty() ? projectModels(pj) : addonModels(standaloneAddon);
         makeList(projModels, projList);
         auto [projPage, projLay] = withAll(projList);
         if (projModels.isEmpty()) projLay->insertWidget(0, new QLabel(QStringLiteral("This project has no models yet (Model Projects/*.bpmdl).")));
@@ -1233,7 +1278,8 @@ private:
             v->addWidget(tabs, 1);
         } else {
             if (projModels.isEmpty()) {
-                QMessageBox::information(this, windowTitle(), QStringLiteral("This project has no models yet (Model Projects/*.bpmdl)."));
+                QMessageBox::information(this, windowTitle(), standaloneAddon.isEmpty() ? QStringLiteral("This project has no models yet (Model Projects/*.bpmdl).")
+                                                                                        : QStringLiteral("This addon has no compiled models (models/*.mdl)."));
                 return;
             }
             v->addWidget(projPage, 1);
@@ -1244,6 +1290,7 @@ private:
         v->addWidget(bb);
         d.resize(560, 500);
         if (qEnvironmentVariableIsSet("BONK_SCREENSHOT") && qEnvironmentVariableIsSet("BONK_SPAWNLIST_ADDONS")) {
+            for (int i = 0; !addonList && i < projList->count(); ++i) projList->item(i)->setCheckState(Qt::Checked); // the Creator's list
             d.show();
             for (int i = 0; i < 5; ++i) QApplication::processEvents();
             d.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".addmodels.png"));
@@ -1487,6 +1534,83 @@ private:
         r2->addWidget(tallSpin);
         r2->addStretch(1);
         v->addLayout(r2);
+        // a badge on the icon (a star for new ones, a lock…)
+        auto *r3 = new QHBoxLayout;
+        r3->addWidget(new QLabel(QStringLiteral("Badge")));
+        badgeKind = new QComboBox;
+        badgeKind->addItems({QStringLiteral("None"), QStringLiteral("Built-in shape"), QStringLiteral("Silk icon"), QStringLiteral("Image")});
+        badgeKind->setToolTip(QStringLiteral("A small picture drawn on this model's spawn icon"));
+        badgeName = new QComboBox;
+        badgeName->setMinimumContentsLength(8);
+        auto *badgeFile = new QPushButton(QStringLiteral("Choose…"));
+        badgeSize = new QSpinBox;
+        badgeSize->setRange(4, 32);
+        badgeSize->setSuffix(QStringLiteral(" px"));
+        badgeSize->setToolTip(QStringLiteral("Up to 32 × 32 on a 64 × 64 icon (bigger tiles scale it)"));
+        badgeCorner = new QComboBox;
+        badgeCorner->addItems({QStringLiteral("Top left"), QStringLiteral("Top right"), QStringLiteral("Bottom left"), QStringLiteral("Bottom right")});
+        r3->addWidget(badgeKind);
+        r3->addWidget(badgeName, 1);
+        r3->addWidget(badgeFile);
+        v->addLayout(r3);
+        auto *r4 = new QHBoxLayout;
+        r4->addSpacing(QFontMetrics(font()).horizontalAdvance(QStringLiteral("Badge")) + 6);
+        r4->addWidget(badgeSize);
+        r4->addWidget(badgeCorner);
+        r4->addStretch(1);
+        v->addLayout(r4);
+        auto badgeNames = [this, badgeFile] {
+            const int k = badgeKind->currentIndex();
+            QSignalBlocker b(badgeName);
+            badgeName->clear();
+            if (k == 1) for (const char *n : kIconShapes) badgeName->addItem(QString::fromLatin1(n));
+            if (k == 2) badgeName->addItems(silkNames());
+            badgeName->setVisible(k == 1 || k == 2);
+            badgeFile->setVisible(k == 3);
+            for (QWidget *w : {static_cast<QWidget *>(badgeSize), static_cast<QWidget *>(badgeCorner)}) w->setEnabled(k != 0);
+        };
+        auto badgeApply = [this] {
+            SpawnItem *it = currentItem();
+            if (!it || syncing) return;
+            const int k = badgeKind->currentIndex();
+            if (k == 0) it->badge.clear();
+            else if (k == 1) it->badge = QStringLiteral("shape:") + badgeName->currentText();
+            else if (k == 2) it->badge = badgeName->currentText().isEmpty() ? QString() : QStringLiteral("silk:") + badgeName->currentText();
+            it->badgeSize = badgeSize->value();
+            it->badgeCorner = badgeCorner->currentIndex();
+            drawThumb();
+            changed();
+        };
+        QObject::connect(badgeKind, &QComboBox::currentIndexChanged, this, [this, badgeNames, badgeApply] {
+            badgeNames();
+            if (badgeKind->currentIndex() != 3) badgeApply();
+        });
+        QObject::connect(badgeName, &QComboBox::currentIndexChanged, this, badgeApply);
+        QObject::connect(badgeSize, &QSpinBox::valueChanged, this, badgeApply);
+        QObject::connect(badgeCorner, &QComboBox::currentIndexChanged, this, badgeApply);
+        QObject::connect(badgeFile, &QPushButton::clicked, this, [this] {
+            SpawnItem *it = currentItem();
+            if (!it) return;
+            const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Badge image"), pj.dir(), QStringLiteral("Images (*.png *.jpg *.jpeg)"));
+            if (f.isEmpty()) return;
+            it->badge = QStringLiteral("file:") + f;
+            it->badgeSize = badgeSize->value();
+            it->badgeCorner = badgeCorner->currentIndex();
+            drawThumb();
+            changed();
+        });
+        syncBadge = [this, badgeNames](const SpawnItem &it) {
+            QSignalBlocker b1(badgeKind), b2(badgeSize), b3(badgeCorner);
+            const int k = it.badge.startsWith(QStringLiteral("shape:")) ? 1 : it.badge.startsWith(QStringLiteral("silk:")) ? 2
+                        : it.badge.startsWith(QStringLiteral("file:")) ? 3 : 0;
+            badgeKind->setCurrentIndex(k);
+            badgeNames();
+            QSignalBlocker b4(badgeName);
+            if (k == 1 || k == 2) badgeName->setCurrentText(it.badge.section(QLatin1Char(':'), 1));
+            badgeSize->setValue(it.badgeSize);
+            badgeCorner->setCurrentIndex(it.badgeCorner);
+        };
+        badgeNames();
         v->addWidget(hintLabel(QStringLiteral("Drag to turn the model, right-drag (or Shift+drag) to move it in the frame, wheel to zoom. "
                                               "The snapshot has a transparent background and is written as the model's spawn icon "
                                               "(materials/spawnicons/…) in the addon.")));
@@ -1592,7 +1716,7 @@ private:
         const QString key = QStringLiteral("%1@%2x%3").arg(it.model).arg(size.width()).arg(size.height());
         auto f = thumbCache.find(key);
         if (f != thumbCache.end()) return *f;
-        QImage img = render ? render(sourcePath(it), it.cam, size.width(), size.height()) : QImage();
+        QImage img = render ? withBadge(render(sourcePath(it), it.cam, size.width(), size.height()), it, pj.dir()) : QImage();
         if (img.isNull()) {
             img = QImage(size, QImage::Format_ARGB32_Premultiplied);
             img.fill(QColor(80, 80, 88));
@@ -1618,6 +1742,7 @@ private:
         showTileSize(*it);
         thumbInfo->setText(QStringLiteral("<tt>%1</tt><br>from %2").arg(it->model.toHtmlEscaped(), it->source.toHtmlEscaped()));
         thumb->cam = &it->cam;
+        if (syncBadge) syncBadge(*it);
         drawThumb();
     }
 
@@ -1627,7 +1752,7 @@ private:
         // the preview: the tile's shape, its longer side 256
         const double k = 256.0 / std::max(it->wide, it->tall);
         const QSize ps(std::max(8, int(it->wide * k)), std::max(8, int(it->tall * k)));
-        QImage img = render ? render(sourcePath(*it), it->cam, ps.width(), ps.height()) : QImage();
+        QImage img = render ? withBadge(render(sourcePath(*it), it->cam, ps.width(), ps.height()), *it, pj.dir()) : QImage();
         thumb->frame = ps;
         thumb->setPixmap(QPixmap::fromImage(img));
         // the page's tile follows
@@ -1670,7 +1795,8 @@ private:
         data.save(pj);
         const QString r = writeSpawnlists(data, pj, render);
         if (wrote) wrote(r);
-        if (!qEnvironmentVariableIsSet("BONK_ASSUME_YES"))
+        if (qEnvironmentVariableIsSet("BONK_SCREENSHOT")) fprintf(stderr, "%s\n", qPrintable(r));
+        else if (!qEnvironmentVariableIsSet("BONK_ASSUME_YES"))
             QMessageBox::information(this, windowTitle(), r.startsWith(QLatin1Char('!')) ? r.mid(1) : (r.isEmpty() ? QStringLiteral("Nothing to write yet.") : r));
     }
 };
