@@ -858,6 +858,7 @@ public:
         QObject::connect(earlier, &QPushButton::clicked, this, [this] { moveItems(-1); });
         QObject::connect(later, &QPushButton::clicked, this, [this] { moveItems(1); });
         QObject::connect(page, &QListWidget::currentRowChanged, this, [this] { showItem(); });
+        QObject::connect(page, &QListWidget::itemSelectionChanged, this, [this] { showBadgeNote(); });
         QObject::connect(addCat, &QPushButton::clicked, this, [this] { addCategory(false); });
         QObject::connect(addSub, &QPushButton::clicked, this, [this] { addCategory(true); });
         QObject::connect(delCat, &QPushButton::clicked, this, [this] { deleteCategory(); });
@@ -902,6 +903,22 @@ public:
     /// Developer aid: "page:<rows>:<at>" or "cat:<rows>:<tree index>", rows like 0+2; a trailing ":c" copies.
     void devPickModels() { pickModels(); }
     void devWrite() { writeNow(); }
+    /// Developer aid: select every model on the page and give them all a badge
+    /// ("kind:name,size,corner").
+    void devBadgeAll(const QString &spec) {
+        page->setCurrentRow(0);
+        page->selectAll();
+        page->setCurrentRow(0, QItemSelectionModel::NoUpdate);
+        showItem();
+        // through the controls, as a click would
+        const QStringList f = spec.split(QLatin1Char(','));
+        const QString kind = f.value(0).section(QLatin1Char(':'), 0, 0), name = f.value(0).section(QLatin1Char(':'), 1);
+        badgeKind->setCurrentIndex(kind == QStringLiteral("shape") ? 1 : kind == QStringLiteral("silk") ? 2 : 0);
+        badgeName->setCurrentText(name);
+        badgeSize->setValue(f.value(1, QStringLiteral("16")).toInt());
+        badgeCorner->setCurrentIndex(f.value(2, QStringLiteral("1")).toInt());
+    }
+
 
     /// The standalone Spawnlist Creator: the models are the addon's own, and
     /// "Write Spawnlist" puts the finished spawnlist into that addon folder.
@@ -966,6 +983,7 @@ private:
     QComboBox *baseKind, *baseName, *subKind, *subName, *corner;
     QComboBox *badgeKind = nullptr, *badgeName = nullptr, *badgeCorner = nullptr;
     QSpinBox *badgeSize = nullptr;
+    QLabel *badgeNote = nullptr;
     std::function<void(const SpawnItem &)> syncBadge;
     QPushButton *tintBtn, *clearTint, *fileBtn, *subFileBtn;
     QLabel *iconBig, *iconReal;
@@ -1559,6 +1577,10 @@ private:
         r4->addWidget(badgeCorner);
         r4->addStretch(1);
         v->addLayout(r4);
+        badgeNote = new QLabel;
+        badgeNote->setWordWrap(true);
+        badgeNote->setVisible(false);
+        v->addWidget(badgeNote);
         auto badgeNames = [this, badgeFile] {
             const int k = badgeKind->currentIndex();
             QSignalBlocker b(badgeName);
@@ -1570,16 +1592,16 @@ private:
             for (QWidget *w : {static_cast<QWidget *>(badgeSize), static_cast<QWidget *>(badgeCorner)}) w->setEnabled(k != 0);
         };
         auto badgeApply = [this] {
-            SpawnItem *it = currentItem();
-            if (!it || syncing) return;
+            if (!currentItem() || syncing) return;
             const int k = badgeKind->currentIndex();
-            if (k == 0) it->badge.clear();
-            else if (k == 1) it->badge = QStringLiteral("shape:") + badgeName->currentText();
-            else if (k == 2) it->badge = badgeName->currentText().isEmpty() ? QString() : QStringLiteral("silk:") + badgeName->currentText();
-            it->badgeSize = badgeSize->value();
-            it->badgeCorner = badgeCorner->currentIndex();
-            drawThumb();
-            changed();
+            if (k == 3) { // an image: keep each one's picture, change its size and corner
+                setBadges(std::nullopt);
+                return;
+            }
+            QString b;
+            if (k == 1) b = QStringLiteral("shape:") + badgeName->currentText();
+            else if (k == 2 && !badgeName->currentText().isEmpty()) b = QStringLiteral("silk:") + badgeName->currentText();
+            setBadges(b);
         };
         QObject::connect(badgeKind, &QComboBox::currentIndexChanged, this, [this, badgeNames, badgeApply] {
             badgeNames();
@@ -1589,15 +1611,10 @@ private:
         QObject::connect(badgeSize, &QSpinBox::valueChanged, this, badgeApply);
         QObject::connect(badgeCorner, &QComboBox::currentIndexChanged, this, badgeApply);
         QObject::connect(badgeFile, &QPushButton::clicked, this, [this] {
-            SpawnItem *it = currentItem();
-            if (!it) return;
+            if (!currentItem()) return;
             const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Badge image"), pj.dir(), QStringLiteral("Images (*.png *.jpg *.jpeg)"));
             if (f.isEmpty()) return;
-            it->badge = QStringLiteral("file:") + f;
-            it->badgeSize = badgeSize->value();
-            it->badgeCorner = badgeCorner->currentIndex();
-            drawThumb();
-            changed();
+            setBadges(QStringLiteral("file:") + f);
         });
         syncBadge = [this, badgeNames](const SpawnItem &it) {
             QSignalBlocker b1(badgeKind), b2(badgeSize), b3(badgeCorner);
@@ -1693,6 +1710,57 @@ private:
         changed();
     }
 
+    /// The models the badge controls change: every selected model (headers
+    /// don't have icons), or the current one.
+    QList<int> badgeRows() {
+        QList<int> rows;
+        SpawnCategory *c = current();
+        if (!c) return rows;
+        for (QListWidgetItem *li : page->selectedItems()) {
+            const int r = page->row(li);
+            if (r >= 0 && r < c->items.size() && !c->items[r].header) rows << r;
+        }
+        const int cur = page->currentRow();
+        if (rows.isEmpty() && cur >= 0 && cur < c->items.size() && !c->items[cur].header) rows << cur;
+        std::sort(rows.begin(), rows.end());
+        return rows;
+    }
+
+    /// Give the badge controls' badge (nullopt: keep each one's picture), size and
+    /// corner to every selected model.
+    void setBadges(std::optional<QString> badge) {
+        SpawnCategory *c = current();
+        if (!c) return;
+        for (int r : badgeRows()) {
+            SpawnItem &it = c->items[r];
+            if (badge) it.badge = *badge;
+            it.badgeSize = badgeSize->value();
+            it.badgeCorner = badgeCorner->currentIndex();
+            refreshTile(r);
+        }
+        drawThumb();
+        changed();
+    }
+
+    /// Draw one page tile again (its badge changed).
+    void refreshTile(int r) {
+        SpawnCategory *c = current();
+        if (!c || r < 0 || r >= c->items.size() || r >= page->count()) return;
+        const SpawnItem &it = c->items[r];
+        for (const QString &k : thumbCache.keys())
+            if (k.startsWith(it.model + QLatin1Char('@'))) thumbCache.remove(k);
+        const QSize ts = SpawnPage::tile(QSize(it.wide, it.tall));
+        const QImage img = thumbFor(it, ts);
+        if (!img.isNull()) page->item(r)->setIcon(QIcon(QPixmap::fromImage(img)));
+    }
+
+    void showBadgeNote() {
+        if (!badgeNote) return;
+        const int n = badgeRows().size();
+        badgeNote->setText(QStringLiteral("The badge goes on all %1 selected models.").arg(n));
+        badgeNote->setVisible(n > 1);
+    }
+
     SpawnItem *currentItem() {
         SpawnCategory *c = current();
         const int r = page->currentRow();
@@ -1743,6 +1811,7 @@ private:
         thumbInfo->setText(QStringLiteral("<tt>%1</tt><br>from %2").arg(it->model.toHtmlEscaped(), it->source.toHtmlEscaped()));
         thumb->cam = &it->cam;
         if (syncBadge) syncBadge(*it);
+        showBadgeNote();
         drawThumb();
     }
 

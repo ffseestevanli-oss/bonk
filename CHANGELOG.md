@@ -12,7 +12,8 @@ All notable changes to Bonk! Model Prop-inator!, newest first.
   `bonk --spawnlist`) for any addon folder with models/ and materials/: categories, headers, tile
   sizes, category icons, and spawn icons drawn from the compiled models. **Write Spawnlist** puts it
   into the addon.
-- **Badges on spawn icons:** a shape, Silk icon or image, up to 32 × 32, in any corner.
+- **Badges on spawn icons:** a shape, Silk icon or image, up to 32 × 32, in any corner. **Select
+  several models and the badge goes on all of them** (its size and corner too).
 - **From Addons** (Spawnlist Editor → Add Models, Advanced): compiled models from an addon folder
   you pick, drawn with their own textures.
 - **Simple / Advanced mode** (Settings → Editing; Simple by default): Simple hides Vertex select, the

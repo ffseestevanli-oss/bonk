@@ -584,7 +584,9 @@ QList<GuidePage> guidePages(bool hammer) {
                                                                  "your model before opening the editor.</p>")},
                   {QStringLiteral("Badges"), QStringLiteral("<p>A model's icon can carry a <b>badge</b>: a built-in shape, a Silk icon or an "
                                                             "image, up to 32 × 32 on a 64 × 64 icon (bigger tiles scale it), in the corner you "
-                                                            "pick. A star for what's new, a lock for what's done.</p>")},
+                                                            "pick. A star for what's new, a lock for what's done. Select several models (Ctrl or Shift "
+                                                            "click) and the badge, its size and its corner go on all of them at once; with an "
+                                                            "image badge, changing the size or corner keeps each one's picture.</p>")},
                   {QStringLiteral("Spawnlist Creator"), QStringLiteral("<p><b>Bonk! Spawnlist Creator</b> (its own launcher, or <tt>bonk --spawnlist</tt>) "
                                                                        "is this editor on its own, for any addon folder with models/ and materials/ "
                                                                        "in it: categories, headers, tile sizes, icons and badges for its compiled "

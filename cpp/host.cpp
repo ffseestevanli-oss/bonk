@@ -8578,6 +8578,7 @@ int runSpawnlistCreator(QString addon) {
             d.select(a.value(0).toInt(), a.value(1, QStringLiteral("-1")).toInt());
         }
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_ADDONS")) d.devPickModels();
+        if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_BADGEALL")) d.devBadgeAll(qEnvironmentVariable("BONK_SPAWNLIST_BADGEALL"));
         if (qEnvironmentVariableIsSet("BONK_CREATOR_WRITE")) d.devWrite();
         d.show();
         for (int i = 0; i < 5; ++i) QApplication::processEvents();
