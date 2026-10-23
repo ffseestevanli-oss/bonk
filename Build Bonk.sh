@@ -512,6 +512,7 @@ Icon=$(desktop_str "$2")
 Terminal=false
 Categories=Graphics;Development;
 Keywords=bonk;spawnlist;spawnmenu;spawn icon;gmod;garrys mod;addon;
+MimeType=application/x-bonk-spawnlist;
 StartupNotify=true
 StartupWMClass=bonk
 EOF
@@ -778,11 +779,18 @@ if [ -n "$MENU_MSG" ]; then
     <glob pattern="*.bonkpj"/>
     <icon name="bonk"/>
   </mime-type>
+  <mime-type type="application/x-bonk-spawnlist">
+    <comment>Bonk! spawnlist</comment>
+    <glob pattern="*.spnlst"/>
+    <icon name="bonk"/>
+  </mime-type>
 </mime-info>
 XML
     command -v update-mime-database >/dev/null 2>&1 && update-mime-database "$MIME_DIR" >/dev/null 2>&1
     command -v xdg-mime >/dev/null 2>&1 && xdg-mime default "$APP_ID.desktop" application/x-bonk-model application/x-bonk-project >/dev/null 2>&1
-    ok "Registered .bpmdl and .bonkpj files to open with Bonk!"
+    command -v xdg-mime >/dev/null 2>&1 && [ -n "${CREATOR_MENU_FILE:-}" ] &&
+        xdg-mime default "$(basename "$CREATOR_MENU_FILE")" application/x-bonk-spawnlist >/dev/null 2>&1
+    ok "Registered .bpmdl and .bonkpj files to open with Bonk!, .spnlst with the Spawnlist Creator"
     command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 >/dev/null 2>&1
     command -v update-desktop-database >/dev/null 2>&1 &&
         update-desktop-database "$(dirname "$MENU_FILE")" >/dev/null 2>&1

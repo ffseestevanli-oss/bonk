@@ -765,6 +765,49 @@ private:
     }
 };
 
+QString defaultProjectsDir();
+
+/// Spawnlist Creator files (.spnlst): the addon folder they're for and the
+/// spawnlists themselves, kept in ~/Bonk Projects/Spawnlist by default.
+QString spnlstDir() { return defaultProjectsDir() + QStringLiteral("/Spawnlist"); }
+
+bool writeSpnlst(const QString &path, const QString &addon, const Spawnlists &data, QString *err) {
+    QJsonArray a;
+    for (const SpawnCategory &c : data.lists) a.append(catToJson(c));
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) {
+        if (err) *err = f.errorString();
+        return false;
+    }
+    f.write(QJsonDocument(QJsonObject{{"format", 1}, {"type", "bonk-spawnlist"}, {"addon", addon}, {"lists", a}}).toJson());
+    if (!f.commit()) {
+        if (err) *err = f.errorString();
+        return false;
+    }
+    return true;
+}
+
+bool readSpnlst(const QString &path, QString *addon, Spawnlists *data, QString *err) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        if (err) *err = f.errorString();
+        return false;
+    }
+    QJsonParseError pe;
+    const QJsonObject o = QJsonDocument::fromJson(f.readAll(), &pe).object();
+    if (pe.error != QJsonParseError::NoError || o.value("type").toString() != QStringLiteral("bonk-spawnlist")) {
+        if (err) *err = QStringLiteral("not a Bonk spawnlist file");
+        return false;
+    }
+    if (addon) *addon = o.value("addon").toString();
+    if (data) {
+        data->lists.clear();
+        for (const QJsonValue &v : o.value("lists").toArray()) data->lists << catFromJson(v.toObject());
+    }
+    return true;
+}
+
 class SpawnlistDialog : public QDialog {
 public:
     SpawnlistDialog(QWidget *parent, const Project &pj, ThumbRenderer render, std::function<void(const QString &)> wrote)
@@ -839,6 +882,17 @@ public:
         writeBtn = new QPushButton(QStringLiteral("Write to Addon"));
         writeBtn->setToolTip(QStringLiteral("Write the Lua, icons and spawn icons into the addon folder now\n(compiling and exporting do it too)"));
         auto *closeBtn = new QPushButton(QStringLiteral("Close"));
+        // the Spawnlist Creator's files (shown by setStandalone)
+        openBtn = new QPushButton(QStringLiteral("Open…"));
+        openBtn->setToolTip(QStringLiteral("Open a spawnlist file (.spnlst), Ctrl+O"));
+        saveBtn = new QPushButton(QStringLiteral("Save"));
+        saveBtn->setToolTip(QStringLiteral("Save this spawnlist (.spnlst in Bonk Projects/Spawnlist), Ctrl+S"));
+        saveAsBtn = new QPushButton(QStringLiteral("Save As…"));
+        saveAsBtn->setToolTip(QStringLiteral("Save it under another name, Ctrl+Shift+S"));
+        for (QPushButton *b : {openBtn, saveBtn, saveAsBtn}) {
+            b->setVisible(false);
+            bb->addWidget(b);
+        }
         bb->addWidget(silk);
         bb->addStretch(1);
         bb->addWidget(writeBtn);
@@ -878,6 +932,9 @@ public:
         QObject::connect(silk, &QPushButton::clicked, this, [this] { importSilk(); });
         QObject::connect(writeBtn, &QPushButton::clicked, this, [this] { writeNow(); });
         QObject::connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
+        QObject::connect(openBtn, &QPushButton::clicked, this, [this] { openFile(); });
+        QObject::connect(saveBtn, &QPushButton::clicked, this, [this] { saveFile(false); });
+        QObject::connect(saveAsBtn, &QPushButton::clicked, this, [this] { saveFile(true); });
         rebuildTree();
         // no default button: Enter in a text field (renaming, a header) mustn't press "+ Subcategory"
         for (QPushButton *b : findChildren<QPushButton *>()) {
@@ -926,13 +983,103 @@ public:
     QPushButton *writeBtn = nullptr;
     void setStandalone(const QString &addon) {
         standaloneAddon = addon;
-        setWindowTitle(QStringLiteral("Bonk! Spawnlist Creator — %1").arg(pj.name));
+        for (QPushButton *b : {openBtn, saveBtn, saveAsBtn}) b->setVisible(true);
+        QObject::connect(new QShortcut(QKeySequence(QStringLiteral("Ctrl+O")), this), &QShortcut::activated, this, [this] { openFile(); });
+        QObject::connect(new QShortcut(QKeySequence(QStringLiteral("Ctrl+S")), this), &QShortcut::activated, this, [this] { saveFile(false); });
+        QObject::connect(new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")), this), &QShortcut::activated, this, [this] { saveFile(true); });
+        updateTitle();
         setWindowFlags(Qt::Window | Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
         if (writeBtn) {
             writeBtn->setText(QStringLiteral("Write Spawnlist"));
             writeBtn->setToolTip(QStringLiteral("Write the spawnlist (Lua), category icons and spawn icons into %1").arg(tildePath(addon)));
         }
     }
+    /// The .spnlst this was opened from or last saved to ("" = not saved yet).
+    QString spnFile;
+    bool fileDirty = false;
+    /// Set when Open… picks a file for another addon folder: the Creator
+    /// closes and opens again on it.
+    QString reopen;
+    QPushButton *openBtn = nullptr, *saveBtn = nullptr, *saveAsBtn = nullptr;
+
+    void setFile(const QString &f) {
+        spnFile = f;
+        fileDirty = false;
+        updateTitle();
+    }
+
+    void updateTitle() {
+        if (standaloneAddon.isEmpty()) return;
+        const QString file = spnFile.isEmpty() ? QStringLiteral("Unsaved") : QFileInfo(spnFile).fileName();
+        setWindowTitle(QStringLiteral("%1%2 — %3 — Bonk! Spawnlist Creator").arg(fileDirty ? QStringLiteral("*") : QString(), file, pj.name));
+    }
+
+    bool saveFile(bool as) {
+        QString path = spnFile;
+        if (as || path.isEmpty()) {
+            QDir().mkpath(spnlstDir());
+            const QString suggest = spnFile.isEmpty() ? spnlstDir() + QLatin1Char('/') + spawnSlug(pj.name) + QStringLiteral(".spnlst") : spnFile;
+            path = qEnvironmentVariableIsSet("BONK_SPNLST_SAVE") ? qEnvironmentVariable("BONK_SPNLST_SAVE")
+                   : QFileDialog::getSaveFileName(this, QStringLiteral("Save Spawnlist"), suggest, QStringLiteral("Bonk spawnlists (*.spnlst)"));
+            if (path.isEmpty()) return false;
+            if (!path.endsWith(QStringLiteral(".spnlst"), Qt::CaseInsensitive)) path += QStringLiteral(".spnlst");
+        }
+        QString err;
+        if (!writeSpnlst(path, standaloneAddon, data, &err)) {
+            QMessageBox::warning(this, QStringLiteral("Save Spawnlist"), QStringLiteral("Couldn't save %1: %2").arg(tildePath(path), err));
+            return false;
+        }
+        QSettings().setValue("creator/lastFile", path);
+        setFile(path);
+        return true;
+    }
+
+    void openFile() {
+        if (!maybeSaveFile()) return;
+        QDir().mkpath(spnlstDir());
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Open Spawnlist"), spnFile.isEmpty() ? spnlstDir() : QFileInfo(spnFile).absolutePath(),
+                                                          QStringLiteral("Bonk spawnlists (*.spnlst)"));
+        if (path.isEmpty()) return;
+        QString addon, err;
+        Spawnlists got;
+        if (!readSpnlst(path, &addon, &got, &err)) {
+            QMessageBox::warning(this, QStringLiteral("Open Spawnlist"), QStringLiteral("Couldn't open %1: %2").arg(tildePath(path), err));
+            return;
+        }
+        if (QFileInfo(addon).canonicalFilePath() != QFileInfo(standaloneAddon).canonicalFilePath()) {
+            reopen = path; // another addon: start over on it
+            fileDirty = false;
+            close();
+            return;
+        }
+        loadLists(got);
+        setFile(path);
+    }
+
+    /// Replace what's shown with these spawnlists.
+    void loadLists(const Spawnlists &got) {
+        data = got;
+        if (data.lists.isEmpty()) {
+            SpawnCategory root;
+            root.name = pj.name;
+            root.icon.base = QStringLiteral("shape:house");
+            data.lists << root;
+        }
+        thumbCache.clear();
+        data.save(pj);
+        rebuildTree();
+    }
+
+    /// Unsaved changes to a spawnlist file: Save / Discard / Cancel. True to go on.
+    bool maybeSaveFile() {
+        if (spnFile.isEmpty() || !fileDirty || qEnvironmentVariableIsSet("BONK_SCREENSHOT")) return true;
+        const auto r = QMessageBox::question(this, windowTitle(), QStringLiteral("Save the changes to %1?").arg(QFileInfo(spnFile).fileName()),
+                                             QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+        if (r == QMessageBox::Cancel) return false;
+        if (r == QMessageBox::Save) return saveFile(false);
+        return true;
+    }
+
     void devDrop(const QString &spec) {
         const QStringList a = spec.split(QLatin1Char(':'));
         QList<int> rows;
@@ -955,6 +1102,16 @@ public:
     }
 
 protected:
+    void closeEvent(QCloseEvent *e) override {
+        if (!maybeSaveFile()) {
+            e->ignore();
+            return;
+        }
+        QDialog::closeEvent(e);
+    }
+    void reject() override {
+        if (maybeSaveFile()) QDialog::reject();
+    }
     void keyPressEvent(QKeyEvent *e) override {
         if (e->key() == Qt::Key_Delete && page->hasFocus()) {
             removeItems();
@@ -1858,6 +2015,10 @@ private:
     void changed() {
         if (syncing) return;
         data.save(pj);
+        if (!standaloneAddon.isEmpty() && !fileDirty) {
+            fileDirty = true;
+            updateTitle();
+        }
     }
 
     void writeNow() {

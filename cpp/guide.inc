@@ -592,7 +592,13 @@ QList<GuidePage> guidePages(bool hammer) {
                                                                        "in it: categories, headers, tile sizes, icons and badges for its compiled "
                                                                        "models. <b>Write Spawnlist</b> puts the Lua, category icons and spawn icons "
                                                                        "into that addon folder; the Creator's own notes stay in "
-                                                                       "~/.local/share/bonk/spawnlist-creator.</p>")},
+                                                                       "~/.local/share/bonk/spawnlist-creator.</p>"
+                                                                       "<p><b>Save</b> (Ctrl+S) keeps the spawnlist as a <tt>.spnlst</tt> file in "
+                                                                       "~/Bonk Projects/Spawnlist, with the addon folder it's for; <b>Open…</b> "
+                                                                       "(Ctrl+O) brings it back, on its addon folder (if the folder moved, you're "
+                                                                       "asked where it went). <b>Save As…</b> makes a copy. Started on its own, the "
+                                                                       "Creator asks whether to open a spawnlist or start one for an addon folder, "
+                                                                       "and double-clicking a .spnlst opens it.</p>")},
                   {QStringLiteral("Category icons"), QStringLiteral("<p>Pick a base: a built-in shape, a Silk icon or an image file; tint it; and add "
                                                                     "a sub-icon in a corner (a star on the house, say). The preview shows it at the "
                                                                     "game's 16 × 16 pixels. A plain Silk icon is GMod's own; anything else is written "

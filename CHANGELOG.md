@@ -2,6 +2,15 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## 1.0 Beta 6
+
+- **The Spawnlist Creator saves and opens files:** **Save** (Ctrl+S), **Save As…** and **Open…**
+  (Ctrl+O) for `.spnlst` spawnlists, kept in `~/Bonk Projects/Spawnlist`. A file remembers the
+  addon folder it's for (and asks for it if it moved); opening one for another addon switches to
+  that addon. Started on its own, the Creator asks: open a spawnlist, or start one for an addon
+  folder. A `*` in the title means unsaved changes, and closing asks to save them.
+- `.spnlst` files open in the Spawnlist Creator on double-click.
+
 ## 1.0 Beta 5
 
 ### New

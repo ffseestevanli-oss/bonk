@@ -8,5 +8,6 @@ Icon=io.github.ffseestevanli_oss.bonk
 Terminal=false
 Categories=Graphics;Development;
 Keywords=bonk;spawnlist;spawnmenu;spawn icon;gmod;addon;
+MimeType=application/x-bonk-spawnlist;
 StartupNotify=true
 StartupWMClass=bonk

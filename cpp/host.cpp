@@ -78,6 +78,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
+#include <QShortcut>
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QStyledItemDelegate>
@@ -8495,7 +8497,7 @@ QString packagedId() {
 /// folder (one with models/ and materials/), spawn icons drawn off screen.
 /// Its own settings for each addon are kept in ~/.local/share/bonk/spawnlist-creator,
 /// so nothing but the finished spawnlist is written into the addon.
-int runSpawnlistCreator(QString addon) {
+int runSpawnlistCreator(QString arg) {
     QApplication::setApplicationDisplayName(QStringLiteral("Bonk! Spawnlist Creator"));
     QApplication::setDesktopFileName(packagedId().isEmpty() ? QStringLiteral("bonk-spawnlist") : packagedId() + QStringLiteral(".SpawnlistCreator"));
     QSettings st;
@@ -8505,10 +8507,45 @@ int runSpawnlistCreator(QString addon) {
         return false;
     };
     const bool dev = qEnvironmentVariableIsSet("BONK_SCREENSHOT");
+    const QString title = QStringLiteral("Bonk! Spawnlist Creator");
+    auto isFile = [](const QString &a) { return a.endsWith(QStringLiteral(".spnlst"), Qt::CaseInsensitive); };
+    // nothing given: open a spawnlist file, or start one for an addon folder
+    if (arg.isEmpty() && !dev) {
+        QMessageBox box(QMessageBox::Question, title, QStringLiteral("<b>Bonk! Spawnlist Creator</b>"), QMessageBox::Cancel);
+        box.setInformativeText(QStringLiteral("Open a spawnlist you saved, or start a new one for an addon folder (the one with models/ and materials/)."));
+        QPushButton *openB = box.addButton(QStringLiteral("Open Spawnlist…"), QMessageBox::AcceptRole);
+        QPushButton *newB = box.addButton(QStringLiteral("New for an Addon Folder…"), QMessageBox::AcceptRole);
+        box.setDefaultButton(newB);
+        box.exec();
+        if (box.clickedButton() == openB) {
+            QDir().mkpath(spnlstDir());
+            arg = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Open Spawnlist"), spnlstDir(), QStringLiteral("Bonk spawnlists (*.spnlst)"));
+            if (arg.isEmpty()) return 0;
+        } else if (box.clickedButton() != newB) {
+            return 0;
+        }
+    }
+    for (;;) {
+    QString addon = arg, file;
+    Spawnlists fromFile;
+    if (isFile(arg)) {
+        QString err;
+        if (!readSpnlst(arg, &addon, &fromFile, &err)) {
+            if (!dev) QMessageBox::warning(nullptr, title, QStringLiteral("Couldn't open %1: %2").arg(tildePath(arg), err));
+            return 1;
+        }
+        file = QFileInfo(arg).absoluteFilePath();
+        if (!hasModels(addon)) { // the addon folder moved: find it again
+            if (dev) return 1;
+            QMessageBox::information(nullptr, title, QStringLiteral("This spawnlist is for %1, which isn't there any more. Pick the addon folder.")
+                                                         .arg(tildePath(addon).toHtmlEscaped()));
+            addon.clear();
+        }
+    }
     while (addon.isEmpty() || !hasModels(addon)) {
         if (dev) return 1;
         if (!addon.isEmpty())
-            QMessageBox::information(nullptr, QStringLiteral("Bonk! Spawnlist Creator"),
+            QMessageBox::information(nullptr, title,
                                      QStringLiteral("%1 has no models folder. Pick an addon folder: the one with models/ and materials/ in it.")
                                          .arg(tildePath(addon).toHtmlEscaped()));
         addon = QFileDialog::getExistingDirectory(nullptr, QStringLiteral("Bonk! Spawnlist Creator — choose an addon folder"),
@@ -8530,6 +8567,7 @@ int runSpawnlistCreator(QString addon) {
         QFile info(state + QStringLiteral("/addon.txt"));
         if (info.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) info.write(addon.toUtf8() + '\n');
     }
+    if (!file.isEmpty()) fromFile.save(pj); // the dialog opens on the file's spawnlists
     // GL off screen for the spawn icons
     QOffscreenSurface surface;
     surface.setFormat(QSurfaceFormat::defaultFormat());
@@ -8572,6 +8610,7 @@ int runSpawnlistCreator(QString addon) {
     };
     SpawnlistDialog d(nullptr, pj, render, [](const QString &) {});
     d.setStandalone(addon);
+    if (!file.isEmpty()) d.setFile(file);
     if (dev) {
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_SELECT")) {
             const QStringList a = qEnvironmentVariable("BONK_SPAWNLIST_SELECT").split(QLatin1Char(','));
@@ -8580,13 +8619,16 @@ int runSpawnlistCreator(QString addon) {
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_ADDONS")) d.devPickModels();
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_BADGEALL")) d.devBadgeAll(qEnvironmentVariable("BONK_SPAWNLIST_BADGEALL"));
         if (qEnvironmentVariableIsSet("BONK_CREATOR_WRITE")) d.devWrite();
+        if (qEnvironmentVariableIsSet("BONK_SPNLST_SAVE")) d.saveFile(true);
         d.show();
         for (int i = 0; i < 5; ++i) QApplication::processEvents();
         d.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".creator.png"));
         return 0;
     }
     d.exec();
-    return 0;
+    if (d.reopen.isEmpty()) return 0;
+    arg = d.reopen; // Open… picked a spawnlist for another addon
+    }
 }
 
 extern "C" int bonk_qt_run(int *argc, char **argv) {

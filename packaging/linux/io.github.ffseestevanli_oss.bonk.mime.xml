@@ -8,4 +8,8 @@
     <comment>Bonk! project</comment>
     <glob pattern="*.bonkpj"/>
   </mime-type>
+  <mime-type type="application/x-bonk-spawnlist">
+    <comment>Bonk! spawnlist</comment>
+    <glob pattern="*.spnlst"/>
+  </mime-type>
 </mime-info>
