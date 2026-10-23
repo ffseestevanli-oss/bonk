@@ -856,6 +856,18 @@ impl Document {
         id
     }
 
+    /// A brush that is just one face (a compiled model's triangle, for drawing).
+    pub fn add_face_brush(&mut self, verts: Vec<V3>, face: geom::Face) -> u32 {
+        let id = self.take_id();
+        let mut b = Brush::new_box(id, V3::default(), v3(1.0, 1.0, 1.0), palette(id));
+        b.color = [0.62, 0.62, 0.6];
+        b.verts = verts;
+        b.faces = vec![face];
+        b.layer = self.active_layer;
+        self.brushes.push(b);
+        id
+    }
+
     /// A brush around these points (a primitive); None if they have no volume.
     pub fn add_hull_brush(&mut self, points: &[V3]) -> Option<u32> {
         let h = geom::hull(points)?;

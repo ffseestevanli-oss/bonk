@@ -874,6 +874,7 @@ public:
     }
 
     /// Developer aid: "page:<rows>:<at>" or "cat:<rows>:<tree index>", rows like 0+2; a trailing ":c" copies.
+    void devPickModels() { pickModels(); }
     void devDrop(const QString &spec) {
         const QStringList a = spec.split(QLatin1Char(':'));
         QList<int> rows;
@@ -1122,50 +1123,146 @@ private:
         showCategory();
     }
 
+    /// Compiled models in an addon folder (one with models/ in it), or in every
+    /// addon inside a folder of addons: ("models/…/x.mdl", absolute path).
+    static QList<QPair<QString, QString>> addonModels(const QString &folder) {
+        QList<QPair<QString, QString>> out;
+        QStringList roots;
+        auto hasModels = [](const QString &d) {
+            for (const QString &e : QDir(d).entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+                if (e.compare(QStringLiteral("models"), Qt::CaseInsensitive) == 0) return d + QLatin1Char('/') + e;
+            return QString();
+        };
+        if (!hasModels(folder).isEmpty()) roots << folder;
+        else
+            for (const QString &e : QDir(folder).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name))
+                if (!hasModels(folder + QLatin1Char('/') + e).isEmpty()) roots << folder + QLatin1Char('/') + e;
+        for (const QString &r : roots) {
+            const QString models = hasModels(r);
+            QDirIterator it(models, {QStringLiteral("*.mdl"), QStringLiteral("*.MDL")}, QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString f = it.next();
+                out << qMakePair(QStringLiteral("models/") + QDir(models).relativeFilePath(f).replace(QLatin1Char('\\'), QLatin1Char('/')), f);
+            }
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+
     void pickModels() {
         SpawnCategory *c = current();
         if (!c) return;
-        const auto models = projectModels(pj);
-        if (models.isEmpty()) {
-            QMessageBox::information(this, windowTitle(), QStringLiteral("This project has no models yet (Model Projects/*.bpmdl)."));
-            return;
-        }
+        const bool addons = QSettings().value("ui/advanced", false).toBool(); // From Addons is an Advanced feature
         QDialog d(this);
         d.setWindowTitle(QStringLiteral("Add models"));
         auto *v = new QVBoxLayout(&d);
-        auto *list = new QListWidget;
+        v->addWidget(new QLabel(QStringLiteral("Tick the models to add to <b>%1</b>:").arg(c->name.toHtmlEscaped())));
         QSet<QString> already;
         for (const SpawnItem &it : c->items) already.insert(it.model);
-        for (const auto &m : models) {
-            auto *it = new QListWidgetItem(m.first);
-            it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
-            it->setCheckState(Qt::Unchecked);
-            it->setData(Qt::UserRole, m.second);
-            if (already.contains(m.first)) it->setText(m.first + QStringLiteral("   (already here)"));
-            list->addItem(it);
+        // one checklist per source
+        auto makeList = [&](const QList<QPair<QString, QString>> &models, QListWidget *list) {
+            list->clear();
+            for (const auto &m : models) {
+                auto *it = new QListWidgetItem(m.first);
+                it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
+                it->setCheckState(Qt::Unchecked);
+                it->setData(Qt::UserRole, m.second);
+                it->setToolTip(m.second);
+                if (already.contains(m.first)) it->setText(m.first + QStringLiteral("   (already here)"));
+                list->addItem(it);
+            }
+        };
+        auto withAll = [](QListWidget *list) {
+            auto *w = new QWidget;
+            auto *l = new QVBoxLayout(w);
+            l->setContentsMargins(0, 0, 0, 0);
+            l->addWidget(list, 1);
+            auto *all = new QCheckBox(QStringLiteral("All"));
+            QObject::connect(all, &QCheckBox::toggled, list, [list](bool on) {
+                for (int i = 0; i < list->count(); ++i) list->item(i)->setCheckState(on ? Qt::Checked : Qt::Unchecked);
+            });
+            l->addWidget(all);
+            return std::make_pair(w, l);
+        };
+        auto *projList = new QListWidget;
+        const auto projModels = projectModels(pj);
+        makeList(projModels, projList);
+        auto [projPage, projLay] = withAll(projList);
+        if (projModels.isEmpty()) projLay->insertWidget(0, new QLabel(QStringLiteral("This project has no models yet (Model Projects/*.bpmdl).")));
+        QListWidget *addonList = nullptr;
+        QList<QPair<QString, QString>> addonFound;
+        QTabWidget *tabs = nullptr;
+        if (addons) {
+            tabs = new QTabWidget;
+            tabs->setTabPosition(QTabWidget::South);
+            tabs->addTab(projPage, QStringLiteral("From Project"));
+            addonList = new QListWidget;
+            auto [addonPage, addonLay] = withAll(addonList);
+            auto *row = new QHBoxLayout;
+            auto *folder = new QLabel;
+            folder->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            auto *browse = new QPushButton(QStringLiteral("Choose Folder…"));
+            browse->setToolTip(QStringLiteral("An addon folder (with models/ and materials/ in it), or a folder of addons"));
+            row->addWidget(folder, 1);
+            row->addWidget(browse);
+            addonLay->insertLayout(0, row);
+            auto *note = new QLabel(QStringLiteral("Compiled models from another addon: their spawn icons are drawn from the model and its textures."));
+            note->setWordWrap(true);
+            note->setEnabled(false);
+            addonLay->insertWidget(1, note);
+            auto load = [&, folder, addonList](const QString &dir) {
+                folder->setText(dir.isEmpty() ? QStringLiteral("No folder chosen") : tildePath(dir));
+                addonFound = dir.isEmpty() ? QList<QPair<QString, QString>>() : addonModels(dir);
+                makeList(addonFound, addonList);
+                if (!dir.isEmpty() && addonFound.isEmpty()) folder->setText(tildePath(dir) + QStringLiteral(" — no models found"));
+            };
+            QObject::connect(browse, &QPushButton::clicked, &d, [&, load] {
+                const QString start = QSettings().value("spawnlist/addonFolder", QDir::homePath()).toString();
+                const QString dir = QFileDialog::getExistingDirectory(&d, QStringLiteral("Addon folder"), start);
+                if (dir.isEmpty()) return;
+                QSettings().setValue("spawnlist/addonFolder", dir);
+                load(dir);
+            });
+            const QString remembered = QSettings().value("spawnlist/addonFolder").toString();
+            load(QFileInfo(remembered).isDir() ? remembered : QString());
+            tabs->addTab(addonPage, QStringLiteral("From Addons"));
+            if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_ADDONS")) { // developer aid: that folder, on its tab
+                load(qEnvironmentVariable("BONK_SPAWNLIST_ADDONS"));
+                tabs->setCurrentIndex(1);
+            }
+            v->addWidget(tabs, 1);
+        } else {
+            if (projModels.isEmpty()) {
+                QMessageBox::information(this, windowTitle(), QStringLiteral("This project has no models yet (Model Projects/*.bpmdl)."));
+                return;
+            }
+            v->addWidget(projPage, 1);
         }
-        v->addWidget(new QLabel(QStringLiteral("Tick the models to add to <b>%1</b>:").arg(c->name.toHtmlEscaped())));
-        v->addWidget(list, 1);
-        auto *all = new QCheckBox(QStringLiteral("All"));
-        QObject::connect(all, &QCheckBox::toggled, list, [list](bool on) {
-            for (int i = 0; i < list->count(); ++i) list->item(i)->setCheckState(on ? Qt::Checked : Qt::Unchecked);
-        });
-        v->addWidget(all);
         auto *bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
         QObject::connect(bb, &QDialogButtonBox::accepted, &d, &QDialog::accept);
         QObject::connect(bb, &QDialogButtonBox::rejected, &d, &QDialog::reject);
         v->addWidget(bb);
-        d.resize(520, 480);
-        if (d.exec() != QDialog::Accepted) return;
-        for (int i = 0; i < list->count(); ++i) {
-            QListWidgetItem *li = list->item(i);
-            if (li->checkState() != Qt::Checked) continue;
-            SpawnItem it;
-            it.model = models[i].first;
-            it.source = models[i].second;
-            fit(it);
-            c->items << it;
+        d.resize(560, 500);
+        if (qEnvironmentVariableIsSet("BONK_SCREENSHOT") && qEnvironmentVariableIsSet("BONK_SPAWNLIST_ADDONS")) {
+            d.show();
+            for (int i = 0; i < 5; ++i) QApplication::processEvents();
+            d.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".addmodels.png"));
+            for (int i = 0; addonList && i < addonList->count(); ++i) addonList->item(i)->setCheckState(Qt::Checked);
+        } else if (d.exec() != QDialog::Accepted) {
+            return;
         }
+        auto take = [&](QListWidget *list, const QList<QPair<QString, QString>> &models) {
+            for (int i = 0; list && i < list->count() && i < models.size(); ++i) {
+                if (list->item(i)->checkState() != Qt::Checked) continue;
+                SpawnItem it;
+                it.model = models[i].first;
+                it.source = models[i].second; // a project model (relative) or an addon's .mdl (absolute)
+                fit(it);
+                c->items << it;
+            }
+        };
+        take(projList, projModels);
+        take(addonList, addonFound);
         changed();
         showCategory();
     }

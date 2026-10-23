@@ -14,6 +14,7 @@ mod geom;
 mod gl;
 mod io;
 mod math;
+mod mdl;
 mod overlap;
 mod render;
 mod shapes;
@@ -484,8 +485,14 @@ fn with_thumb_model<R>(path: &str, f: impl FnOnce(&Editor) -> R) -> Option<R> {
         let mut m = m.borrow_mut();
         let fresh = m.get(path).is_some_and(|(t, _)| *t == mtime);
         if !fresh {
-            let mut ed = Box::new(Editor::new());
-            io::load_file(&mut ed, path).ok()?;
+            // a Bonk model, or a compiled one in an addon folder (drawn as it is)
+            let ed = if path.to_lowercase().ends_with(".mdl") {
+                Box::new(mdl::load_editor(std::path::Path::new(path)).ok()?)
+            } else {
+                let mut ed = Box::new(Editor::new());
+                io::load_file(&mut ed, path).ok()?;
+                ed
+            };
             m.insert(path.to_string(), (mtime, ed));
         }
         Some(f(&m.get(path)?.1))
@@ -1904,5 +1911,28 @@ pub extern "C" fn bonk_set_color_prefix(model_path: *const c_char) -> *const c_c
     OUT.with(|o| {
         *o.borrow_mut() = std::ffi::CString::new(p).unwrap_or_default();
         o.borrow().as_ptr()
+    })
+}
+
+/// Flying speed: starts at `min` units/s and eases up to `max` at `lerp` per second.
+#[no_mangle]
+pub extern "C" fn bonk_set_fly(min: f32, max: f32, lerp: f32) {
+    with_ed(|ed| {
+        ed.fly_min = min.clamp(10.0, 20000.0);
+        ed.fly_max = max.clamp(10.0, 20000.0);
+        ed.fly_lerp = lerp.clamp(0.0, 50.0);
+    });
+}
+
+/// Developer aid: the selection's bounds (min xyz, max xyz) into `out`; 0 when nothing is selected.
+#[no_mangle]
+pub extern "C" fn bonk_debug_sel_bounds(out: *mut f32) -> c_int {
+    with_ed(|ed| match ed.doc.selection_bounds() {
+        Some((a, b)) => {
+            let o = unsafe { std::slice::from_raw_parts_mut(out, 6) };
+            o.copy_from_slice(&[a.x, a.y, a.z, b.x, b.y, b.z]);
+            1
+        }
+        None => 0,
     })
 }

@@ -203,6 +203,8 @@ int bonk_collision_pieces();
 const char *bonk_used_materials();
 const char *bonk_variant_export_info();
 const char *bonk_set_color_prefix(const char *modelPath);
+void bonk_set_fly(float min, float max, float lerp);
+int bonk_debug_sel_bounds(float *out);
 const char *bonk_vmf_scan(const char *path);
 int bonk_vmf_import(const char *path, const char *skip);
 const char *bonk_vmf_report();
@@ -381,6 +383,8 @@ struct Prefs {
     double simplifyDetail = 8.0; // simplified collision: what counts as a detail (units)
     bool launchGmod = false;     // start Garry's Mod after exporting
     bool openAfterPublish = true; // show the Workshop page after publishing
+    int flyMin = 300, flyMax = 600; // 3D flying speed (units / second): starts at min, eases up to max
+    double flyLerp = 3.0;           // how quickly it eases up (per second)
     bool advanced = false;        // Advanced mode: every feature (Simple hides the expert ones)
     QString studiomdl;           // a custom studiomdl.exe (empty = Garry's Mod's own)
     bool startScreen = true;     // show the start screen when Bonk opens
@@ -433,6 +437,9 @@ struct Prefs {
         launchGmod = s.value("gmod/launchAfterExport", false).toBool();
         openAfterPublish = s.value("workshop/openAfterPublish", true).toBool();
         advanced = s.value("ui/advanced", false).toBool();
+        flyMin = s.value("fly/min", 300).toInt();
+        flyMax = s.value("fly/max", 600).toInt();
+        flyLerp = s.value("fly/lerp", 3.0).toDouble();
         studiomdl = s.value("gmod/studiomdl").toString();
         startScreen = s.value("ui/startScreen", true).toBool();
         gmodPath = s.value("gmod/path").toString();
@@ -487,6 +494,9 @@ struct Prefs {
         s.setValue("gmod/launchAfterExport", launchGmod);
         s.setValue("workshop/openAfterPublish", openAfterPublish);
         s.setValue("ui/advanced", advanced);
+        s.setValue("fly/min", flyMin);
+        s.setValue("fly/max", flyMax);
+        s.setValue("fly/lerp", flyLerp);
         s.setValue("gmod/studiomdl", studiomdl);
         s.setValue("ui/startScreen", startScreen);
         s.setValue("gmod/path", gmodPath);
@@ -494,6 +504,7 @@ struct Prefs {
         s.setValue("gmod/exportAfterCompile", exportAfterCompile);
     }
     void apply() const {
+        bonk_set_fly(float(flyMin), float(flyMax), float(flyLerp));
         bonk_set_config(nudge, swapAlt, gridIntensity / 100.0f, float(bg.redF()), float(bg.greenF()), float(bg.blueF()), float(rotSnap), hammerKeys);
         bonk_set_shift_clone(shiftClone);
         bonk_set_sel_touch(!selInsideOnly);
@@ -947,6 +958,34 @@ public:
                                              "Compiling converts whatever it needs without asking either way."));
         tf->addRow(askResize);
         toolsTab->addWidget(toolsBox);
+
+        // Flying in the 3D view
+        auto *flyBox = new QGroupBox(QStringLiteral("Flying (3D view)"));
+        auto *ff = new QFormLayout(flyBox);
+        flyMin = new QSpinBox;
+        flyMax = new QSpinBox;
+        for (QSpinBox *b : {flyMin, flyMax}) {
+            b->setRange(10, 20000);
+            b->setSingleStep(50);
+            b->setSuffix(QStringLiteral(" units/s"));
+        }
+        flyLerp = new QDoubleSpinBox;
+        flyLerp->setRange(0.0, 50.0);
+        flyLerp->setSingleStep(0.5);
+        flyLerp->setDecimals(1);
+        flyMin->setToolTip(QStringLiteral("The speed a move starts at"));
+        flyMax->setToolTip(QStringLiteral("The speed it eases up to while you keep moving"));
+        flyLerp->setToolTip(QStringLiteral("How quickly it gets there: 0 stays at the minimum, 3 is about a second, 20+ is almost instant"));
+        ff->addRow(QStringLiteral("Minimum speed"), flyMin);
+        ff->addRow(QStringLiteral("Maximum speed"), flyMax);
+        ff->addRow(QStringLiteral("Speed-up (lerp)"), flyLerp);
+        auto *flyNote = new QLabel(QStringLiteral("Hold Alt to fly at half speed, Shift for three times."));
+        flyNote->setEnabled(false);
+        ff->addRow(flyNote);
+        toolsTab->addWidget(flyBox);
+        QObject::connect(flyMin, &QSpinBox::valueChanged, this, [this](int v) { if (!syncing) { p.flyMin = v; changed(); } });
+        QObject::connect(flyMax, &QSpinBox::valueChanged, this, [this](int v) { if (!syncing) { p.flyMax = v; changed(); } });
+        QObject::connect(flyLerp, &QDoubleSpinBox::valueChanged, this, [this](double v) { if (!syncing) { p.flyLerp = v; changed(); } });
         toolsTab->addStretch(1);
 
         // Interface size (Appearance)
@@ -1257,7 +1296,8 @@ private:
     QLineEdit *studiomdl;
     QLineEdit *gmodPath;
     QComboBox *proton;
-    QSpinBox *budTris, *budVerts, *budMats, *budPieces;
+    QSpinBox *budTris, *budVerts, *budMats, *budPieces, *flyMin, *flyMax;
+    QDoubleSpinBox *flyLerp;
     QCheckBox *nudge, *shiftClone, *pinCursor, *swapAlt, *rememberBisect, *hammerKeys, *applyOnClick, *startScreen, *swatchTool;
     QComboBox *rotSnap, *toolColor;
     QSlider *grid, *brightness;
@@ -1360,6 +1400,9 @@ private:
         launchGmod->setChecked(v.launchGmod);
         openAfterPublish->setChecked(v.openAfterPublish);
         advanced->setChecked(v.advanced);
+        flyMin->setValue(v.flyMin);
+        flyMax->setValue(v.flyMax);
+        flyLerp->setValue(v.flyLerp);
         selTouch->setVisible(v.advanced);
         axisLock->setVisible(v.advanced);
         studiomdl->setText(v.studiomdl);
@@ -1404,6 +1447,38 @@ public:
     int id;
     MainWindow *mw;
     QPoint center; // capture center (3D view only)
+    /// Relative mouse motion while the cursor is held in place (mouselook,
+    /// hold keys). Each move counts from the previous event, not from where
+    /// the cursor should be: warping back is late on X11 and ignored on
+    /// Wayland, and measuring from the home point then counted the same
+    /// motion again and again (brushes flying off, rotations spinning).
+    struct RelMouse {
+        QPointF last;
+        bool valid = false, warpPending = false;
+        void start(QPointF at) { last = at; valid = true; warpPending = false; }
+        void reset() { valid = false; warpPending = false; }
+    };
+    RelMouse rel;
+    /// The movement since the last event; puts the cursor back home when it
+    /// strays (where the system allows it).
+    QPointF relDelta(QPointF pos, QPoint home) {
+        if (!rel.valid) {
+            rel.start(pos);
+            return {};
+        }
+        if (rel.warpPending && QLineF(pos, QPointF(home)).length() < 1.0) {
+            rel.warpPending = false; // our own warp arriving
+            rel.last = pos;
+            return {};
+        }
+        const QPointF d = pos - rel.last;
+        rel.last = pos;
+        if (QLineF(pos, QPointF(home)).length() > 32.0) {
+            QCursor::setPos(mapToGlobal(home));
+            rel.warpPending = true;
+        }
+        return d;
+    }
 
     struct Label { float x, y; int align; QString s; QColor c; };
     std::vector<Label> labels;
@@ -1429,7 +1504,8 @@ protected:
             switch (k->key()) {
             case Qt::Key_W: case Qt::Key_A: case Qt::Key_S: case Qt::Key_D:
             case Qt::Key_Q: case Qt::Key_E: case Qt::Key_Z:
-                if (!(k->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
+                // (Alt too: Alt+W flies at half speed instead of opening the Window menu)
+                if (!(k->modifiers() & Qt::ControlModifier) && (k->key() != Qt::Key_Z || !(k->modifiers() & Qt::AltModifier))) {
                     e->accept();
                     return true;
                 }
@@ -5156,6 +5232,7 @@ public:
             Viewport *w = views[v];
             pinLocal = w->mapFromGlobal(QCursor::pos());
             pinVirt = QPointF(pinLocal);
+            w->rel.start(QPointF(pinLocal));
             pinView = v;
             w->grabMouse();
         }
@@ -5348,6 +5425,7 @@ public:
             d.select(a.value(0).toInt(), a.value(1, QStringLiteral("-1")).toInt());
         }
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_DROP")) d.devDrop(qEnvironmentVariable("BONK_SPAWNLIST_DROP"));
+        if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_ADDONS")) d.devPickModels(); // developer aid: Add Models → From Addons
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_TREEMOVE")) {
             const QStringList m = qEnvironmentVariable("BONK_SPAWNLIST_TREEMOVE").split(QLatin1Char(','));
             d.devTreeMove(m.value(0).toInt(), m.value(1).toInt(), m.value(2).toInt());
@@ -5915,6 +5993,7 @@ public:
             v->grabKeyboard();
             v->center = v->rect().center();
             QCursor::setPos(v->mapToGlobal(v->center));
+            v->rel.reset(); // the first move says where the cursor really is
         } else {
             v->releaseKeyboard();
             v->releaseMouse();
@@ -7885,19 +7964,16 @@ void Viewport::mouseReleaseEvent(QMouseEvent *e) {
 
 void Viewport::mouseMoveEvent(QMouseEvent *e) {
     if (mw->captured && id == 0) {
-        QPoint d = e->position().toPoint() - center;
-        if (d.isNull()) return; // our own recentering warp
-        unsigned f = bonk_mouse_delta(float(d.x()), float(d.y()));
-        QCursor::setPos(mapToGlobal(center));
-        mw->handle(f);
+        const QPointF d = relDelta(e->position(), center);
+        if (d.isNull()) return;
+        mw->handle(bonk_mouse_delta(float(d.x()), float(d.y())));
         return;
     }
     if (mw->pinView == id) {
-        // Pinned: read the movement, put the cursor back, feed the virtual position.
-        QPoint d = e->position().toPoint() - mw->pinLocal;
-        if (d.isNull()) return; // our own warp
-        mw->pinVirt += QPointF(d);
-        QCursor::setPos(mapToGlobal(mw->pinLocal));
+        // Pinned: read the movement, feed the virtual position.
+        const QPointF d = relDelta(e->position(), mw->pinLocal);
+        if (d.isNull()) return;
+        mw->pinVirt += d;
         mw->handle(bonk_mouse(id, 2, float(mw->pinVirt.x()), float(mw->pinVirt.y()), int(e->buttons()), modsOf(e->modifiers())), this);
         return;
     }
@@ -8519,6 +8595,16 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                     const QStringList a = c.mid(down ? 8 : 6).split(QLatin1Char(','));
                     const int v = a.value(0).toInt();
                     w.handle(bonk_key(v, a.value(1).toInt(0, 0), down, 0, 0), w.views[v]);
+                } else if (c.startsWith(QStringLiteral("move:"))) { // move:view,x,y — a real mouse move event (pinning included)
+                    const QStringList a = c.mid(5).split(QLatin1Char(','));
+                    Viewport *vp = w.views[a.value(0).toInt()];
+                    const QPointF at(a.value(1).toDouble(), a.value(2).toDouble());
+                    QMouseEvent me(QEvent::MouseMove, at, vp->mapToGlobal(at), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                    QApplication::sendEvent(vp, &me);
+                } else if (c == QStringLiteral("selbounds")) {
+                    float b[6] = {0, 0, 0, 0, 0, 0};
+                    if (bonk_debug_sel_bounds(b)) fprintf(stderr, "selbounds %.1f %.1f %.1f %.1f %.1f %.1f\n", b[0], b[1], b[2], b[3], b[4], b[5]);
+                    else fprintf(stderr, "selbounds none\n");
                 } else if (c == QStringLiteral("copy")) w.copySelection(false);
                 else if (c == QStringLiteral("paste") || c == QStringLiteral("pastem")) w.pasteClipboard(c.endsWith(QLatin1Char('m')));
                 else if (c == QStringLiteral("overlaps")) w.findOverlaps();

@@ -103,7 +103,7 @@ pub const MOVE_DEAD_ZONE_PX: f32 = 7.0;
 /// How far a locked move goes before it picks its axis
 pub const AXIS_COMMIT_PX: f32 = 10.0;
 const LOOK_SENS: f32 = 0.18; // degrees per pixel
-const FLY_SPEED: f32 = 600.0; // units per second
+const FLY_SPEED: f32 = 600.0; // units per second (the default top speed)
 const TURN_SPEED: f32 = 100.0; // degrees per second (arrow keys)
 
 /// User preferences (Settings → Configure Bonk!). Persisted by the Qt host.
@@ -395,6 +395,11 @@ struct Keys {
 }
 
 pub struct Editor {
+    /// Flying: speed eases from fly_min to fly_max (units/s) at fly_lerp per second; Alt halves it, Shift triples it
+    pub fly_min: f32,
+    pub fly_max: f32,
+    pub fly_lerp: f32,
+    fly_cur: f32,
     pub doc: Document,
     pub tool: Tool,
     pub grid: f32,
@@ -598,6 +603,10 @@ impl Editor {
             work: (v3(0.0, 0.0, 0.0), v3(64.0, 64.0, 64.0)),
             drag: None,
             keys: Keys::default(),
+            fly_min: 300.0,
+            fly_max: FLY_SPEED,
+            fly_lerp: 3.0,
+            fly_cur: 0.0,
             persp_size: (400.0, 300.0),
             hover: None,
         }
@@ -4253,9 +4262,20 @@ impl Editor {
         let vert = ax(k.e, k.q);
         let turn = ax(k.left, k.right);
         if fwd == 0.0 && side == 0.0 && vert == 0.0 && turn == 0.0 {
+            self.fly_cur = 0.0;
             return 0;
         }
-        let speed = FLY_SPEED * if k.shift { 3.0 } else { 1.0 };
+        if fwd == 0.0 && side == 0.0 && vert == 0.0 {
+            self.fly_cur = 0.0; // turning only: the next move starts slow again
+        }
+        // speed eases from the minimum up to the maximum while you keep moving
+        let (lo, hi) = (self.fly_min.min(self.fly_max), self.fly_max.max(self.fly_min));
+        if self.fly_cur < lo {
+            self.fly_cur = lo;
+        }
+        self.fly_cur += (hi - self.fly_cur) * (1.0 - (-self.fly_lerp.max(0.0) * dt).exp());
+        let k = &self.keys;
+        let speed = self.fly_cur * if k.shift { 3.0 } else { 1.0 } * if self.alt { 0.5 } else { 1.0 };
         let mv = self.cam.forward() * fwd + self.cam.right() * side + v3(0.0, 0.0, vert);
         self.cam.pos = self.cam.pos + mv.norm() * (speed * dt);
         self.cam.yaw = (self.cam.yaw + turn * TURN_SPEED * dt).rem_euclid(360.0);
@@ -5356,6 +5376,34 @@ mod tests {
         e.doc.selection.clear();
         click!(e, 1, sp(&e, 1, 10.0, 50.0), 0);
         assert_eq!(e.doc.selection.len(), 1);
+    }
+
+    #[test]
+    fn flying_eases_from_min_to_max_and_alt_halves() {
+        let mut e = Editor::new();
+        e.fly_min = 100.0;
+        e.fly_max = 1000.0;
+        e.fly_lerp = 0.0; // stays at the minimum
+        e.keys.w = true;
+        let p0 = e.cam.pos;
+        e.fly(1.0);
+        assert!(((e.cam.pos - p0).len() - 100.0).abs() < 0.5);
+        e.alt = true;
+        let p1 = e.cam.pos;
+        e.fly(1.0);
+        assert!(((e.cam.pos - p1).len() - 50.0).abs() < 0.5, "Alt halves");
+        e.alt = false;
+        e.fly_lerp = 50.0; // almost instant
+        let p2 = e.cam.pos;
+        e.fly(1.0);
+        assert!((e.cam.pos - p2).len() > 990.0, "eased up to the maximum");
+        e.keys.w = false;
+        e.fly(0.1);
+        e.keys.w = true;
+        e.fly_lerp = 0.0;
+        let p3 = e.cam.pos;
+        e.fly(1.0);
+        assert!(((e.cam.pos - p3).len() - 100.0).abs() < 0.5, "a new move starts slow again");
     }
 
     #[test]
