@@ -134,6 +134,67 @@ pub fn merge_exact(mut pieces: Vec<Brush>) -> Vec<Brush> {
     pieces
 }
 
+/// Area covered by these rectangles (x/y bounds of brushes), overlaps counted once.
+fn rect_union_area(rects: &[(V3, V3)]) -> f32 {
+    let mut xs: Vec<f32> = rects.iter().flat_map(|r| [r.0.x, r.1.x]).collect();
+    xs.sort_by(f32::total_cmp);
+    xs.dedup_by(|a, b| (*a - *b).abs() < 1e-4);
+    let mut area = 0.0;
+    for w in xs.windows(2) {
+        let (x0, x1) = (w[0], w[1]);
+        let mid = (x0 + x1) * 0.5;
+        let mut spans: Vec<(f32, f32)> = rects.iter().filter(|r| r.0.x <= mid && r.1.x >= mid).map(|r| (r.0.y, r.1.y)).collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut cover = 0.0;
+        let mut cur: Option<(f32, f32)> = None;
+        for (a, b) in spans {
+            match cur {
+                Some((ca, cb)) if a <= cb => cur = Some((ca, cb.max(b))),
+                Some((ca, cb)) => {
+                    cover += cb - ca;
+                    cur = Some((a, b));
+                }
+                None => cur = Some((a, b)),
+            }
+        }
+        if let Some((ca, cb)) = cur {
+            cover += cb - ca;
+        }
+        area += cover * (x1 - x0);
+    }
+    area
+}
+
+/// Area of the convex hull of these points seen from above (x, y).
+fn hull_area_xy(pts: &[V3]) -> f32 {
+    let mut p: Vec<(f32, f32)> = pts.iter().map(|v| (v.x, v.y)).collect();
+    p.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    p.dedup();
+    if p.len() < 3 {
+        return 0.0;
+    }
+    let cross = |o: (f32, f32), a: (f32, f32), b: (f32, f32)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+    let mut h: Vec<(f32, f32)> = Vec::new();
+    for pass in 0..2 {
+        let start = h.len();
+        let iter: Box<dyn Iterator<Item = &(f32, f32)>> = if pass == 0 { Box::new(p.iter()) } else { Box::new(p.iter().rev()) };
+        for &q in iter {
+            while h.len() >= start + 2 && cross(h[h.len() - 2], h[h.len() - 1], q) <= 0.0 {
+                h.pop();
+            }
+            h.push(q);
+        }
+        h.pop();
+    }
+    let mut a = 0.0;
+    for i in 0..h.len() {
+        let (x0, y0) = h[i];
+        let (x1, y1) = h[(i + 1) % h.len()];
+        a += x0 * y1 - x1 * y0;
+    }
+    a.abs() * 0.5
+}
+
 struct Uf(Vec<usize>);
 impl Uf {
     fn find(&mut self, i: usize) -> usize {
@@ -263,6 +324,24 @@ pub fn simplify(brushes: &[&Brush], detail: f32) -> Vec<Brush> {
             }
             continue;
         }
+        // Seen from above, an L or a U (trim around a corner, a counter along two
+        // walls): a hull would cut across the inside of the corner, so the parts
+        // stay as they are and the merge pass joins what lines up. Stairs and
+        // other clusters with a square footprint still become one piece (a ramp).
+        let footprint: Vec<(V3, V3)> = members.iter().map(|&m| info[details[m]].0).collect();
+        let corner_pts: Vec<V3> = footprint.iter().flat_map(|&(l, h)| [l, h, v3(l.x, h.y, 0.0), v3(h.x, l.y, 0.0)]).collect();
+        let hull_xy = hull_area_xy(&corner_pts);
+        if members.len() > 1 && hull_xy > 0.0 && rect_union_area(&footprint) / hull_xy < 0.85 {
+            for &m in &members {
+                let (l, h) = info[details[m]].0;
+                if dims(l, h)[2].0 >= detail || dims(l, h)[1].0 >= detail {
+                    let mut b = brushes[details[m]].clone();
+                    b.group = None;
+                    pieces.push(b);
+                }
+            }
+            continue;
+        }
         // loose details: one piece if they're mostly solid and big enough
         let filled: f32 = members.iter().map(|&m| volume(brushes[details[m]])).sum();
         if members.len() > 48 {
@@ -315,6 +394,27 @@ mod tests {
         let j = exact_join(&a, &b).unwrap();
         assert_eq!(j.bounds(), (v3(0.0, 0.0, 0.0), v3(64.0, 32.0, 32.0)));
         assert_eq!(j.faces.len(), 6);
+    }
+
+    #[test]
+    fn corner_trim_keeps_its_sharp_inside_corner() {
+        // an L of trim around a building corner: two 4-thick, 24-tall strips
+        let v = vec![bx(v3(0.0, 0.0, 0.0), v3(64.0, 4.0, 24.0)), bx(v3(0.0, 4.0, 0.0), v3(4.0, 64.0, 24.0))];
+        let refs: Vec<&Brush> = v.iter().collect();
+        let out = simplify(&refs, 33.0);
+        let solid_at = |p: V3| out.iter().any(|b| b.faces.iter().all(|f| f.normal.dot(p) <= f.dist + 1e-3));
+        assert!(solid_at(v3(30.0, 2.0, 10.0)) && solid_at(v3(2.0, 30.0, 10.0)), "both arms stay");
+        assert!(!solid_at(v3(20.0, 20.0, 10.0)), "no diagonal across the inside of the corner");
+        assert!(out.iter().all(|b| b.faces.iter().all(|f| f.normal.x.abs() > 0.999 || f.normal.y.abs() > 0.999 || f.normal.z.abs() > 0.999)), "square pieces only");
+        // a counter along two walls (24 deep): the old hull cut its inside corner on a diagonal
+        let v = vec![bx(v3(0.0, 0.0, 0.0), v3(96.0, 24.0, 36.0)), bx(v3(0.0, 24.0, 0.0), v3(24.0, 96.0, 36.0))];
+        let refs: Vec<&Brush> = v.iter().collect();
+        let out = simplify(&refs, 48.0);
+        let solid_at = |p: V3| out.iter().any(|b| b.faces.iter().all(|f| f.normal.dot(p) <= f.dist + 1e-3));
+        assert!(solid_at(v3(80.0, 12.0, 18.0)) && solid_at(v3(12.0, 80.0, 18.0)));
+        assert!(!solid_at(v3(40.0, 40.0, 18.0)), "the inside corner stays square");
+        assert!((rect_union_area(&[(v3(0.0, 0.0, 0.0), v3(2.0, 2.0, 0.0)), (v3(1.0, 1.0, 0.0), v3(3.0, 3.0, 0.0))]) - 7.0).abs() < 1e-4);
+        assert!((hull_area_xy(&[v3(0.0, 0.0, 0.0), v3(2.0, 0.0, 0.0), v3(2.0, 2.0, 0.0), v3(0.0, 2.0, 0.0), v3(1.0, 1.0, 0.0)]) - 4.0).abs() < 1e-4);
     }
 
     #[test]

@@ -5030,7 +5030,7 @@ public:
     int mode = 1;
     double detail = 8.0;
 
-    CollisionDialog(QWidget *parent, double startDetail, bool forCompile) : QDialog(parent), detail(startDetail) {
+    CollisionDialog(QWidget *parent, double startDetail, bool forCompile, bool allowSimplified = true) : QDialog(parent), detail(startDetail) {
         setWindowTitle(forCompile ? QStringLiteral("Generate a collision model") : QStringLiteral("New collision layer"));
         auto *v = new QVBoxLayout(this);
         if (forCompile)
@@ -5047,7 +5047,9 @@ public:
         v->addWidget(ct);
         v->addWidget(simpleBtn);
         v->addWidget(st);
-        auto *row = new QHBoxLayout;
+        auto *rowW = new QWidget;
+        auto *row = new QHBoxLayout(rowW);
+        row->setContentsMargins(0, 0, 0, 0);
         row->addSpacing(22);
         row->addWidget(new QLabel(QStringLiteral("Detail size")));
         detailBox = new QComboBox;
@@ -5057,9 +5059,11 @@ public:
         detailBox->setCurrentIndex(di < 0 ? detailBox->findData(8) : di);
         row->addWidget(detailBox);
         row->addStretch(1);
-        v->addLayout(row);
+        v->addWidget(rowW);
         count = new QLabel;
         v->addWidget(count);
+        // Simplified collision is an Advanced feature (Settings → Advanced mode)
+        for (QWidget *w : {static_cast<QWidget *>(simpleBtn), static_cast<QWidget *>(st), rowW, static_cast<QWidget *>(count)}) w->setVisible(allowSimplified);
         auto *bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
         bb->button(QDialogButtonBox::Ok)->setText(forCompile ? QStringLiteral("Generate") : QStringLiteral("Create"));
         if (forCompile) {
@@ -5067,7 +5071,7 @@ public:
             QObject::connect(without, &QPushButton::clicked, this, [this] { mode = -1; accept(); });
         }
         v->addWidget(bb);
-        simpleBtn->setChecked(true);
+        (allowSimplified ? simpleBtn : complexBtn)->setChecked(true);
         timer.setSingleShot(true);
         timer.setInterval(250);
         QObject::connect(&timer, &QTimer::timeout, this, [this] { recount(); });
@@ -5080,7 +5084,7 @@ public:
         });
         QObject::connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
         resize(520, sizeHint().height());
-        QTimer::singleShot(0, this, [this] { recount(); });
+        if (allowSimplified) QTimer::singleShot(0, this, [this] { recount(); });
     }
 
 private:
@@ -5304,10 +5308,10 @@ public:
     // ---------------------------------------------------------- physics
 
     void newCollisionLayer() {
-        int mode = 1;
+        int mode = prefs.advanced ? 1 : 0; // Simple mode: a Complex copy, no question to answer
         double detail = prefs.simplifyDetail;
-        if (!qEnvironmentVariableIsSet("BONK_ASSUME_YES")) {
-            CollisionDialog d(this, prefs.simplifyDetail, false);
+        if (prefs.advanced && !qEnvironmentVariableIsSet("BONK_ASSUME_YES")) {
+            CollisionDialog d(this, prefs.simplifyDetail, false, prefs.advanced);
             if (d.exec() != QDialog::Accepted) return;
             mode = d.mode;
             detail = d.detail;
@@ -6841,9 +6845,9 @@ public:
         if (bonk_collision_pieces() == 0) {
             // no collision layer: generate one for this compile (complex or simplified), or go without
             if (qEnvironmentVariableIsSet("BONK_ASSUME_YES")) {
-                physMode = 2;
+                physMode = prefs.advanced ? 2 : 1;
             } else {
-                CollisionDialog d(this, prefs.simplifyDetail, true);
+                CollisionDialog d(this, prefs.simplifyDetail, true, prefs.advanced);
                 if (d.exec() != QDialog::Accepted) return;
                 if (d.mode < 0) withPhys = false;
                 else physMode = d.mode == 1 ? 2 : 1;
@@ -8631,7 +8635,7 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                 }
                 else if (c == QStringLiteral("spawnlist")) w.openSpawnlists();
                 else if (c == QStringLiteral("spawnwrite")) w.writeSpawnlistQuiet();
-                else if (c == QStringLiteral("coldlg")) { auto *d = new CollisionDialog(&w, w.prefs.simplifyDetail, false); d->setAttribute(Qt::WA_DeleteOnClose); d->show(); }
+                else if (c == QStringLiteral("coldlg")) { auto *d = new CollisionDialog(&w, w.prefs.simplifyDetail, false, w.prefs.advanced); d->setAttribute(Qt::WA_DeleteOnClose); d->show(); }
                 else if (c.startsWith(QStringLiteral("anim:"))) w.importAnimation(c.mid(5).split(QLatin1Char('|')));
                 else if (c.startsWith(QStringLiteral("selusing:"))) { QByteArray k = c.mid(9).toUtf8(); bonk_select_faces_with(k.constData()); w.handle(F_R3D | F_R2D | F_TOOL); }
                 else if (c == QStringLiteral("convertall")) { if (w.picker->convertReq) w.picker->convertReq({}); }
