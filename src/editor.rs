@@ -371,7 +371,7 @@ pub mod cmd {
     pub const TOOL_CAR: i32 = 39;
     /// The Select button's right half: box select (again: instant ↔ Enter)
     pub const TOGGLE_SEL_BOX_MODE: i32 = 40;
-    /// Ctrl+J: join the selected brushes (hull, or exact only, as Settings says)
+    /// J (Join Brushes): join the selected brushes (hull, or exact only, as Settings says)
     pub const JOIN: i32 = 41;
     /// Edit → Join Brushes (Hull) / (Exact)
     pub const JOIN_HULL: i32 = 42;
@@ -481,7 +481,7 @@ pub struct Editor {
     mat_anim_acc: f32,
     /// Detail size for simplified collision made while compiling
     pub simplify_detail: f32,
-    /// Ctrl+J only joins when the result is exactly the same shape (Settings → Editing)
+    /// J (Join Brushes) only joins when the result is exactly the same shape (Settings → Editing)
     pub join_exact_only: bool,
     /// A hold (G / R) started in the 3D view: nothing to pin the cursor to
     hold_in_3d: bool,

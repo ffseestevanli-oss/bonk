@@ -17,12 +17,32 @@ use std::fmt::Write;
 
 /// Material names in the SMD (and VMT file names): the texture's path with
 /// "/" turned into "_", since every VMT of a model sits in one folder.
+/// Solid colors (colors/ffffff) get the model's name in front, so two
+/// models' color materials never share a file: house_colors_ffffff.
 pub fn flat_material(key: &str) -> String {
     if key.is_empty() {
-        "none".into()
-    } else {
-        key.replace('/', "_")
+        return "none".into();
     }
+    let flat = key.replace('/', "_");
+    COLOR_PREFIX.with(|p| {
+        let p = p.borrow();
+        if key.starts_with("colors/") && !p.is_empty() {
+            format!("{}_{}", p, flat)
+        } else {
+            flat
+        }
+    })
+}
+
+thread_local! {
+    /// The model's name, for color materials (set while compiling).
+    pub static COLOR_PREFIX: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());
+}
+
+/// The color-material prefix for a model path ("props/house" → "house").
+pub fn color_prefix_for(model_path: &str) -> String {
+    let base = model_path.trim_end_matches(".mdl").rsplit('/').next().unwrap_or("");
+    base.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c.to_ascii_lowercase() } else { '_' }).collect()
 }
 
 fn header(o: &mut String) {
@@ -354,6 +374,11 @@ mod tests {
         assert_eq!(corners.len(), 8, "{corners:#?}");
         assert_eq!(used_materials(&e), vec![("walls/red_brick".to_string(), 5)]);
         assert_eq!(flat_material("walls/stone_pack/cobble"), "walls_stone_pack_cobble");
+        COLOR_PREFIX.with(|p| *p.borrow_mut() = color_prefix_for("props/My House.mdl"));
+        assert_eq!(flat_material("colors/ffffff"), "my_house_colors_ffffff");
+        assert_eq!(flat_material("walls/brick"), "walls_brick");
+        COLOR_PREFIX.with(|p| p.borrow_mut().clear());
+        assert_eq!(flat_material("colors/ffffff"), "colors_ffffff");
     }
 
     /// Triangles wind counterclockwise seen from outside (as Blender Source

@@ -202,6 +202,7 @@ int bonk_export_smd(const char *reference, const char *phys, int phys_mode, int 
 int bonk_collision_pieces();
 const char *bonk_used_materials();
 const char *bonk_variant_export_info();
+const char *bonk_set_color_prefix(const char *modelPath);
 const char *bonk_vmf_scan(const char *path);
 int bonk_vmf_import(const char *path, const char *skip);
 const char *bonk_vmf_report();
@@ -376,10 +377,11 @@ struct Prefs {
     bool nd2d = false;           // nodraw stripes in the 2D views
     // Budget limits (GMod studiomdl defaults)
     int budTris = 10922, budVerts = 65536, budMats = 64, budPieces = 1200; // pieces: the bar turns yellow above it
-    bool joinExactOnly = false;  // Ctrl+J only joins when the shape stays exactly the same
+    bool joinExactOnly = false;  // J only joins when the shape stays exactly the same
     double simplifyDetail = 8.0; // simplified collision: what counts as a detail (units)
     bool launchGmod = false;     // start Garry's Mod after exporting
     bool openAfterPublish = true; // show the Workshop page after publishing
+    bool advanced = false;        // Advanced mode: every feature (Simple hides the expert ones)
     QString studiomdl;           // a custom studiomdl.exe (empty = Garry's Mod's own)
     bool startScreen = true;     // show the start screen when Bonk opens
     // Garry's Mod
@@ -430,6 +432,7 @@ struct Prefs {
         simplifyDetail = s.value("collision/simplifyDetail", 8.0).toDouble();
         launchGmod = s.value("gmod/launchAfterExport", false).toBool();
         openAfterPublish = s.value("workshop/openAfterPublish", true).toBool();
+        advanced = s.value("ui/advanced", false).toBool();
         studiomdl = s.value("gmod/studiomdl").toString();
         startScreen = s.value("ui/startScreen", true).toBool();
         gmodPath = s.value("gmod/path").toString();
@@ -483,6 +486,7 @@ struct Prefs {
         s.setValue("collision/simplifyDetail", simplifyDetail);
         s.setValue("gmod/launchAfterExport", launchGmod);
         s.setValue("workshop/openAfterPublish", openAfterPublish);
+        s.setValue("ui/advanced", advanced);
         s.setValue("gmod/studiomdl", studiomdl);
         s.setValue("ui/startScreen", startScreen);
         s.setValue("gmod/path", gmodPath);
@@ -854,6 +858,25 @@ public:
         QVBoxLayout *gmodTab = page(QStringLiteral("Garry's Mod"));
         QVBoxLayout *advTab = page(QStringLiteral("Advanced"));
 
+        // Simple / Advanced
+        auto *modeBox = new QGroupBox(QStringLiteral("Mode"));
+        auto *mf = new QVBoxLayout(modeBox);
+        advanced = new QCheckBox(QStringLiteral("Advanced mode: show every feature"));
+        auto *modeNote = new QLabel(QStringLiteral("Simple keeps Bonk easy: it hides Vertex select, the Origin tool, Axis Lock, the selection box options "
+                                                   "(the box takes what it touches), Prefabs and Variants, Import VMF, the Visual ghost and Collision look "
+                                                   "(collision shows solid), Simplified collision and addon models in the Spawnlist Editor."));
+        modeNote->setWordWrap(true);
+        modeNote->setEnabled(false);
+        mf->addWidget(advanced);
+        mf->addWidget(modeNote);
+        editTab->addWidget(modeBox);
+        QObject::connect(advanced, &QCheckBox::toggled, this, [this](bool v) {
+            if (syncing) return;
+            p.advanced = v;
+            for (QWidget *w : {static_cast<QWidget *>(selTouch), static_cast<QWidget *>(axisLock)}) w->setVisible(v);
+            changed();
+        });
+
         // Editing
         auto *editing = new QGroupBox(QStringLiteral("Editing"));
         auto *ef = new QFormLayout(editing);
@@ -884,9 +907,9 @@ public:
         axisLock->setToolTip(QStringLiteral("The move stays on the axis you move along most. Alt while holding flips it for that move.\n"
                                             "Same as the Axis Lock button under Selection Options."));
         ef->addRow(axisLock);
-        joinExact = new QCheckBox(QStringLiteral("Ctrl+J joins only when the shape stays exactly the same"));
+        joinExact = new QCheckBox(QStringLiteral("J (Join Brushes) only joins when the shape stays exactly the same"));
         joinExact->setToolTip(QStringLiteral("Off (default): brushes that don't make one convex shape are wrapped in a hull.\n"
-                                             "On: Ctrl+J refuses those; Edit → Join Brushes (Hull) still wraps them."));
+                                             "On: J refuses those; Edit → Join Brushes (Hull) still wraps them."));
         ef->addRow(joinExact);
         QObject::connect(joinExact, &QCheckBox::toggled, this, [this](bool v) { if (!syncing) { p.joinExactOnly = v; changed(); } });
         ef->addRow(swapAlt);
@@ -1230,7 +1253,7 @@ private:
     QLabel *lowPreview, *ndWidthLabel, *ndFlowLabel;
     QPushButton *ndColor;
     QSlider *ndIntensity, *ndSpeed, *ndWidth, *ndFlow;
-    QCheckBox *nd2d, *selTouch, *exportAfter, *selWait, *axisLock, *askResize, *launchGmod, *joinExact, *openAfterPublish;
+    QCheckBox *nd2d, *selTouch, *exportAfter, *selWait, *axisLock, *askResize, *launchGmod, *joinExact, *openAfterPublish, *advanced;
     QLineEdit *studiomdl;
     QLineEdit *gmodPath;
     QComboBox *proton;
@@ -1336,6 +1359,9 @@ private:
         exportAfter->setChecked(v.exportAfterCompile);
         launchGmod->setChecked(v.launchGmod);
         openAfterPublish->setChecked(v.openAfterPublish);
+        advanced->setChecked(v.advanced);
+        selTouch->setVisible(v.advanced);
+        axisLock->setVisible(v.advanced);
         studiomdl->setText(v.studiomdl);
         joinExact->setChecked(v.joinExactOnly);
         grid->setValue(v.gridIntensity);
@@ -1516,10 +1542,12 @@ protected:
             QFont f = uiPx(font(), std::clamp(int(height() * 0.29), 10, 13));
             f.setBold(active);
             p.setFont(f);
-            QRectF tr(iconRect.right() + height() * 0.18, 0, width() - iconRect.right() - height() * 0.18 - 18 - (corner ? corner->width() + 4 : 0), height());
-            // labels go away when they don't fit
-            if (QFontMetrics(f).horizontalAdvance(label) <= tr.width())
-                p.drawText(tr, Qt::AlignVCenter | Qt::AlignLeft, label);
+            QRectF tr(iconRect.right() + height() * 0.18, 0,
+                      width() - iconRect.right() - height() * 0.18 - (badge.isEmpty() ? 6 : 18) - (corner ? corner->width() + 4 : 0), height());
+            // a label that doesn't fit gets smaller, then shortened; it never disappears
+            for (int px = f.pixelSize(); px > 8 && QFontMetrics(f).horizontalAdvance(label) > tr.width(); --px) f.setPixelSize(px - 1);
+            p.setFont(f);
+            p.drawText(tr, Qt::AlignVCenter | Qt::AlignLeft, QFontMetrics(f).elidedText(label, Qt::ElideRight, int(tr.width())));
         }
         p.setOpacity(1.0);
         QFont f = uiPx(font(), std::clamp(int(height() * 0.25), 8, 12));
@@ -1642,7 +1670,14 @@ public:
         auto *v = new QVBoxLayout(this);
         v->setContentsMargins(gCompact ? 6 : 10, gCompact ? 2 : 4, gCompact ? 6 : 10, gCompact ? 4 : 8);
         v->setSpacing(gCompact ? 3 : 6);
-        auto section = [&](const char *title, const ToolDef *defs, int n) {
+        auto section = [&](const char *title, const ToolDef *all, int count) {
+            // tools hidden right now (collision editing, Simple mode) are left out
+            std::vector<ToolDef> shown;
+            for (int i = 0; i < count; ++i)
+                if (!hidden.contains(QString::fromLatin1(all[i].icon))) shown.push_back(all[i]);
+            const ToolDef *defs = shown.data();
+            const int n = int(shown.size());
+            if (n == 0) return;
             v->addWidget(new SectionHeader(QString::fromUtf8(title)));
             const int perRow = mode == 0 ? 3 : 1;
             for (int row = 0; row < n; row += perRow) {
@@ -1671,7 +1706,7 @@ public:
                         b->corner = selectBox;
                         b->placeCorner();
                     }
-                    if (d.cmd == CMD_TOOL_VERTEX) {
+                    if (d.cmd == CMD_TOOL_VERTEX && !hidden.contains(QStringLiteral("vertex-pick"))) {
                         // [ Vertex  3 |↖] : the segment turns on vertex select
                         vertexPick = new ToolButton(b);
                         vertexPick->small = true;
@@ -1760,6 +1795,13 @@ public:
 
     int layoutMode() const { return mode; }
     std::function<void(unsigned)> repaint; // after the shape changes
+    /// Tools to leave out (by icon name, plus "vertex-pick"); rebuilds when it changes.
+    QSet<QString> hidden;
+    void setHidden(const QSet<QString> &h) {
+        if (h == hidden) return;
+        hidden = h;
+        setLayoutMode(mode);
+    }
 
     void sync(int tool, int bisectMode, bool hammer, bool grey, bool textureOpen) {
         lastSync = [this, tool, bisectMode, hammer, grey, textureOpen] { sync(tool, bisectMode, hammer, grey, textureOpen); };
@@ -1886,6 +1928,10 @@ private:
 /// how visible it is.
 class LayersPane : public QWidget {
 public:
+    QWidget *ghostRow = nullptr;
+    QWidget *lookRowW = nullptr;
+    bool simple = false; // Simple mode: no Visual ghost / Collision look rows
+
     std::function<void(unsigned)> changed;
     std::function<void()> toggleCollisionLook;
     std::function<void()> newCollision; // + Collision: ask Complex or Simplified
@@ -1924,7 +1970,8 @@ public:
         gr->addWidget(ghost, 1);
         v->addWidget(ghostRow);
         // View → Collision Look, by the ghost slider: orange glass or solid pieces in their own colors
-        auto *lookRow = new QHBoxLayout;
+        lookRowW = new QWidget;
+        auto *lookRow = new QHBoxLayout(lookRowW);
         lookRow->setContentsMargins(0, 0, 0, 0);
         auto *ll = new QLabel(QStringLiteral("Collision look"));
         lookBtn = new QToolButton;
@@ -1938,7 +1985,7 @@ public:
         QObject::connect(lookBtn, &QToolButton::clicked, this, [this] { if (toggleCollisionLook) toggleCollisionLook(); });
         lookRow->addWidget(ll);
         lookRow->addWidget(lookBtn, 1);
-        v->addLayout(lookRow);
+        v->addWidget(lookRowW);
         bonk_set_ghost_opacity(ghost->value() / 100.0f);
 
         auto *addRow = new QHBoxLayout;
@@ -2166,7 +2213,8 @@ public:
 
     /// Rebuild the tree if the document's layers or groups changed.
     void refresh(bool force = false) {
-        ghostRow->setVisible(bonk_editing_collision());
+        ghostRow->setVisible(bonk_editing_collision() && !simple);
+        if (lookRowW) lookRowW->setVisible(!simple);
         unsigned long long rev = bonk_layers_rev();
         if (!force && rev == lastRev) return;
         lastRev = rev;
@@ -2259,7 +2307,6 @@ public:
 
 private:
     QTreeWidget *tree;
-    QWidget *ghostRow;
     QSlider *ghost;
     QToolButton *lookBtn;
     int keepGroup = 0, shownGroup = -1;
@@ -3918,6 +3965,7 @@ public:
     std::function<void(const QStringList &, const QString &)> dropped; // paths, group ("" = ask)
     std::function<void()> switchToFace;     // swatch clicked outside Face Select & Paint
     std::function<void(const QStringList &)> convertReq; // keys to convert ([] = all)
+    std::function<QSet<QString>()> otherModelKeys;        // textures only the project's other models use
     std::function<void(const QString &)> propertiesReq;   // double-clicked a project texture
     /// File operations for the main window: op is cut / copy / paste / move /
     /// rename / delete / newfolder / renamefolder / deletefolder / color;
@@ -3974,6 +4022,15 @@ public:
         fr->addWidget(filter, 3);
         fr->addWidget(group, 2);
         v->addLayout(fr);
+        thisModelOnly = new QCheckBox(QStringLiteral("Hide other models' textures"));
+        thisModelOnly->setToolTip(QStringLiteral("Leaves out textures that only the project's other models use (ones this model uses stay),\n"
+                                                 "and textures in the models/ folder (Source's materials/models: other models' skins)."));
+        thisModelOnly->setChecked(QSettings().value("picker/thisModelOnly", false).toBool());
+        QObject::connect(thisModelOnly, &QCheckBox::toggled, this, [this](bool on) {
+            QSettings().setValue("picker/thisModelOnly", on);
+            rebuild();
+        });
+        v->addWidget(thisModelOnly);
         crumbs = new QLabel;
         crumbs->setTextFormat(Qt::RichText);
         crumbs->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
@@ -4152,6 +4209,10 @@ public:
         }
 
         list->clear();
+        const QSet<QString> others = thisModelOnly->isChecked() && otherModelKeys ? otherModelKeys() : QSet<QString>();
+        auto otherModels = [&](const QString &key) {
+            return thisModelOnly->isChecked() && (others.contains(key) || key.startsWith(QStringLiteral("models/")));
+        };
         const bool showBuiltins = mode == QStringLiteral("@") || mode == QStringLiteral("*") || (browse && dir.isEmpty()) ||
                                   (!f.isEmpty() && (QStringLiteral("nodraw").contains(f)));
         if (showBuiltins) {
@@ -4163,7 +4224,8 @@ public:
                 const QString parent = g.contains(QLatin1Char('/')) ? g.section(QLatin1Char('/'), 0, -2) : QString();
                 if (parent != dir) continue;
                 int n = 0;
-                for (const TexEntry &e : lib->entries) n += e.group == g || e.group.startsWith(g + QLatin1Char('/'));
+                for (const TexEntry &e : lib->entries) n += (e.group == g || e.group.startsWith(g + QLatin1Char('/'))) && !otherModels(e.key);
+                if (n == 0 && thisModelOnly->isChecked()) continue; // only other models' textures in there
                 auto *it = new QListWidgetItem(folderIcon(), g.section(QLatin1Char('/'), -1));
                 it->setData(Qt::UserRole, g);
                 it->setData(Qt::UserRole + 1, 4);
@@ -4178,6 +4240,7 @@ public:
         for (const TexEntry &e : lib->entries) {
             unconverted += !e.converted;
             if (mode == QStringLiteral("@") && f.isEmpty()) continue;
+            if (otherModels(e.key)) continue;
             if (browse && e.group != dir) continue;
             if (!f.isEmpty() && !e.key.contains(f) && !QFileInfo(e.rel).completeBaseName().toLower().contains(f)) continue;
             const bool over = !QString::fromUtf8(bonk_mat_override(e.key.toUtf8().constData())).isEmpty();
@@ -4334,6 +4397,7 @@ private:
     QLabel *target, *current, *hint, *crumbs;
     QString dir; // folder being browsed
     QLineEdit *filter;
+    QCheckBox *thisModelOnly;
     QComboBox *group;
     SwatchList *list;
     QSlider *zoom;
@@ -4863,7 +4927,7 @@ public:
         meters[3]->setToolTip(QStringLiteral("Convex pieces in the collision layers: each collision brush is one.\n"
                                              "Bonk raises studiomdl's limit as needed; past %1 the meter turns yellow:\n"
                                              "an expensive collision mesh, but the model may still work fine.\n"
-                                             "Simplified collision (or Ctrl+J) brings it down.\n\nClick to select them.").arg(limits.pieces));
+                                             "Simplified collision (or J, Join Brushes) brings it down.\n\nClick to select them.").arg(limits.pieces));
     }
 
 private:
@@ -4965,6 +5029,10 @@ public:
     QAction *toolSelect, *toolBlock, *toolVertex, *toolBisect, *toolMannequin, *toolOrigin, *toolFace;
     QAction *texAction = nullptr, *showMannequins = nullptr, *ignoreGroupsAct = nullptr, *nodraw2dAct = nullptr, *edges3dAct = nullptr;
     QAction *lookGhost = nullptr, *lookSolid = nullptr;
+    QAction *importVmfAct = nullptr, *savePrefabAct = nullptr, *lookMenuAct = nullptr;
+    bool modeApplying = false;     // applyMode() is running
+    bool pickerHiddenForCollision = false; // the Texture Picker was put away while editing collision
+    int appliedMode = -1;          // 0 Simple, 1 Advanced (as last applied)
     QSpinBox *fovSpin = nullptr;
     ToolPanel *panel = nullptr;
     LayersPane *layers = nullptr;
@@ -4990,12 +5058,69 @@ public:
     QPoint pinLocal;
     QPointF pinVirt;
 
+    QSplitter *rowTop = nullptr, *rowBottom = nullptr;
+    bool expanded3d = false, full3d = false;
+    QList<QDockWidget *> fullHidDocks; // put away for F4
+    bool fullWasMax = false;
+
+    /// Shift+Z: the 3D view fills the views' area (press again for all four).
+    void setExpand3d(bool on) {
+        if (on == expanded3d) return;
+        expanded3d = on;
+        for (int i = 1; i < 4; ++i) views[i]->setVisible(!on);
+        rowBottom->setVisible(!on);
+        if (!on) rowBottom->setSizes(rowTop->sizes());
+        views[0]->setFocus();
+        statusBar()->showMessage(on ? QStringLiteral("3D view expanded (Shift+Z for all four views)") : QString(), 3000);
+    }
+    void toggleExpand3d() {
+        if (full3d) toggleFull3d(); // F4 includes the expansion
+        else setExpand3d(!expanded3d);
+    }
+    /// F4: the 3D view alone, full screen: no menus, panels or status bar.
+    void toggleFull3d() {
+        full3d = !full3d;
+        if (full3d) {
+            fullWasMax = isMaximized();
+            fullHidDocks.clear();
+            for (QDockWidget *d : findChildren<QDockWidget *>())
+                if (d->isVisible() && !d->isFloating()) {
+                    fullHidDocks << d;
+                    d->hide();
+                }
+            menuBar()->hide();
+            statusBar()->hide();
+            setExpand3d(true);
+            showFullScreen();
+        } else {
+            for (QDockWidget *d : fullHidDocks) d->show();
+            fullHidDocks.clear();
+            menuBar()->show();
+            statusBar()->show();
+            setExpand3d(false);
+            if (fullWasMax) showMaximized();
+            else showNormal();
+        }
+        views[0]->setFocus();
+    }
+
+    unsigned long long viewsRev = 0;
+    bool lastColl = false; // the document edit all four views were last drawn for
     void handle(unsigned flags, Viewport *src = nullptr) {
+        // any edit (deleting brushes too) redraws every view, so nothing it removed lingers in one
+        if (const unsigned long long rev = bonk_layers_rev(); rev != viewsRev) {
+            viewsRev = rev;
+            flags |= F_R3D | F_R2D;
+        }
         if (flags & F_CAP_ON) setCapture(true);
         if (flags & F_CAP_OFF) setCapture(false);
         if (flags & F_R3D) views[0]->update();
         if (flags & F_R2D)
             for (int i = 1; i < 4; ++i) views[i]->update();
+        if (const bool coll = bonk_editing_collision(); coll != lastColl) {
+            lastColl = coll; // into or out of collision editing: Paint and Texture come and go
+            flags |= F_TOOL;
+        }
         if (flags & F_TOOL) {
             syncTool();
             if (picker) picker->syncCurrent();
@@ -5665,7 +5790,75 @@ public:
         setWindowModified(bonk_is_dirty());
     }
 
+    /// What's on offer right now: Simple mode hides the expert features, and
+    /// collision editing hides painting and textures.
+    void applyMode() {
+        if (modeApplying || !panel) return;
+        modeApplying = true;
+        const bool adv = prefs.advanced, coll = bonk_editing_collision();
+        QSet<QString> hide;
+        if (coll) hide << QStringLiteral("face") << QStringLiteral("texture");
+        if (!adv) hide << QStringLiteral("origin") << QStringLiteral("axis-lock") << QStringLiteral("box-touch") << QStringLiteral("vertex-pick");
+        int t = bonk_tool();
+        if ((coll && t == 6) || (!adv && t == 5)) handle(bonk_command(CMD_TOOL_SELECT)); // Paint / Origin → Select
+        if (!adv && bonk_vertex_pick()) handle(bonk_command(CMD_TOGGLE_VERTEX_PICK));
+        int o[4] = {0, 1, 1, 0};
+        bonk_selection_options(o);
+        if (!adv) {
+            // what Simple leaves: the box takes what it touches, no axis lock, solid collision
+            if (!o[1]) handle(bonk_command(CMD_TOGGLE_BOX_TOUCH));
+            if (o[2]) handle(bonk_command(CMD_TOGGLE_AXIS_LOCK));
+            if (!o[3]) handle(bonk_command(CMD_TOGGLE_COLLISION_SOLID));
+        }
+        if (pickerDock) {
+            if (coll && pickerDock->isVisible()) {
+                pickerDock->hide();
+                pickerHiddenForCollision = true;
+                if (layersDock) layersDock->raise();
+            } else if (!coll && pickerHiddenForCollision) {
+                pickerDock->show();
+                pickerHiddenForCollision = false;
+            }
+            pickerDock->toggleViewAction()->setEnabled(!coll);
+        }
+        if (appliedMode != int(adv)) {
+            if (adv && appliedMode == 0) {
+                // back to Advanced: the choices you had there
+                bonk_selection_options(o);
+                if (o[1] == prefs.selInsideOnly) handle(bonk_command(CMD_TOGGLE_BOX_TOUCH));
+                if (bool(o[2]) != prefs.axisLock) handle(bonk_command(CMD_TOGGLE_AXIS_LOCK));
+                if (bool(o[3]) != prefs.collisionSolid) handle(bonk_command(CMD_TOGGLE_COLLISION_SOLID));
+            }
+            appliedMode = int(adv);
+            for (QDockWidget *d : {prefabsDock, variantsDock}) {
+                if (!d) continue;
+                d->toggleViewAction()->setVisible(adv);
+                if (!adv) d->hide();
+            }
+            if (adv && prefabsDock && !prefabsDock->isVisible() && QSettings().value("window/simpleHidPanels", false).toBool()) {
+                prefabsDock->show();
+                variantsDock->show();
+                tabifyDockWidget(layersDock, prefabsDock);
+                tabifyDockWidget(prefabsDock, variantsDock);
+                QTimer::singleShot(0, this, [this] { (pickerDock->isVisible() ? pickerDock : layersDock)->raise(); });
+            }
+            QSettings().setValue("window/simpleHidPanels", !adv);
+            for (QAction *a : {importVmfAct, savePrefabAct, lookMenuAct})
+                if (a) a->setVisible(adv);
+            if (layers) {
+                layers->simple = !adv;
+            }
+        }
+        if (layers) {
+            layers->ghostRow->setVisible(coll && adv);
+            if (layers->lookRowW) layers->lookRowW->setVisible(adv);
+        }
+        panel->setHidden(hide);
+        modeApplying = false;
+    }
+
     void syncTool() {
+        applyMode();
         int t = bonk_tool();
         const int bmode = bonk_bisect_delete();
         toolSelect->setChecked(t == 0);
@@ -6435,10 +6628,13 @@ public:
         bool exportAfter = false;
     } job;
 
-    static QString flatName(const QString &key) {
+    QString colorPrefix; // the model being compiled: its color materials are named after it
+    QString flatName(const QString &key) const {
         if (key.isEmpty()) return QStringLiteral("none");
         QString k = key;
-        return k.replace(QLatin1Char('/'), QLatin1Char('_'));
+        k.replace(QLatin1Char('/'), QLatin1Char('_'));
+        if (key.startsWith(QStringLiteral("colors/")) && !colorPrefix.isEmpty()) k = colorPrefix + QLatin1Char('_') + k;
+        return k;
     }
 
     /// Tell the 3D view which textures are cut-outs or see-through (from
@@ -6623,6 +6819,7 @@ public:
         const QString refSmd = work + QStringLiteral("/reference.smd"), phySmd = work + QStringLiteral("/physics.smd");
         QFile::remove(phySmd);
         int out[3] = {0, 0, 0};
+        colorPrefix = QString::fromUtf8(bonk_set_color_prefix(mp.toUtf8().constData())); // house_colors_ffffff
         if (bonk_export_smd(QFile::encodeName(refSmd).constData(), withPhys ? QFile::encodeName(phySmd).constData() : nullptr,
                             physMode, out) != 0) {
             QMessageBox::critical(this, QStringLiteral("Compile"), QString::fromUtf8(bonk_last_error()));
@@ -6632,8 +6829,12 @@ public:
         cw->start(QStringLiteral("models/%1.mdl").arg(mp));
         cw->show();
         cw->raise();
-        if (withPhys && out[1] > 128) cw->note(QStringLiteral("%1 collision pieces is a lot: physics gets slow and studiomdl may refuse. "
-                                                              "A collision layer with a few simple boxes works much better for big models.").arg(out[1]));
+        if (withPhys && out[1] >= 500)
+            cw->note(QStringLiteral("%1 collision pieces is a lot: physics gets slow and studiomdl may refuse. "
+                                    "A collision layer with a few simple boxes works much better for big models.").arg(out[1]));
+        else if (withPhys && out[1] > 128)
+            cw->note(QStringLiteral("%1 collision pieces is a lot, but based on testing it appears to be within a safe range and StudioMDL "
+                                    "should accept it. If you're having trouble, consider stripping it down further.").arg(out[1]));
         if (out[2] > 0) cw->note(QStringLiteral("Left %1 collision piece%2 out: thinner than half a unit, which studiomdl can't use "
                                                 "(it would give up and shrink-wrap the whole model).").arg(out[2]).arg(out[2] == 1 ? QString() : QStringLiteral("s")));
         if (physMode == 1) cw->note(QStringLiteral("Collision generated from the visual brushes (%1 piece%2).").arg(out[1]).arg(out[1] == 1 ? QString() : QStringLiteral("s")));
@@ -6946,6 +7147,29 @@ public:
 
     QStringList clipKeys; // texture clipboard (material names)
     bool clipCut = false;
+
+    /// Textures the project's other models use and the open one doesn't
+    /// (cached until a model file changes).
+    QSet<QString> otherModelKeys() {
+        static QString stamp;
+        static QSet<QString> cachedOthers;
+        QString now;
+        const QStringList files = otherModels();
+        for (const QString &f : files) now += f + QString::number(QFileInfo(f).lastModified().toMSecsSinceEpoch());
+        if (now != stamp) {
+            stamp = now;
+            cachedOthers.clear();
+            static const QRegularExpression re(QStringLiteral("\"mat\"\\s+\"([^\"]*)\""));
+            for (const QString &f : files) {
+                QFile fl(f);
+                if (!fl.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
+                for (auto it = re.globalMatch(QString::fromUtf8(fl.readAll())); it.hasNext();) cachedOthers.insert(it.next().captured(1));
+            }
+        }
+        QSet<QString> out = cachedOthers;
+        for (const QString &m : QString::fromUtf8(bonk_used_materials()).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) out.remove(m);
+        return out;
+    }
 
     /// Model files in this project other than the open one.
     QStringList otherModels(bool includeOpen = false) const {
@@ -7705,6 +7929,24 @@ void Viewport::wheelEvent(QWheelEvent *e) {
 }
 
 void Viewport::keyPressEvent(QKeyEvent *e) {
+    // Shift+Z: 3D view fills the area; F4: 3D view full screen (any view)
+    if (!e->isAutoRepeat() && !mw->captured && ((e->key() == Qt::Key_Z && e->modifiers() == Qt::ShiftModifier) || e->key() == Qt::Key_F4)
+        && !(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
+        if (e->key() == Qt::Key_F4) mw->toggleFull3d();
+        else mw->toggleExpand3d();
+        e->accept();
+        return;
+    }
+    // A in a 2D view: Axis Lock on / off
+    if (id != 0 && e->key() == Qt::Key_A && !e->isAutoRepeat() && (e->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier)) == 0
+        && !mw->captured && mw->prefs.advanced) {
+        mw->command(CMD_TOGGLE_AXIS_LOCK);
+        int o[4] = {0, 1, 1, 0};
+        bonk_selection_options(o);
+        mw->statusBar()->showMessage(o[2] ? QStringLiteral("Axis Lock on (A)") : QStringLiteral("Axis Lock off (A)"), 3000);
+        e->accept();
+        return;
+    }
     // Auto-repeat presses are forwarded (arrow-key nudging repeats while held).
     mw->handle(bonk_key(id, e->key(), 1, modsOf(e->modifiers()), e->isAutoRepeat() ? 1 : 0), this);
     e->accept();
@@ -7739,10 +7981,10 @@ MainWindow::MainWindow() {
     for (int i = 0; i < 4; ++i) views[i] = new Viewport(i, this);
 
     // Hammer layout: camera | top / front | side
-    auto *topRow = new QSplitter(Qt::Horizontal);
+    auto *topRow = rowTop = new QSplitter(Qt::Horizontal);
     topRow->addWidget(views[0]);
     topRow->addWidget(views[1]);
-    auto *bottomRow = new QSplitter(Qt::Horizontal);
+    auto *bottomRow = rowBottom = new QSplitter(Qt::Horizontal);
     bottomRow->addWidget(views[2]);
     bottomRow->addWidget(views[3]);
     auto *cols = new QSplitter(Qt::Vertical);
@@ -7777,6 +8019,7 @@ MainWindow::MainWindow() {
     picker->dropped = [this](const QStringList &paths, const QString &g) { importPaths(paths, g, g.isEmpty()); };
     picker->switchToFace = [this] { command(CMD_TOOL_FACE); };
     picker->convertReq = [this](const QStringList &keys) { convertTextures(keys); };
+    picker->otherModelKeys = [this] { return otherModelKeys(); };
     picker->propertiesReq = [this](const QString &key) { materialProperties(key); };
     picker->fileReq = [this](const QString &op, const QStringList &keys, const QString &arg) { textureFileOp(op, keys, arg); };
     picker->switchOnClick = prefs.swatchSwitchesTool;
@@ -7894,7 +8137,7 @@ MainWindow::MainWindow() {
     fn(file, QStringLiteral("Save &As…"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S), [this] { saveAs(); });
     fn(file, QStringLiteral("&Model Properties…"), QKeySequence(Qt::CTRL | Qt::Key_P), [this] { modelProperties(); });
     file->addSeparator();
-    fn(file, QStringLiteral("&Import VMF…"), QKeySequence(Qt::CTRL | Qt::Key_I), [this] { importVmf(); });
+    importVmfAct = fn(file, QStringLiteral("&Import VMF…"), QKeySequence(Qt::CTRL | Qt::Key_I), [this] { importVmf(); });
     fn(file, QStringLiteral("Import Source &Textures…"), QKeySequence(), [this] { importSourceTextures(); });
     file->addSeparator();
     fn(file, QStringLiteral("&Compile Model"), QKeySequence(Qt::Key_F9), [this] { compileModel(); });
@@ -7918,7 +8161,7 @@ MainWindow::MainWindow() {
     fn(edit, QStringLiteral("&Paste"), QKeySequence::Paste, [this] { pasteClipboard(false); })
         ->setToolTip(QStringLiteral("Paste in the same spot it was copied from (works across models and projects)"));
     fn(edit, QStringLiteral("Paste Under the &Mouse"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_V), [this] { pasteClipboard(true); });
-    fn(edit, QStringLiteral("Save Selection as Pre&fab…"), QKeySequence(), [this] { savePrefab(); });
+    savePrefabAct = fn(edit, QStringLiteral("Save Selection as Pre&fab…"), QKeySequence(), [this] { savePrefab(); });
     act(edit, QStringLiteral("&Delete"), QKeySequence::Delete, CMD_DELETE);
     act(edit, QStringLiteral("Select &All"), QKeySequence::SelectAll, CMD_SELECT_ALL);
     edit->addSeparator();
@@ -7927,7 +8170,7 @@ MainWindow::MainWindow() {
     act(edit, QStringLiteral("&Group"), QKeySequence(Qt::CTRL | Qt::Key_G), CMD_GROUP);
     act(edit, QStringLiteral("U&ngroup"), QKeySequence(Qt::CTRL | Qt::Key_U), CMD_UNGROUP);
     edit->addSeparator();
-    act(edit, QStringLiteral("&Join Brushes"), QKeySequence(Qt::CTRL | Qt::Key_J), CMD_JOIN)
+    act(edit, QStringLiteral("&Join Brushes"), QKeySequence(Qt::Key_J), CMD_JOIN)
         ->setToolTip(QStringLiteral("One convex brush from the selection (hull, or exact only: Settings → Editing)"));
     act(edit, QStringLiteral("Join Brushes (&Hull)"), QKeySequence(), CMD_JOIN_HULL);
     act(edit, QStringLiteral("Join Brushes (E&xact Only)"), QKeySequence(), CMD_JOIN_EXACT);
@@ -7973,6 +8216,7 @@ MainWindow::MainWindow() {
     edges3dAct->setCheckable(true);
     bonk_set_show_edges(QSettings().value("view/edges3d", true).toBool());
     QMenu *look = view->addMenu(QStringLiteral("&Collision Look"));
+    lookMenuAct = look->menuAction();
     auto *lookGroup = new QActionGroup(this);
     lookGhost = fn(look, QStringLiteral("&Ghosted (orange glass)"), QKeySequence(), [this] { if (prefs.collisionSolid) command(CMD_TOGGLE_COLLISION_SOLID); });
     lookSolid = fn(look, QStringLiteral("&Solid (each piece its own color)"), QKeySequence(), [this] { if (!prefs.collisionSolid) command(CMD_TOGGLE_COLLISION_SOLID); });
@@ -8012,6 +8256,9 @@ MainWindow::MainWindow() {
         fn(view, QStringLiteral("Reset Field of View"), QKeySequence(), [this] { fovSpin->setValue(75); });
         view->addSeparator();
         fn(view, QStringLiteral("&Model Preview…"), QKeySequence(Qt::Key_F7), [this] { openPreview(); });
+        // also on the window itself, so they work with the menu bar hidden (F4)
+        addAction(fn(view, QStringLiteral("E&xpand 3D View"), QKeySequence(Qt::SHIFT | Qt::Key_Z), [this] { toggleExpand3d(); }));
+        addAction(fn(view, QStringLiteral("3D View &Full Screen"), QKeySequence(Qt::Key_F4), [this] { toggleFull3d(); }));
     }
 
     QMenu *tools = menuBar()->addMenu(QStringLiteral("&Tools"));
@@ -8389,6 +8636,8 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                     w.textureFileOp(parts.value(0), parts.value(1).split(QLatin1Char(','), Qt::SkipEmptyParts), parts.value(2));
                 } else if (c.startsWith(QStringLiteral("enter:"))) w.picker->enter(c.mid(6));
                 else if (c == QStringLiteral("addcol")) w.handle(bonk_layer_op(1, 0));
+                else if (c == QStringLiteral("expand3d")) w.toggleExpand3d();
+                else if (c == QStringLiteral("full3d")) w.toggleFull3d();
                 else if (c.startsWith(QStringLiteral("selbox:"))) { // selbox:x0,y0,x1,y1 in the top view
                     const QStringList v = c.mid(7).split(QLatin1Char(','));
                     bonk_view_resize(1, float(w.views[1]->width()), float(w.views[1]->height()));

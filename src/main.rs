@@ -466,7 +466,7 @@ pub extern "C" fn bonk_set_simplify_detail(d: f32) {
     with_ed(|ed| ed.simplify_detail = d.clamp(1.0, 512.0));
 }
 
-/// Ctrl+J joins exactly only (1) or wraps a hull when it must (0).
+/// J (Join Brushes) joins exactly only (1) or wraps a hull when it must (0).
 #[no_mangle]
 pub extern "C" fn bonk_set_join_exact(on: c_int) {
     with_ed(|ed| ed.join_exact_only = on != 0);
@@ -1891,4 +1891,18 @@ mod thumb_tests {
         }
         assert!(thumb_fit(&[], 0.0, 0.0, 30.0, 1.0).is_none());
     }
+}
+
+/// Name color materials after this model while compiling ("" turns it off).
+/// Returns the prefix used.
+#[no_mangle]
+pub extern "C" fn bonk_set_color_prefix(model_path: *const c_char) -> *const c_char {
+    let mp = if model_path.is_null() { String::new() } else { unsafe { std::ffi::CStr::from_ptr(model_path) }.to_string_lossy().into_owned() };
+    let p = export::color_prefix_for(&mp);
+    export::COLOR_PREFIX.with(|c| *c.borrow_mut() = p.clone());
+    thread_local! { static OUT: std::cell::RefCell<std::ffi::CString> = std::cell::RefCell::new(std::ffi::CString::default()); }
+    OUT.with(|o| {
+        *o.borrow_mut() = std::ffi::CString::new(p).unwrap_or_default();
+        o.borrow().as_ptr()
+    })
 }
