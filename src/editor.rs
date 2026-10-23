@@ -6564,6 +6564,8 @@ mod tests {
     #[test]
     fn z_toggles_mouselook_and_wasd_flies() {
         let mut e = editor();
+        e.fly_min = FLY_SPEED; // one steady speed (easing has its own test)
+        e.fly_max = FLY_SPEED;
         let f = e.key(0, key::Z, true, 0, false);
         assert!(f & flags::CAP_ON != 0 && e.captured);
         let before = e.cam.pos;
