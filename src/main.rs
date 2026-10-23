@@ -23,6 +23,7 @@ mod texstore;
 mod vtf;
 mod vtfread;
 mod vmf;
+mod walk;
 
 use math::{v3, V3};
 use editor::{Editor, ViewKind};

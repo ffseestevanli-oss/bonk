@@ -302,6 +302,8 @@ pub mod key {
     pub const DOWN: i32 = 0x0100_0015;
     pub const SHIFT: i32 = 0x0100_0020;
     pub const ALT: i32 = 0x0100_0023;
+    pub const CONTROL: i32 = 0x0100_0021;
+    pub const BACKTICK: i32 = 0x60;
     pub const R: i32 = 0x52;
 }
 
@@ -392,9 +394,14 @@ struct Keys {
     right: bool,
     shift: bool,
     space: bool,
+    ctrl: bool,
 }
 
 pub struct Editor {
+    /// Walk mode (`): the player walking on the collision model, and the camera to go back to
+    pub walk: Option<crate::walk::Walker>,
+    walk_solids: Vec<crate::walk::Solid>,
+    walk_back: Option<(V3, f32, f32)>,
     /// Flying: speed eases from fly_min to fly_max (units/s) at fly_lerp per second; Alt halves it, Shift triples it
     pub fly_min: f32,
     pub fly_max: f32,
@@ -603,6 +610,9 @@ impl Editor {
             work: (v3(0.0, 0.0, 0.0), v3(64.0, 64.0, 64.0)),
             drag: None,
             keys: Keys::default(),
+            walk: None,
+            walk_solids: Vec::new(),
+            walk_back: None,
             fly_min: 300.0,
             fly_max: FLY_SPEED,
             fly_lerp: 3.0,
@@ -3678,6 +3688,9 @@ impl Editor {
             key::DOWN if self.captured => self.keys.down = pressed,
             key::LEFT if self.captured => self.keys.left = pressed,
             key::RIGHT if self.captured => self.keys.right = pressed,
+            key::BACKTICK if pressed => return self.toggle_walk(),
+            key::CONTROL if self.walk.is_some() => self.keys.ctrl = pressed,
+            key::Z if pressed && self.walk.is_some() => return 0, // mouselook stays on while walking
             key::Z if pressed && m & (mods::CTRL | mods::ALT) == 0 => return self.toggle_capture(),
             key::ESCAPE if pressed => return self.escape(),
             key::RETURN | key::ENTER if pressed => {
@@ -4058,7 +4071,80 @@ impl Editor {
         Some((hold.view, b, edges))
     }
 
+    /// ` : walk around the model on its collision, first person (mouselook on).
+    /// Without a collision model there's nothing to stand on: nothing happens.
+    pub fn toggle_walk(&mut self) -> u32 {
+        if self.walk.take().is_some() {
+            if let Some((p, y, pi)) = self.walk_back.take() {
+                self.cam.pos = p;
+                self.cam.yaw = y;
+                self.cam.pitch = pi;
+            }
+            self.walk_solids.clear();
+            self.message = Some("Walk mode off".into());
+            let f = if self.captured { self.toggle_capture() } else { 0 };
+            return f | flags::ALL;
+        }
+        let solids: Vec<crate::walk::Solid> = self
+            .doc
+            .brushes
+            .iter()
+            .filter(|b| b.entity.is_none() && self.doc.is_collision(b))
+            .map(|b| {
+                let (lo, hi) = b.bounds();
+                crate::walk::Solid { planes: b.faces.iter().map(|f| (f.normal, f.dist)).collect(), lo, hi }
+            })
+            .collect();
+        let Some(w) = crate::walk::Walker::new(self.cam.pos, &solids) else { return 0 };
+        self.walk_back = Some((self.cam.pos, self.cam.yaw, self.cam.pitch));
+        self.cam.pos = w.eye();
+        self.walk = Some(w);
+        self.walk_solids = solids;
+        self.drag = None;
+        self.message = Some("Walking: WASD to walk (Shift runs), Space jumps, Ctrl crouches · ` or Esc to stop".into());
+        let mut f = flags::ALL;
+        if !self.captured {
+            f |= self.toggle_capture();
+        }
+        f
+    }
+
+    fn walk_step(&mut self, dt: f32) -> u32 {
+        let k = &self.keys;
+        let ax = |p: bool, n: bool| (p as i32 - n as i32) as f32;
+        let input = crate::walk::Input {
+            forward: ax(k.w || k.up, k.s || k.down),
+            side: ax(k.d, k.a),
+            jump: k.space,
+            crouch: k.ctrl,
+            run: k.shift,
+        };
+        let yaw = self.cam.yaw;
+        let solids = std::mem::take(&mut self.walk_solids);
+        if let Some(w) = self.walk.as_mut() {
+            // small steps keep fast falls from passing through thin floors
+            let mut left = dt.min(0.1);
+            while left > 0.0 {
+                let d = left.min(1.0 / 120.0);
+                w.step(d, yaw, input, &solids);
+                left -= d;
+            }
+            self.cam.pos = w.eye();
+        }
+        self.walk_solids = solids;
+        flags::R3D
+    }
+
     pub fn toggle_capture(&mut self) -> u32 {
+        if self.captured && self.walk.is_some() {
+            self.walk = None; // mouselook going off (focus lost…) ends the walk too
+            if let Some((p, y, pi)) = self.walk_back.take() {
+                self.cam.pos = p;
+                self.cam.yaw = y;
+                self.cam.pitch = pi;
+            }
+            self.walk_solids.clear();
+        }
         self.captured = !self.captured;
         self.drag = None;
         if self.captured {
@@ -4070,6 +4156,9 @@ impl Editor {
     }
 
     fn escape(&mut self) -> u32 {
+        if self.walk.is_some() {
+            return self.toggle_walk();
+        }
         self.shift_hold = None;
         self.move_hold = None;
         self.hold_in_3d = false;
@@ -4250,6 +4339,9 @@ impl Editor {
                     anim |= flags::R3D;
                 }
             }
+        }
+        if self.walk.is_some() {
+            return anim | self.walk_step(dt);
         }
         anim | self.fly(dt)
     }
@@ -5376,6 +5468,27 @@ mod tests {
         e.doc.selection.clear();
         click!(e, 1, sp(&e, 1, 10.0, 50.0), 0);
         assert_eq!(e.doc.selection.len(), 1);
+    }
+
+    #[test]
+    fn backtick_walks_only_on_a_collision_model() {
+        let mut e = Editor::new();
+        e.doc.add_brush(v3(-256.0, -256.0, -16.0), v3(256.0, 256.0, 0.0));
+        e.cam.pos = v3(0.0, 0.0, 100.0);
+        assert_eq!(e.key(0, key::BACKTICK, true, 0, false), 0, "no collision: silently nothing");
+        assert!(e.walk.is_none() && !e.captured);
+        let col = e.doc.add_layer(crate::doc::LayerKind::Collision);
+        e.doc.active_layer = col;
+        e.doc.add_brush(v3(-256.0, -256.0, -16.0), v3(256.0, 256.0, 0.0));
+        let f = e.key(0, key::BACKTICK, true, 0, false);
+        assert!(e.walk.is_some() && e.captured && f & flags::CAP_ON != 0);
+        for _ in 0..120 {
+            e.tick(1.0 / 60.0);
+        }
+        assert!((e.cam.pos.z - 64.0).abs() < 0.5, "eyes at player height on the floor: {:?}", e.cam.pos);
+        e.key(0, key::ESCAPE, true, 0, false);
+        assert!(e.walk.is_none() && !e.captured);
+        assert!((e.cam.pos.z - 100.0).abs() < 1e-3, "the camera goes back where it was");
     }
 
     #[test]
