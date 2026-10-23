@@ -24,9 +24,9 @@ jobs:
           name: bonk-linux-x86_64
           path: target/release/bonk
 
-  # Packages: on version tags (v1.0.0-beta.5…) and when run by hand.
+  # Packages: on every push (download them from the run's Artifacts); a version
+  # tag also attaches them to its release.
   appimage:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +45,6 @@ jobs:
           path: target/appimage/*.AppImage
 
   flatpak:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.8
