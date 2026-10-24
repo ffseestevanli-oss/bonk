@@ -771,6 +771,24 @@ QString defaultProjectsDir();
 /// spawnlists themselves, kept in ~/Bonk Projects/Spawnlist by default.
 QString spnlstDir() { return defaultProjectsDir() + QStringLiteral("/Spawnlist"); }
 
+/// Each spawnlist has its own folder, Spawnlist/<name>/, holding <name>.spnlst
+/// and the Creator's working copy (spawnlist.json, saved as you edit).
+QString spnName(const QString &name) {
+    QString n = name.trimmed();
+    n.replace(QRegularExpression(QStringLiteral("[/\\\\:*?\"<>|]")), QStringLiteral("_"));
+    return n.isEmpty() ? QStringLiteral("spawnlist") : n;
+}
+QString spnFileFor(const QString &name) {
+    const QString n = spnName(name);
+    return spnlstDir() + QLatin1Char('/') + n + QLatin1Char('/') + n + QStringLiteral(".spnlst");
+}
+/// The project the editor works in for a spawnlist file: its folder.
+void spnProject(Project &pj, const QString &file, const QString &addon) {
+    pj.name = QFileInfo(file).completeBaseName();
+    pj.file = QFileInfo(file).absolutePath() + QStringLiteral("/.creator.bonkpj"); // never written: only its folder counts
+    pj.addonOverride = addon;
+}
+
 bool writeSpnlst(const QString &path, const QString &addon, const Spawnlists &data, QString *err) {
     QJsonArray a;
     for (const SpawnCategory &c : data.lists) a.append(catToJson(c));
@@ -1010,24 +1028,33 @@ public:
 
     void updateTitle() {
         if (standaloneAddon.isEmpty()) return;
-        const QString file = spnFile.isEmpty() ? QStringLiteral("Unsaved") : QFileInfo(spnFile).fileName();
-        setWindowTitle(QStringLiteral("%1%2 — %3 — Bonk! Spawnlist Creator").arg(fileDirty ? QStringLiteral("*") : QString(), file, pj.name));
+        setWindowTitle(QStringLiteral("%1%2 — %3 — Bonk! Spawnlist Creator")
+                           .arg(fileDirty ? QStringLiteral("*") : QString(), pj.name, QFileInfo(standaloneAddon).fileName()));
     }
 
     bool saveFile(bool as) {
         QString path = spnFile;
         if (as || path.isEmpty()) {
-            QDir().mkpath(spnlstDir());
-            const QString suggest = spnFile.isEmpty() ? spnlstDir() + QLatin1Char('/') + spawnSlug(pj.name) + QStringLiteral(".spnlst") : spnFile;
-            path = qEnvironmentVariableIsSet("BONK_SPNLST_SAVE") ? qEnvironmentVariable("BONK_SPNLST_SAVE")
-                   : QFileDialog::getSaveFileName(this, QStringLiteral("Save Spawnlist"), suggest, QStringLiteral("Bonk spawnlists (*.spnlst)"));
-            if (path.isEmpty()) return false;
-            if (!path.endsWith(QStringLiteral(".spnlst"), Qt::CaseInsensitive)) path += QStringLiteral(".spnlst");
+            bool ok = true;
+            const QString name = qEnvironmentVariableIsSet("BONK_SPNLST_SAVE") ? qEnvironmentVariable("BONK_SPNLST_SAVE")
+                                 : QInputDialog::getText(this, QStringLiteral("Save Spawnlist As"),
+                                                         QStringLiteral("Name (it gets its own folder in %1):").arg(tildePath(spnlstDir())),
+                                                         QLineEdit::Normal, pj.name, &ok);
+            if (!ok || name.trimmed().isEmpty()) return false;
+            path = spnFileFor(name);
+            if (path != spnFile && QFileInfo::exists(path) && !qEnvironmentVariableIsSet("BONK_SCREENSHOT") &&
+                QMessageBox::question(this, QStringLiteral("Save Spawnlist As"), QStringLiteral("There's already a spawnlist called %1. Replace it?").arg(spnName(name)))
+                    != QMessageBox::Yes)
+                return false;
         }
         QString err;
         if (!writeSpnlst(path, standaloneAddon, data, &err)) {
             QMessageBox::warning(this, QStringLiteral("Save Spawnlist"), QStringLiteral("Couldn't save %1: %2").arg(tildePath(path), err));
             return false;
+        }
+        if (path != spnFile) { // a new folder: the working copy moves there too
+            spnProject(pj, path, standaloneAddon);
+            data.save(pj);
         }
         QSettings().setValue("creator/lastFile", path);
         setFile(path);

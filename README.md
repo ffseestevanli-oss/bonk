@@ -74,9 +74,10 @@ addons' thumbnails and dates from Steam's public Workshop lookup.
 
 ## Downloads
 
-Each release on the [Releases page](../../releases) has an **AppImage** (make it executable and
-run it) and a **Flatpak** bundle (`flatpak install --user Bonk.flatpak`), built by GitHub Actions
-from the tagged source. Or build it yourself:
+Each release on the [Releases page](../../releases) has two **AppImages**, Bonk itself and the
+standalone **Bonk Spawnlist Creator** (make them executable and run them), and a **Flatpak**
+bundle with both (`flatpak install --user Bonk.flatpak`), built by GitHub Actions from the tagged
+source. Or build it yourself:
 
 ## Building
 

@@ -16,6 +16,13 @@ All notable changes to Bonk! Model Prop-inator!, newest first.
   project into your home folder, or run the `flatpak override --user --filesystem=…` command it shows
   (Copy Command) for that drive.
 
+- **Each spawnlist has its own folder:** `~/Bonk Projects/Spawnlist/<name>/` holds `<name>.spnlst`
+  and the Creator's working copy (`spawnlist.json`), instead of a hidden folder in
+  `~/.local/share`. A new spawnlist asks for its name and gets its folder at once; Save As copies it
+  to a new folder. Work from Beta 5 / 6 comes along: an addon's old working copy is picked up when
+  you start its spawnlist, and a `.spnlst` saved loose in `Spawnlist/` moves into its own folder.
+- **Two AppImages:** Bonk, and the Bonk Spawnlist Creator on its own. The Flatpak keeps both in one.
+
 ## 1.0 Beta 6
 
 - **The Spawnlist Creator saves and opens files:** **Save** (Ctrl+S), **Save As…** and **Open…**

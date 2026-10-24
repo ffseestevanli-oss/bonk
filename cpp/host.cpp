@@ -8724,7 +8724,58 @@ int runSpawnlistCreator(QString arg) {
     const bool dev = qEnvironmentVariableIsSet("BONK_SCREENSHOT");
     const QString title = QStringLiteral("Bonk! Spawnlist Creator");
     auto isFile = [](const QString &a) { return a.endsWith(QStringLiteral(".spnlst"), Qt::CaseInsensitive); };
-    // nothing given: open a spawnlist file, or start one for an addon folder
+    auto pickAddon = [&](QString addon) -> QString {
+        while (addon.isEmpty() || !hasModels(addon)) {
+            if (dev) return QString();
+            if (!addon.isEmpty())
+                QMessageBox::information(nullptr, title, QStringLiteral("%1 has no models folder. Pick an addon folder: the one with models/ and materials/ in it.")
+                                                             .arg(tildePath(addon).toHtmlEscaped()));
+            addon = QFileDialog::getExistingDirectory(nullptr, QStringLiteral("Bonk! Spawnlist Creator — choose an addon folder"),
+                                                      st.value("creator/lastAddon", QDir::homePath()).toString());
+            if (addon.isEmpty()) return QString();
+        }
+        return QFileInfo(addon).canonicalFilePath();
+    };
+    // Where Beta 5 and 6 kept an addon's working copy, before spawnlists had folders.
+    auto legacyState = [](const QString &addon) {
+        const QString name = QFileInfo(addon).fileName();
+        return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/bonk/spawnlist-creator/") + spawnSlug(name) +
+               QLatin1Char('-') + QString::number(qHash(addon), 16);
+    };
+    // A new spawnlist for an addon folder: its own folder in Spawnlist/, named
+    // (asked, unless `name` is given), with the .spnlst written straight away.
+    auto newSpawnlist = [&](const QString &addon, QString name) -> QString {
+        const bool asked = name.isEmpty();
+        if (asked) name = QFileInfo(addon).fileName();
+        for (;;) {
+            if (asked && !dev) {
+                bool ok = false;
+                name = QInputDialog::getText(nullptr, title, QStringLiteral("Name for the new spawnlist (it gets its own folder in %1):").arg(tildePath(spnlstDir())),
+                                             QLineEdit::Normal, name, &ok);
+                if (!ok || name.trimmed().isEmpty()) return QString();
+            }
+            const QString f = spnFileFor(name);
+            if (!QFileInfo::exists(f)) break;
+            QString other;
+            readSpnlst(f, &other, nullptr, nullptr);
+            if (QFileInfo(other).canonicalFilePath() == addon) return f; // that addon's spawnlist already: open it
+            if (!asked || dev) { name += QStringLiteral(" 2"); continue; }
+            QMessageBox::information(nullptr, title, QStringLiteral("There's already a spawnlist called %1 (for %2). Pick another name.")
+                                                         .arg(spnName(name).toHtmlEscaped(), tildePath(other).toHtmlEscaped()));
+        }
+        const QString f = spnFileFor(name);
+        Spawnlists start;
+        Project old;
+        old.file = legacyState(addon) + QStringLiteral("/x.bonkpj");
+        start.load(old); // work from an earlier version, if there is any
+        QString err;
+        if (!writeSpnlst(f, addon, start, &err)) {
+            if (!dev) QMessageBox::warning(nullptr, title, QStringLiteral("Couldn't create %1: %2").arg(tildePath(f), err));
+            return QString();
+        }
+        return f;
+    };
+    // nothing given: open a spawnlist, or start one for an addon folder
     if (arg.isEmpty() && !dev) {
         QMessageBox box(QMessageBox::Question, title, QStringLiteral("<b>Bonk! Spawnlist Creator</b>"), QMessageBox::Cancel);
         box.setInformativeText(QStringLiteral("Open a spawnlist you saved, or start a new one for an addon folder (the one with models/ and materials/)."));
@@ -8736,53 +8787,55 @@ int runSpawnlistCreator(QString arg) {
             QDir().mkpath(spnlstDir());
             arg = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Open Spawnlist"), spnlstDir(), QStringLiteral("Bonk spawnlists (*.spnlst)"));
             if (arg.isEmpty()) return 0;
-        } else if (box.clickedButton() != newB) {
+        } else if (box.clickedButton() == newB) {
+            const QString addon = pickAddon(QString());
+            if (addon.isEmpty()) return 0;
+            st.setValue("creator/lastAddon", addon);
+            arg = newSpawnlist(addon, QString());
+            if (arg.isEmpty()) return 0;
+        } else {
             return 0;
         }
     }
     for (;;) {
-    QString addon = arg, file;
-    Spawnlists fromFile;
-    if (isFile(arg)) {
-        QString err;
-        if (!readSpnlst(arg, &addon, &fromFile, &err)) {
-            if (!dev) QMessageBox::warning(nullptr, title, QStringLiteral("Couldn't open %1: %2").arg(tildePath(arg), err));
-            return 1;
-        }
-        file = QFileInfo(arg).absoluteFilePath();
-        if (!hasModels(addon)) { // the addon folder moved: find it again
-            if (dev) return 1;
-            QMessageBox::information(nullptr, title, QStringLiteral("This spawnlist is for %1, which isn't there any more. Pick the addon folder.")
-                                                         .arg(tildePath(addon).toHtmlEscaped()));
-            addon.clear();
+    // an addon folder (bonk --spawnlist <folder>): its spawnlist, named after it
+    if (!isFile(arg)) {
+        const QString addon = pickAddon(arg);
+        if (addon.isEmpty()) return dev ? 1 : 0;
+        st.setValue("creator/lastAddon", addon);
+        arg = newSpawnlist(addon, QFileInfo(addon).fileName());
+        if (arg.isEmpty()) return 1;
+    }
+    // a .spnlst left loose in Spawnlist/ (Beta 6): into its own folder
+    if (QFileInfo(arg).absolutePath() == QFileInfo(spnlstDir()).absoluteFilePath()) {
+        const QString to = spnFileFor(QFileInfo(arg).completeBaseName());
+        if (!QFileInfo::exists(to)) {
+            QDir().mkpath(QFileInfo(to).absolutePath());
+            if (QFile::rename(arg, to)) arg = to;
         }
     }
-    while (addon.isEmpty() || !hasModels(addon)) {
+    QString addon, file = QFileInfo(arg).absoluteFilePath();
+    Spawnlists fromFile;
+    {
+        QString err;
+        if (!readSpnlst(file, &addon, &fromFile, &err)) {
+            if (!dev) QMessageBox::warning(nullptr, title, QStringLiteral("Couldn't open %1: %2").arg(tildePath(file), err));
+            return 1;
+        }
+    }
+    if (!hasModels(addon)) { // the addon folder moved: find it again
         if (dev) return 1;
-        if (!addon.isEmpty())
-            QMessageBox::information(nullptr, title,
-                                     QStringLiteral("%1 has no models folder. Pick an addon folder: the one with models/ and materials/ in it.")
-                                         .arg(tildePath(addon).toHtmlEscaped()));
-        addon = QFileDialog::getExistingDirectory(nullptr, QStringLiteral("Bonk! Spawnlist Creator — choose an addon folder"),
-                                                  st.value("creator/lastAddon", QDir::homePath()).toString());
+        QMessageBox::information(nullptr, title, QStringLiteral("This spawnlist is for %1, which isn't there any more. Pick the addon folder.")
+                                                     .arg(tildePath(addon).toHtmlEscaped()));
+        addon = pickAddon(QString());
         if (addon.isEmpty()) return 0;
     }
     addon = QFileInfo(addon).canonicalFilePath();
     st.setValue("creator/lastAddon", addon);
-    // the editor's own data (categories, angles…), per addon
-    const QString name = QFileInfo(addon).fileName();
-    const QString state = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/bonk/spawnlist-creator/") +
-                          spawnSlug(name) + QLatin1Char('-') + QString::number(qHash(addon), 16);
-    QDir().mkpath(state);
+    // the working copy sits next to the spawnlist file, in its folder
     Project pj;
-    pj.name = name;
-    pj.file = state + QLatin1Char('/') + spawnSlug(name) + QStringLiteral(".bonkpj");
-    pj.addonOverride = addon;
-    {
-        QFile info(state + QStringLiteral("/addon.txt"));
-        if (info.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) info.write(addon.toUtf8() + '\n');
-    }
-    if (!file.isEmpty()) fromFile.save(pj); // the dialog opens on the file's spawnlists
+    spnProject(pj, file, addon);
+    fromFile.save(pj); // the editor opens on the file's spawnlists
     // GL off screen for the spawn icons
     QOffscreenSurface surface;
     surface.setFormat(QSurfaceFormat::defaultFormat());
@@ -8825,7 +8878,7 @@ int runSpawnlistCreator(QString arg) {
     };
     SpawnlistDialog d(nullptr, pj, render, [](const QString &) {});
     d.setStandalone(addon);
-    if (!file.isEmpty()) d.setFile(file);
+    d.setFile(file);
     if (dev) {
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_SELECT")) {
             const QStringList a = qEnvironmentVariable("BONK_SPAWNLIST_SELECT").split(QLatin1Char(','));
@@ -8918,6 +8971,11 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
     // bonk --spawnlist [addon folder] (or the bonk-spawnlist launcher): just the Spawnlist Creator
     {
         bool creator = QFileInfo(QString::fromLocal8Bit(argv[0])).fileName().startsWith(QStringLiteral("bonk-spawnlist"));
+        // the Spawnlist Creator's own AppImage sets this (its AppRun hook)
+        if (qEnvironmentVariable("BONK_SPAWNLIST_APP") == QStringLiteral("1")) {
+            creator = true;
+            qunsetenv("BONK_SPAWNLIST_APP");
+        }
         QString addon;
         for (int i = 1; i < *argc; ++i) {
             const QString a = QString::fromLocal8Bit(argv[i]);
