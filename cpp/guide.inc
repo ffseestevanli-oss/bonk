@@ -356,7 +356,11 @@ QList<GuidePage> guidePages(bool hammer) {
                                                                       "your other projects and offers to <b>copy them in</b> under the same names. "
                                                                       "Not there? <b>Find in a Folder…</b> matches images by name (any folder, any "
                                                                       "layout) and copies them in under the names the model uses. "
-                                                                      "<b>Tools → Find Missing Textures…</b> does it any time.</p>")}};
+                                                                      "<b>Tools → Find Missing Textures…</b> does it any time.</p>"
+                                                                      "<p>In the <b>Flatpak</b> version, Bonk can only see your home folder: a project "
+                                                                      "on an external drive opens without its textures. Bonk warns you; move the "
+                                                                      "project into your home folder, or run the <tt>flatpak override</tt> command "
+                                                                      "the warning gives you for that drive.</p>")}};
         p.see = {QStringLiteral("face"), QStringLiteral("material")};
     }
     {

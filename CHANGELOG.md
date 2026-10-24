@@ -10,6 +10,11 @@ All notable changes to Bonk! Model Prop-inator!, newest first.
   **copy them in** under those names, material settings included; or **Find in a Folder…** matches
   images by name in any folder. **Tools → Find Missing Textures…** runs it any time. With no project
   open, Bonk offers to open the one that has them.
+- **Flatpak: a warning for files it can't see around.** Opening a model or project from outside your
+  home folder (an external drive, say) hands the Flatpak just that one file through Flatpak's file
+  portal, so its project and textures couldn't be read. Bonk now says so and how to fix it: move the
+  project into your home folder, or run the `flatpak override --user --filesystem=…` command it shows
+  (Copy Command) for that drive.
 
 ## 1.0 Beta 6
 

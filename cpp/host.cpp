@@ -79,6 +79,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <sys/xattr.h>
 #include <QShortcut>
 #include <QStackedWidget>
 #include <QTableWidget>
@@ -6052,6 +6053,10 @@ public:
         addRecentModel(filePath);
         rebuildRecentModels();
         syncTextureAlpha(); // its overrides may differ
+        if (sandboxedFile(filePath)) { // only the file is reachable: no project, nothing to look for
+            handle(F_R3D | F_R2D | F_TOOL);
+            return true;
+        }
         // A model inside a project brings its project (and textures) along.
         QString pj = findProjectFor(filePath);
         if (!pj.isEmpty() && QFileInfo(pj).absoluteFilePath() != project.file) setProject(pj, false);
@@ -6147,7 +6152,52 @@ public:
         return true;
     }
 
-    bool openProjectFile(const QString &path) { return setProject(QFileInfo(path).absoluteFilePath(), true); }
+    bool openProjectFile(const QString &path) {
+        if (sandboxedFile(path)) return false;
+        return setProject(QFileInfo(path).absoluteFilePath(), true);
+    }
+
+    /// In the Flatpak, a file from outside what Bonk may see (an external drive,
+    /// say) comes through the document portal as that one file, at
+    /// /run/user/<id>/doc/…: the folder around it (the project, its textures)
+    /// can't be read. Says so (once per file) and returns true for such a file.
+    bool sandboxedFile(const QString &path) {
+        const QString abs = QFileInfo(path).absoluteFilePath();
+        static const QRegularExpression portal(QStringLiteral("^/run/(flatpak/doc|user/\\d+/doc)/"));
+        const bool flatpak = !qEnvironmentVariableIsEmpty("FLATPAK_ID") || QFileInfo::exists(QStringLiteral("/.flatpak-info"));
+        if ((!flatpak && !qEnvironmentVariableIsSet("BONK_FAKE_PORTAL")) || !portal.match(abs).hasMatch()) return false;
+        static QSet<QString> told;
+        if (told.contains(abs)) return true;
+        told.insert(abs);
+        // where it really is, when the portal says (newer portals do)
+        QString real;
+        {
+            char buf[4096];
+            const QByteArray f = QFile::encodeName(abs);
+            const ssize_t n = getxattr(f.constData(), "user.document-portal.host-path", buf, sizeof buf - 1);
+            if (n > 0) real = QString::fromUtf8(buf, int(n)).trimmed();
+        }
+        const QString where = real.isEmpty() ? QStringLiteral("outside your home folder") : QStringLiteral("in %1").arg(QFileInfo(real).absolutePath().toHtmlEscaped());
+        const QString dir = real.isEmpty() ? QStringLiteral("/run/media") : QFileInfo(real).absolutePath().section(QLatin1Char('/'), 0, 3);
+        const QString id = qEnvironmentVariableIsEmpty("FLATPAK_ID") ? QStringLiteral("io.github.ffseestevanli_oss.bonk") : qEnvironmentVariable("FLATPAK_ID");
+        const QString cmd = QStringLiteral("flatpak override --user --filesystem=%1 %2").arg(dir, id);
+        const QString msg = QStringLiteral("<b>Bonk can only see this one file, not the folder it's in.</b><br><br>"
+                                           "%1 is %2, where the Flatpak version of Bonk isn't allowed to look, so it came in "
+                                           "through Flatpak's file portal on its own. Its project (textures, other models, the addon "
+                                           "folder) can't be read, so the model would open without textures and nothing could be saved "
+                                           "next to it.<br><br>Either <b>move the project into your home folder</b> (Bonk Projects, Documents…), "
+                                           "or let Bonk see that drive: run this in a terminal, then restart Bonk:<br><br><tt>%3</tt>")
+                                .arg(QFileInfo(abs).fileName().toHtmlEscaped(), where, cmd.toHtmlEscaped());
+        if (qEnvironmentVariableIsSet("BONK_SCREENSHOT")) {
+            fprintf(stderr, "sandboxed: %s\n", qPrintable(cmd));
+            return true;
+        }
+        QMessageBox box(QMessageBox::Warning, QStringLiteral("Outside what Bonk can see"), msg, QMessageBox::Ok, this);
+        QPushButton *copyBtn = box.addButton(QStringLiteral("Copy Command"), QMessageBox::ActionRole);
+        box.exec();
+        if (box.clickedButton() == copyBtn) QApplication::clipboard()->setText(cmd);
+        return true;
+    }
 
     void openProject() {
         QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Open project"), defaultProjectsDir(),
