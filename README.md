@@ -116,6 +116,12 @@ cargo test                 # the test suite
 `build.rs` finds Qt through pkg-config, then `qmake6` / `qmake`. To use a specific Qt, set
 `QMAKE=/path/to/qt6/bin/qmake`. Bonk has no crate dependencies.
 
+### Windows
+
+There's a functional Windows build too (no Proton needed there: Bonk runs Garry's Mod's
+`studiomdl.exe` directly). Download `bonk-windows-x86_64` from a GitHub Actions run, or build it
+with MSYS2 or cross-compile it from Linux: see [packaging/windows/README.md](packaging/windows/README.md).
+
 ### Wayland note (Plasma 6)
 
 Mouselook warps the cursor, and native Wayland doesn't allow normal apps to do that, so Bonk runs

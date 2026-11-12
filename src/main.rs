@@ -1671,8 +1671,13 @@ extern "C" {
 
 // ------------------------------------------------------------------ crash log
 
-/// ~/.local/share/bonk/crash.log (the Flatpak's own data folder there).
+/// ~/.local/share/bonk/crash.log (the Flatpak's own data folder there);
+/// %LOCALAPPDATA%\bonk\crash.log on Windows.
 fn crash_log_path() -> std::path::PathBuf {
+    #[cfg(windows)]
+    if let Some(d) = std::env::var_os("LOCALAPPDATA") {
+        return std::path::PathBuf::from(d).join("bonk").join("crash.log");
+    }
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
@@ -1702,8 +1707,9 @@ fn with_ed_try<R>(f: impl FnOnce(&Editor) -> R) -> Option<R> {
 pub extern "C" fn bonk_crash_report(signal: c_int) {
     let name = match signal {
         11 => "SIGSEGV (bad memory access)",
-        6 => "SIGABRT (aborted)",
-        7 => "SIGBUS",
+        6 if cfg!(not(windows)) => "SIGABRT (aborted)",
+        22 if cfg!(windows) => "SIGABRT (aborted)",
+        7 if cfg!(not(windows)) => "SIGBUS",
         8 => "SIGFPE",
         4 => "SIGILL",
         _ => "signal",

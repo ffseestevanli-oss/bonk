@@ -24,6 +24,37 @@ jobs:
           name: bonk-linux-x86_64
           path: target/release/bonk
 
+  # Windows (functional port): built natively with MSYS2's MinGW Qt 6 and Rust,
+  # then bonk.exe, the DLLs it loads and Qt's plugins are zipped together.
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            zip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-rust
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-svg
+      - name: Test
+        run: cargo test --release
+      - name: Build
+        run: cargo build --release
+      - name: Gather
+        run: packaging/windows/gather-msys2.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bonk-windows-x86_64
+          path: target/windows/Bonk-windows-x86_64.zip
+
   # Packages: on every push (download them from the run's Artifacts); a version
   # tag also attaches them to its release.
   appimage:

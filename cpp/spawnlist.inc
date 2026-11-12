@@ -328,7 +328,7 @@ using ThumbRenderer = std::function<QImage(const QString &bpmdl, const ThumbCam 
 /// `cam` re-framed snugly for a view `aspect` wide per unit tall, keeping its angle.
 ThumbCam fitCam(const QString &bpmdl, ThumbCam cam, double aspect) {
     float f[4];
-    const QByteArray p = QFile::encodeName(bpmdl);
+    const QByteArray p = rustPath(bpmdl);
     if (bonk_model_fit(p.constData(), float(cam.yaw), float(cam.pitch), float(cam.fov), float(aspect), f) == 0) {
         cam.tx = f[0];
         cam.ty = f[1];
