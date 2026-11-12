@@ -79,7 +79,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#ifndef _WIN32
 #include <sys/xattr.h>
+#endif
 #include <QShortcut>
 #include <QStackedWidget>
 #include <QTableWidget>
@@ -250,6 +252,16 @@ const char *bonk_selected_face_materials();
 #endif
 
 namespace {
+
+/// A path as the Rust side expects it: UTF-8 on Windows (Rust's std converts it
+/// to UTF-16), the locale's file name encoding elsewhere.
+inline QByteArray rustPath(const QString &p) {
+#ifdef _WIN32
+    return p.toUtf8();
+#else
+    return QFile::encodeName(p);
+#endif
+}
 
 const char *kAppName = "Bonk! Model Prop-inator!";
 /// Compact UI (screens under 1440p unless Settings says otherwise)
@@ -646,7 +658,32 @@ struct SteamFind {
     QString studiomdl;  // .../GarrysMod/bin/studiomdl.exe
     struct Proton { QString name, path; };
     std::vector<Proton> protons; // newest stable first
+#ifdef _WIN32
+    bool inFlatpak = false;
+    /// Windows runs studiomdl, gmad and gmpublish directly: no Proton.
+    static constexpr bool needsProton = false;
+
+    static std::vector<QString> roots() {
+        std::vector<QString> r;
+        // Steam records where it lives in the registry
+        for (const char *key : {"HKEY_CURRENT_USER\\Software\\Valve\\Steam", "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Valve\\Steam",
+                                "HKEY_LOCAL_MACHINE\\SOFTWARE\\Valve\\Steam"}) {
+            QSettings reg(QString::fromLatin1(key), QSettings::NativeFormat);
+            for (const char *v : {"SteamPath", "InstallPath"}) {
+                const QString p = QDir::fromNativeSeparators(reg.value(QString::fromLatin1(v)).toString());
+                if (!p.isEmpty()) r.push_back(p);
+            }
+        }
+        for (const char *env : {"ProgramFiles(x86)", "ProgramFiles"}) {
+            const QString pf = QDir::fromNativeSeparators(qEnvironmentVariable(env));
+            if (!pf.isEmpty()) r.push_back(pf + QStringLiteral("/Steam"));
+        }
+        r.push_back(QStringLiteral("C:/Program Files (x86)/Steam"));
+        return r;
+    }
+#else
     bool inFlatpak = QFileInfo::exists(QStringLiteral("/.flatpak-info"));
+    static constexpr bool needsProton = true;
 
     static std::vector<QString> roots() {
         const QString h = QDir::homePath();
@@ -654,6 +691,7 @@ struct SteamFind {
                 h + QStringLiteral("/.var/app/com.valvesoftware.Steam/.local/share/Steam"),
                 h + QStringLiteral("/.var/app/com.valvesoftware.Steam/data/Steam")};
     }
+#endif
 
     static QString findStudiomdl(const QString &gmod) {
         for (const QString &rel : {QStringLiteral("/bin/studiomdl.exe"), QStringLiteral("/bin/win64/studiomdl.exe")})
@@ -733,11 +771,16 @@ struct SteamFind {
     QString addonsDir() const { return gmodDir.isEmpty() ? QString() : gmodDir + QStringLiteral("/garrysmod/addons"); }
 };
 
-/// A Linux path as a Windows program running under Proton / Wine sees it.
+/// A Linux path as a Windows program running under Proton / Wine sees it
+/// (on Windows itself: just the native path).
 QString winPath(const QString &p) {
+#ifdef _WIN32
+    return QDir::toNativeSeparators(QFileInfo(p).absoluteFilePath());
+#else
     QString w = QFileInfo(p).absoluteFilePath();
     w.replace(QLatin1Char('/'), QLatin1Char('\\'));
     return QStringLiteral("Z:") + w;
+#endif
 }
 
 /// Copy a folder's contents into another, replacing files. Returns files copied.
@@ -1090,6 +1133,7 @@ public:
         proton->setToolTip(QStringLiteral("studiomdl is a Windows program, so Bonk runs it through Proton.\n"
                                           "Automatic picks the newest stable Proton Steam has installed."));
         gf->addRow(QStringLiteral("Proton"), proton);
+        if (!SteamFind::needsProton) gf->setRowVisible(proton, false); // Windows runs studiomdl directly
         exportAfter = new QCheckBox(QStringLiteral("Export to the GMod addons folder after every compile"));
         gf->addRow(exportAfter);
         launchGmod = new QCheckBox(QStringLiteral("Start Garry's Mod after exporting, to test it right away"));
@@ -3912,7 +3956,7 @@ public:
         QImage rgba = img.convertToFormat(QImage::Format_RGBA8888);
         MatProps p = MatProps::loadSidecar(e.file);
         int flags = (p.isNormalMap ? 1 : 0) | (p.transparency == 1 ? 2 : 0);
-        QByteArray path = QFile::encodeName(e.vtf.isEmpty() ? vtfPath(e.key) : e.vtf);
+        QByteArray path = rustPath(e.vtf.isEmpty() ? vtfPath(e.key) : e.vtf);
         if (p.frames > 1) {
             // an animation strip: one VTF frame per strip cell (AnimatedTexture)
             const int fh = rgba.height() / p.frames;
@@ -5377,7 +5421,7 @@ public:
             if (fbo.isValid() && fbo.bind()) {
                 QOpenGLFunctions *gl = v->context()->functions();
                 gl->glViewport(0, 0, sw, sh);
-                const QByteArray p = QFile::encodeName(bpmdl);
+                const QByteArray p = rustPath(bpmdl);
                 ThumbCam c = cam;
                 if (c.dist <= 0) c = fitCam(bpmdl, c, double(w) / h);
                 if (bonk_render_thumb(0, p.constData(), float(c.yaw), float(c.pitch), float(std::max(1.0, c.dist)), float(c.tx), float(c.ty), float(c.tz),
@@ -5543,7 +5587,7 @@ public:
     /// Ctrl+C / Ctrl+X: the selection goes on the system clipboard, so it can
     /// be pasted into another model, project or Bonk window.
     void copySelection(bool cut) {
-        const QByteArray src = project.isOpen() ? QFile::encodeName(project.texturesDir()) : QByteArray();
+        const QByteArray src = project.isOpen() ? rustPath(project.texturesDir()) : QByteArray();
         const QString text = QString::fromUtf8(bonk_copy(src.constData(), cut));
         if (!text.isEmpty()) {
             auto *md = new QMimeData;
@@ -5588,7 +5632,7 @@ public:
 
     /// Edit → Save Selection as Prefab… (and the Prefabs tab's button).
     void savePrefab() {
-        const QByteArray src = project.isOpen() ? QFile::encodeName(project.texturesDir()) : QByteArray();
+        const QByteArray src = project.isOpen() ? rustPath(project.texturesDir()) : QByteArray();
         QString text = QString::fromUtf8(bonk_prefab_text(src.constData()));
         if (text.isEmpty()) {
             statusBar()->showMessage(QStringLiteral("Select the brushes to save as a prefab first"), 4000);
@@ -6043,7 +6087,7 @@ public:
 
     bool loadFile(const QString &path) {
         if (path.endsWith(QStringLiteral(".bonkpj"), Qt::CaseInsensitive)) return openProjectFile(path);
-        QByteArray p = QFile::encodeName(path);
+        QByteArray p = rustPath(path);
         if (bonk_load(p.constData()) != 0) {
             QMessageBox::critical(this, QStringLiteral("Couldn't open model"), QString::fromUtf8(bonk_last_error()));
             return false;
@@ -6073,7 +6117,7 @@ public:
             QByteArray mp = project.defaultModelPath(QFileInfo(path).completeBaseName()).toUtf8();
             bonk_set_model_path(mp.constData());
         }
-        QByteArray p = QFile::encodeName(path);
+        QByteArray p = rustPath(path);
         if (bonk_save(p.constData()) != 0) {
             QMessageBox::critical(this, QStringLiteral("Couldn't save model"), QString::fromUtf8(bonk_last_error()));
             return false;
@@ -6171,12 +6215,14 @@ public:
         told.insert(abs);
         // where it really is, when the portal says (newer portals do)
         QString real;
+#ifndef _WIN32
         {
             char buf[4096];
             const QByteArray f = QFile::encodeName(abs);
             const ssize_t n = getxattr(f.constData(), "user.document-portal.host-path", buf, sizeof buf - 1);
             if (n > 0) real = QString::fromUtf8(buf, int(n)).trimmed();
         }
+#endif
         const QString where = real.isEmpty() ? QStringLiteral("outside your home folder") : QStringLiteral("in %1").arg(QFileInfo(real).absolutePath().toHtmlEscaped());
         const QString dir = real.isEmpty() ? QStringLiteral("/run/media") : QFileInfo(real).absolutePath().section(QLatin1Char('/'), 0, 3);
         const QString id = qEnvironmentVariableIsEmpty("FLATPAK_ID") ? QStringLiteral("io.github.ffseestevanli_oss.bonk") : qEnvironmentVariable("FLATPAK_ID");
@@ -6821,7 +6867,7 @@ public:
         }
         QSettings().setValue("import/vmfDir", QFileInfo(path).absolutePath());
         // what's in it
-        const QStringList lines = QString::fromUtf8(bonk_vmf_scan(QFile::encodeName(path).constData())).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        const QStringList lines = QString::fromUtf8(bonk_vmf_scan(rustPath(path).constData())).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
         int solids = 0;
         QList<std::tuple<int, int, QString>> visgroups;
         int mats = 0;
@@ -6866,7 +6912,7 @@ public:
             if (vd.exec() != QDialog::Accepted) return;
             skip = vd.skipped();
         }
-        if (bonk_vmf_import(QFile::encodeName(path).constData(), skip.toUtf8().constData()) != 0) {
+        if (bonk_vmf_import(rustPath(path).constData(), skip.toUtf8().constData()) != 0) {
             QMessageBox::critical(this, QStringLiteral("Import VMF"), QString::fromUtf8(bonk_last_error()));
             return;
         }
@@ -7115,7 +7161,7 @@ public:
             return;
         }
         const QString proton = sf.proton();
-        if (proton.isEmpty()) {
+        if (SteamFind::needsProton && proton.isEmpty()) {
             gmodMissing(QStringLiteral("studiomdl is a Windows program, so Bonk runs it through Proton, but no Proton was found. "
                                        "Install one from Steam (search your library for \"Proton\"; the newest stable version is best)."));
             return;
@@ -7139,7 +7185,7 @@ public:
         QFile::remove(phySmd);
         int out[3] = {0, 0, 0};
         colorPrefix = QString::fromUtf8(bonk_set_color_prefix(mp.toUtf8().constData())); // house_colors_ffffff
-        if (bonk_export_smd(QFile::encodeName(refSmd).constData(), withPhys ? QFile::encodeName(phySmd).constData() : nullptr,
+        if (bonk_export_smd(rustPath(refSmd).constData(), withPhys ? rustPath(phySmd).constData() : nullptr,
                             physMode, out) != 0) {
             QMessageBox::critical(this, QStringLiteral("Compile"), QString::fromUtf8(bonk_last_error()));
             return;
@@ -7272,13 +7318,14 @@ public:
         job.clock.start();
         const QString prefix = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/bonk/proton");
         const bool firstRun = !QFileInfo::exists(prefix + QStringLiteral("/pfx"));
-        QDir().mkpath(prefix);
+        if (SteamFind::needsProton) QDir().mkpath(prefix);
         const QStringList env = {QStringLiteral("STEAM_COMPAT_DATA_PATH=") + prefix,
                                  QStringLiteral("STEAM_COMPAT_CLIENT_INSTALL_PATH=") + sf.steamRoot,
                                  QStringLiteral("SteamAppId=4000"), QStringLiteral("SteamGameId=4000"),
                                  QStringLiteral("WINEDEBUG=-all")};
-        const QStringList cmd = {proton, QStringLiteral("run"), sf.studiomdl, QStringLiteral("-nop4"), QStringLiteral("-game"),
-                                 winPath(game), winPath(qcPath)};
+        QStringList cmd = {proton, QStringLiteral("run"), sf.studiomdl, QStringLiteral("-nop4"), QStringLiteral("-game"),
+                           winPath(game), winPath(qcPath)};
+        if (!SteamFind::needsProton) cmd.erase(cmd.begin(), cmd.begin() + 2); // Windows: studiomdl.exe itself
         compilePartial.clear();
         compileProc = new QProcess(this);
         compileProc->setProcessChannelMode(QProcess::MergedChannels);
@@ -7295,8 +7342,10 @@ public:
             compileProc->setProgram(cmd.first());
             compileProc->setArguments(cmd.mid(1));
         }
-        cw->line(QStringLiteral("Bonk! %1 · %2 · %3").arg(QStringLiteral(BONK_VERSION), QFileInfo(proton).absoluteDir().dirName(), tildePath(sf.studiomdl)));
-        if (firstRun) cw->line(QStringLiteral("First compile: Proton is setting up Bonk's prefix (%1). This takes a minute, once.").arg(tildePath(prefix)));
+        cw->line(QStringLiteral("Bonk! %1 · %2 · %3").arg(QStringLiteral(BONK_VERSION),
+                                                           SteamFind::needsProton ? QFileInfo(proton).absoluteDir().dirName() : QStringLiteral("Windows"),
+                                                           tildePath(sf.studiomdl)));
+        if (firstRun && SteamFind::needsProton) cw->line(QStringLiteral("First compile: Proton is setting up Bonk's prefix (%1). This takes a minute, once.").arg(tildePath(prefix)));
         QObject::connect(compileProc, &QProcess::readyRead, this, [this] {
             QByteArray &partial = compilePartial;
             partial += compileProc->readAll();
@@ -8866,7 +8915,7 @@ int runSpawnlistCreator(QString arg) {
                 ctx.functions()->glViewport(0, 0, sw, sh);
                 ThumbCam c = cam;
                 if (c.dist <= 0) c = fitCam(src, c, double(w) / h);
-                const QByteArray p = QFile::encodeName(src);
+                const QByteArray p = rustPath(src);
                 if (bonk_render_thumb(0, p.constData(), float(c.yaw), float(c.pitch), float(std::max(1.0, c.dist)), float(c.tx), float(c.ty), float(c.tz),
                                       float(c.fov), sw, sh) == 0)
                     out = fbo.toImage(true).convertToFormat(QImage::Format_ARGB32);
@@ -8900,7 +8949,11 @@ int runSpawnlistCreator(QString arg) {
 }
 
 extern "C" int bonk_qt_run(int *argc, char **argv) {
+#ifdef _WIN32
+    for (int sig : {SIGSEGV, SIGABRT, SIGFPE, SIGILL}) signal(sig, onFatalSignal);
+#else
     for (int sig : {SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL}) signal(sig, onFatalSignal);
+#endif
     // Mouselook needs cursor warping, which native Wayland does not allow for
     // ordinary windows. Under a Wayland session (e.g. Plasma 6) run through
     // XWayland unless the user picked a platform or set BONK_WAYLAND=1.

@@ -23,6 +23,11 @@ struct SteamStatus {
     void detect(const SteamFind &sf) {
         running = false;
         unsure = false;
+#ifdef _WIN32
+        // Steam keeps its running process id in the registry (0 when it's not running)
+        running = QSettings(QStringLiteral("HKEY_CURRENT_USER\\Software\\Valve\\Steam\\ActiveProcess"), QSettings::NativeFormat)
+                      .value(QStringLiteral("pid")).toUInt() != 0;
+#else
         const QString home = QDir::homePath();
         for (const QString &pidFile : {home + QStringLiteral("/.steam/steam.pid"), home + QStringLiteral("/.var/app/com.valvesoftware.Steam/.steam/steam.pid")}) {
             QFile f(pidFile);
@@ -33,6 +38,7 @@ struct SteamStatus {
                 if (comm.open(QIODevice::ReadOnly) && QString::fromLatin1(comm.readAll()).trimmed().startsWith(QStringLiteral("steam"))) running = true;
             }
         }
+#endif
         if (!running && sf.inFlatpak) unsure = true; // the sandbox doesn't see Steam's process
         // who: config/loginusers.vdf, the "MostRecent" account
         persona.clear();
@@ -132,6 +138,13 @@ struct WorkshopTools {
             }
             return QString();
         };
+#ifdef _WIN32
+        // Windows: Garry's Mod's own gmad.exe / gmpublish.exe run as they are
+        gmad = first({QStringLiteral("gmad.exe"), QStringLiteral("win64/gmad.exe")}, false);
+        gmpublish = first({QStringLiteral("gmpublish.exe"), QStringLiteral("win64/gmpublish.exe")}, false);
+        gmadNative = gmpublishNative = true;
+        return;
+#endif
         gmad = first({QStringLiteral("linux64/gmad"), QStringLiteral("linux64/gmad_linux"), QStringLiteral("gmad_linux"), QStringLiteral("linux32/gmad"),
                       QStringLiteral("linux32/gmad_linux")}, true);
         gmadNative = !gmad.isEmpty();
@@ -164,7 +177,9 @@ struct WorkshopTools {
         QStringList env = {QStringLiteral("SteamAppId=4000"), QStringLiteral("SteamGameId=4000"), QStringLiteral("STEAM_COMPAT_APP_ID=4000")};
         QStringList cmd;
         if (native) {
+#ifndef _WIN32
             env << QStringLiteral("LD_LIBRARY_PATH=") + QFileInfo(tool).absolutePath() + QLatin1Char(':') + QFileInfo(tool).absolutePath() + QStringLiteral("/..");
+#endif
             cmd << tool << args;
         } else {
             QDir().mkpath(prefix);

@@ -6,6 +6,11 @@
 //!   1. the QMAKE environment variable (path to a Qt6 qmake),
 //!   2. pkg-config (Qt6Widgets / Qt6OpenGLWidgets),
 //!   3. qmake6, qmake-qt6 or qmake on PATH (must report Qt 6).
+//!
+//! Windows builds use the GNU (MinGW) target, natively under MSYS2 or cross-
+//! compiled from Linux (see packaging/windows/README.md). When cross-compiling,
+//! point QMAKE at the Windows Qt's qmake and CXX / AR at the MinGW tools; the
+//! defaults are x86_64-w64-mingw32-g++-posix and x86_64-w64-mingw32-ar.
 
 use std::env;
 use std::path::PathBuf;
@@ -67,6 +72,10 @@ fn find_qt() -> QtFlags {
     if let Ok(q) = env::var("QMAKE") {
         return from_qmake(&q).unwrap_or_else(|| panic!("QMAKE={q} is not a working Qt 6 qmake"));
     }
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") && env::var("HOST") != env::var("TARGET") {
+        // pkg-config and qmake on PATH would find the Linux Qt
+        panic!("\n\nCross-compiling for Windows: set QMAKE to the Windows Qt's qmake (see packaging/windows/README.md).\n\n");
+    }
     if let Some(f) = from_pkg_config() {
         return f;
     }
@@ -96,15 +105,27 @@ fn main() {
     println!("cargo:rerun-if-env-changed=QMAKE");
     println!("cargo:rerun-if-env-changed=CXX");
     println!("cargo:rerun-if-env-changed=CXXFLAGS");
+    println!("cargo:rerun-if-env-changed=AR");
+
+    let windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    let cross = env::var("HOST").unwrap() != env::var("TARGET").unwrap();
+    if windows && env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("gnu") {
+        panic!("\n\nBonk's Windows build uses the GNU (MinGW) toolchain: build with --target x86_64-pc-windows-gnu.\n\n");
+    }
 
     let qt = find_qt();
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let obj = out.join("host.o");
     let lib = out.join("libbonk_qt.a");
-    let cxx = env::var("CXX").unwrap_or_else(|_| "c++".to_string());
+    let cxx = env::var("CXX").unwrap_or_else(|_| {
+        if windows && cross { "x86_64-w64-mingw32-g++-posix" } else { "c++" }.to_string()
+    });
+    let ar = env::var("AR").unwrap_or_else(|_| if windows && cross { "x86_64-w64-mingw32-ar" } else { "ar" }.to_string());
 
     let status = Command::new(&cxx)
-        .args(["-std=c++17", "-O2", "-fPIC", "-Wall", "-c", "cpp/host.cpp", "-o"])
+        .args(["-std=c++17", "-O2", "-Wall"])
+        .args(if windows { &["-Wa,-mbig-obj", "-DUNICODE", "-D_UNICODE"][..] } else { &["-fPIC"][..] })
+        .args(["-c", "cpp/host.cpp", "-o"])
         .arg(&obj)
         .args(&qt.cflags)
         .args(env::var("CXXFLAGS").unwrap_or_default().split_whitespace())
@@ -117,7 +138,7 @@ fn main() {
     assert!(status.success(), "compiling cpp/host.cpp failed");
 
     let _ = std::fs::remove_file(&lib);
-    let status = Command::new("ar").arg("crs").arg(&lib).arg(&obj).status().expect("failed to run ar");
+    let status = Command::new(&ar).arg("crs").arg(&lib).arg(&obj).status().unwrap_or_else(|e| panic!("failed to run '{ar}': {e}"));
     assert!(status.success(), "ar failed");
 
     println!("cargo:rustc-link-search=native={}", out.display());
@@ -125,7 +146,10 @@ fn main() {
     for d in &qt.link_dirs {
         println!("cargo:rustc-link-search=native={d}");
         // Harmless for system Qt, required for a Qt installed in a custom prefix.
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{d}");
+        // (Windows has no rpath: Qt's DLLs go next to bonk.exe.)
+        if !windows {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{d}");
+        }
     }
     for l in &qt.libs {
         println!("cargo:rustc-link-lib=dylib={l}");
