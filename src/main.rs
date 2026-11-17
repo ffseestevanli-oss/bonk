@@ -6,6 +6,7 @@
 //! plumbing live in `cpp/host.cpp`, which calls the `bonk_*` functions below.
 
 mod collision;
+mod content;
 mod doc;
 mod variants;
 mod editor;
@@ -22,6 +23,7 @@ mod tex;
 mod texstore;
 mod vtf;
 mod vtfread;
+mod vpk;
 mod vmf;
 mod walk;
 
@@ -1663,6 +1665,102 @@ pub extern "C" fn bonk_parse_vmt(text: *const c_char) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn bonk_clean_texture_path(p: *const c_char) -> *const c_char {
     ret_str(vmf::clean_path(&path_arg(p).unwrap_or_default()))
+}
+
+// ------------------------------------------------------------------ stock game content
+
+thread_local! {
+    /// The last few game / VPK indexes opened: path → index
+    static CONTENT: RefCell<Vec<(String, std::rc::Rc<content::Index>)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn content_index(path: &str) -> Result<std::rc::Rc<content::Index>, String> {
+    if let Some(ix) = CONTENT.with(|c| c.borrow().iter().find(|e| e.0 == path).map(|e| e.1.clone())) {
+        return Ok(ix);
+    }
+    let ix = std::rc::Rc::new(content::open(std::path::Path::new(path))?);
+    CONTENT.with(|c| {
+        let mut c = c.borrow_mut();
+        c.retain(|e| e.0 != path);
+        c.insert(0, (path.to_string(), ix.clone()));
+        c.truncate(3);
+    });
+    Ok(ix)
+}
+
+/// The Source games installed through Steam, as "name\tgame folder" lines.
+/// `libraries`: Steam folders / libraries, one per line ("" = the usual places).
+#[no_mangle]
+pub extern "C" fn bonk_source_games(libraries: *const c_char) -> *const c_char {
+    let mut roots: Vec<std::path::PathBuf> =
+        path_arg(libraries).unwrap_or_default().lines().filter(|l| !l.trim().is_empty()).map(std::path::PathBuf::from).collect();
+    roots.extend(content::default_steam_roots());
+    let libs = content::libraries(&roots);
+    let mut o = String::new();
+    for g in content::find_games(&libs) {
+        o += &format!("{}\t{}\n", g.name.replace(['\t', '\n'], " "), g.dir.to_string_lossy());
+    }
+    ret_str(o)
+}
+
+/// Is this folder a Source game (it has a gameinfo.txt)? Its name, or "".
+#[no_mangle]
+pub extern "C" fn bonk_game_title(dir: *const c_char) -> *const c_char {
+    let p = std::path::PathBuf::from(path_arg(dir).unwrap_or_default());
+    if !content::is_game_dir(&p) {
+        return ret_str(String::new());
+    }
+    let folder = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let libs: Vec<std::path::PathBuf> = p.ancestors().nth(3).map(|l| vec![l.to_path_buf()]).unwrap_or_default();
+    let name = content::find_games(&libs).into_iter().find(|g| g.dir == p).map(|g| g.name).unwrap_or(folder);
+    ret_str(name)
+}
+
+/// Every file under `prefix` ("materials/") in a .vpk, a game folder or a
+/// content folder, as "path\tfile\toffset\tlength" lines (paths without the
+/// prefix; length -1 = the whole file; a file split in two pieces has a
+/// second file / offset / length after the first). NULL on failure.
+#[no_mangle]
+pub extern "C" fn bonk_content_list(path: *const c_char, prefix: *const c_char) -> *const c_char {
+    let p = path_arg(path).unwrap_or_default();
+    match content_index(&p) {
+        Ok(ix) => {
+            let mut o = String::new();
+            for (rel, loc) in ix.list(&path_arg(prefix).unwrap_or_default()) {
+                o += rel;
+                match loc {
+                    content::Loc::Loose(f) => o += &format!("\t{}\t0\t-1", f.to_string_lossy()),
+                    content::Loc::Packed(parts) => {
+                        for (f, off, len) in parts {
+                            o += &format!("\t{}\t{off}\t{len}", f.to_string_lossy());
+                        }
+                    }
+                }
+                o.push('\n');
+            }
+            ret_str(o)
+        }
+        Err(e) => {
+            set_error(&e);
+            std::ptr::null()
+        }
+    }
+}
+
+/// Copy models (one "models/…/x.mdl" per line) out of a game / VPK / folder
+/// into `dest`, with their textures. Returns how many, or -1 (see bonk_last_error).
+#[no_mangle]
+pub extern "C" fn bonk_content_extract_models(path: *const c_char, models: *const c_char, dest: *const c_char) -> c_int {
+    let p = path_arg(path).unwrap_or_default();
+    let list: Vec<String> = path_arg(models).unwrap_or_default().lines().filter(|l| !l.is_empty()).map(str::to_string).collect();
+    let dest = std::path::PathBuf::from(path_arg(dest).unwrap_or_default());
+    match content_index(&p).and_then(|ix| content::extract_models(&ix, &list, &dest)) {
+        Ok(n) => n as c_int,
+        Err(e) => {
+            set_error(&e);
+            -1
+        }
+    }
 }
 
 extern "C" {

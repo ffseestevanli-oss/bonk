@@ -48,6 +48,9 @@ or Propper.
   straight into the game.
 - **Import from Hammer:** open a `.vmf` with its texture alignment, groups and visgroups, and
   bring its materials along from a `materials` folder or a Workshop `.gma`.
+- **Stock Source content:** Bonk finds the Source games in your Steam libraries (GMod, HL2, CS:S,
+  TF2…) and imports their stock textures straight from the `.vpk` files, all of them or just the
+  ones you pick; single `.vpk` files work too. Stock models can go in your spawnlists.
 - **Projects:** one folder per addon, shared textures, and a start screen with recent projects
   and models.
 - **Walk it:** press <kbd>`</kbd> to walk around your model on its collision, as the player would
@@ -68,7 +71,8 @@ or Propper.
 
 Bonk only touches the Garry's Mod folder for three things: running its `studiomdl.exe`, writing
 `garrysmod/addons/<project>` when you choose File → Export to GMod Addons Folder, and running its
-`gmad` / `gmpublish` when you publish from File → Manage Workshop. Your Steam profile is only used
+`gmad` / `gmpublish` when you publish from File → Manage Workshop. When you import stock textures or
+models, it reads (never changes) the game folders you pick. Your Steam profile is only used
 by gmpublish, to list and upload your Workshop addons; Bonk asks before using it, and fetches your
 addons' thumbnails and dates from Steam's public Workshop lookup.
 
@@ -154,7 +158,7 @@ build.rs          finds Qt 6 and compiles the C++ host
 assets/           the app icon and tool panel icons
 cpp/host.cpp      Qt main window, docks, viewports, menus, projects, texture picker, settings, compiling
 cpp/guide.inc     the Bonk! Guide (Help → F1) and the About dialog
-cpp/importer.inc  Source material sources (folders, .gma) and the import dialogs
+cpp/importer.inc  Source material sources (folders, .gma, .vpk, Steam games) and the import dialogs
 src/main.rs       C ABI bridge between Qt and the editor, crash log
 src/editor.rs     tools, 2D views, camera, input handling
 src/doc.rs        convex brushes, selection, groups, layers, undo/redo
@@ -168,6 +172,8 @@ src/vmf.rs        KeyValues, VMF import, VMT parsing
 src/vtf.rs        VTF 7.2 writer with DXT1 / DXT5 compression
 src/vtfread.rs    VTF 7.0–7.5 reader
 src/mdl.rs        compiled model (.mdl / .vvd / .vtx) reader, for spawn icons of addon models
+src/vpk.rs        .vpk (Valve pak) directory reader
+src/content.rs    installed Source games (Steam libraries, gameinfo.txt) and one index over their files
 src/walk.rs       walk mode: the player against the collision model
 src/collision.rs  simplified collision, joining brushes
 packaging/        AppImage script, Flatpak test manifest, desktop files and AppStream metadata

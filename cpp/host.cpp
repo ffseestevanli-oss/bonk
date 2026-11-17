@@ -218,6 +218,10 @@ int bonk_vtf_info(const unsigned char *data, size_t len, int *out);
 const unsigned char *bonk_vtf_decode(const unsigned char *data, size_t len, int *w, int *h);
 const char *bonk_parse_vmt(const char *text);
 const char *bonk_clean_texture_path(const char *p);
+const char *bonk_source_games(const char *libraries);
+const char *bonk_game_title(const char *dir);
+const char *bonk_content_list(const char *path, const char *prefix);
+int bonk_content_extract_models(const char *path, const char *models, const char *dest);
 int bonk_tidy_groups();
 const char *bonk_hold_hint(int *out);
 void bonk_selection_options(int *out);
@@ -5496,7 +5500,7 @@ public:
             d.select(a.value(0).toInt(), a.value(1, QStringLiteral("-1")).toInt());
         }
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_DROP")) d.devDrop(qEnvironmentVariable("BONK_SPAWNLIST_DROP"));
-        if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_ADDONS")) d.devPickModels(); // developer aid: Add Models → From Addons
+        if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_ADDONS") || qEnvironmentVariableIsSet("BONK_SPAWNLIST_GAME")) d.devPickModels(); // developer aid: Add Models → From Addons / Games
         if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_TREEMOVE")) {
             const QStringList m = qEnvironmentVariable("BONK_SPAWNLIST_TREEMOVE").split(QLatin1Char(','));
             d.devTreeMove(m.value(0).toInt(), m.value(1).toInt(), m.value(2).toInt());
@@ -6852,10 +6856,25 @@ public:
     void importSourceTextures() {
         if (!ensureProject()) return;
         MaterialSourceDialog d(this, modelMaterials(),
-                               QStringLiteral("Bring in Source materials (VMT + VTF) as project textures. Point at a <b>materials</b> folder "
-                                              "(e.g. sourcemods/hl2/materials), the addon folder above one, or a Workshop <b>.gma</b>."));
+                               QStringLiteral("Bring in Source materials (VMT + VTF) as project textures: the stock materials of a "
+                                              "<b>Steam game</b> you have installed (Garry's Mod, Half-Life 2, Counter-Strike: Source…), a <b>.vpk</b>, "
+                                              "a <b>materials</b> folder (or the addon folder above one), or a Workshop <b>.gma</b>."));
+        if (qEnvironmentVariableIsSet("BONK_SCREENSHOT") && qEnvironmentVariableIsSet("BONK_IMPORT_GAME")) { // developer aid: a game, a search
+            d.devChoose(qEnvironmentVariable("BONK_IMPORT_GAME"), qEnvironmentVariable("BONK_IMPORT_SEARCH"));
+            d.show();
+            for (int i = 0; i < 5; ++i) QApplication::processEvents();
+            d.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".importsource.png"));
+            MaterialPickerDialog pd(this, d.src, d.keys());
+            pd.show();
+            for (int i = 0; i < 5; ++i) QApplication::processEvents();
+            pd.devPick(qEnvironmentVariable("BONK_IMPORT_SEARCH"));
+            for (int i = 0; i < 5; ++i) QApplication::processEvents();
+            pd.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".choosematerials.png"));
+            runSourceImport(d.src, d.keys(), false);
+            return;
+        }
         if (d.exec() != QDialog::Accepted) return;
-        runSourceImport(d.src, modelMaterials(), d.importEverything());
+        runSourceImport(d.src, d.keys(), d.importEverything());
     }
 
     /// File → Import VMF…
@@ -6960,9 +6979,9 @@ public:
                         runSourceImport(src, used, qEnvironmentVariable("BONK_IMPORT_ALL") == QStringLiteral("1"));
                 } else if (!qEnvironmentVariableIsSet("BONK_ASSUME_YES")) {
                     MaterialSourceDialog d(this, used,
-                                           QStringLiteral("Where are this map's materials? Point at the <b>materials</b> folder it used "
-                                                          "(e.g. sourcemods/hl2/materials), the addon folder above one, or a Workshop <b>.gma</b>."));
-                    if (d.exec() == QDialog::Accepted) runSourceImport(d.src, used, d.importEverything());
+                                           QStringLiteral("Where are this map's materials? Pick the <b>Steam game</b> it was made for, "
+                                                          "or point at the <b>materials</b> folder it used, the addon folder above one, a <b>.vpk</b> or a Workshop <b>.gma</b>."));
+                    if (d.exec() == QDialog::Accepted) runSourceImport(d.src, d.keys(), d.importEverything());
                 }
             }
             QString dest = project.modelsDir() + QLatin1Char('/') + stem + QStringLiteral(".bpmdl");
@@ -9143,6 +9162,7 @@ extern "C" int bonk_qt_run(int *argc, char **argv) {
                             if (pf.name == a.value(1)) w.dropPrefab(pf.file, a.value(2, QStringLiteral("-1")).toInt(), QPointF(a.value(3).toDouble(), a.value(4).toDouble()));
                 }
                 else if (c == QStringLiteral("spawnlist")) w.openSpawnlists();
+                else if (c == QStringLiteral("importsource")) w.importSourceTextures(); // with BONK_IMPORT_GAME / BONK_IMPORT_SEARCH
                 else if (c == QStringLiteral("spawnwrite")) w.writeSpawnlistQuiet();
                 else if (c == QStringLiteral("coldlg")) { auto *d = new CollisionDialog(&w, w.prefs.simplifyDetail, false, w.prefs.advanced); d->setAttribute(Qt::WA_DeleteOnClose); d->show(); }
                 else if (c.startsWith(QStringLiteral("anim:"))) w.importAnimation(c.mid(5).split(QLatin1Char('|')));

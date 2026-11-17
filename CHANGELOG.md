@@ -2,6 +2,22 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
+## Unreleased
+
+- **Stock Source content, straight from your games:** File → Import Source Textures… has a
+  **Steam Game** menu listing the Source games installed in any of your Steam libraries (native,
+  Flatpak or Snap Steam; Garry's Mod, Half-Life 2 and its episodes, Counter-Strike: Source, Team
+  Fortress 2, Portal, Left 4 Dead, source mods…). Bonk reads a game the way the engine mounts it,
+  from its gameinfo.txt: every `.vpk` and loose folder, first one wins. Games are only read.
+- **.vpk files** open there too (**File…**, along with `.gma`): any part of a split pak finds its
+  `_dir.vpk`. Picking a game's install folder (e.g. `Half-Life 2`) finds the game inside it.
+- **Only the ones I choose:** a material picker with a search box, a folder filter and a preview,
+  for taking a handful of stock textures out of a game's thousands.
+- **From Games** (Spawnlist Editor → Add Models, Advanced): stock models from an installed game (or a
+  `.vpk`), with a search box. They're drawn with their own textures (copied out to
+  `~/.local/share/bonk/game-models`); GMod keeps drawing their spawn icons itself, so the addon
+  doesn't override them.
+
 ## 1.0 Beta 7
 
 - **Missing textures are found again:** a model moved to another project (or out of its own) kept
