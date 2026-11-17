@@ -383,7 +383,8 @@ QString writeSpawnlists(const Spawnlists &sl, const Project &pj, const ThumbRend
             else lua += QStringLiteral("\t\t{ type = \"model\", model = %1 },\n").arg(luaStr(it.model));
             // the spawn icon: GMod's 64 × 64 one, plus one named for the tile's size
             const QString key = QStringLiteral("%1@%2x%3").arg(it.model).arg(it.wide).arg(it.tall);
-            if (doneThumbs.contains(key) || it.source.isEmpty() || !render) continue;
+            // stock models (picked from a game) keep the spawn icons GMod draws for them
+            if (doneThumbs.contains(key) || it.source.isEmpty() || isStockModel(it.source) || !render) continue;
             doneThumbs.insert(key);
             QString stem = it.model;
             if (stem.endsWith(QStringLiteral(".mdl"))) stem.chop(4);
@@ -1425,7 +1426,8 @@ private:
             l->addWidget(list, 1);
             auto *all = new QCheckBox(QStringLiteral("All"));
             QObject::connect(all, &QCheckBox::toggled, list, [list](bool on) {
-                for (int i = 0; i < list->count(); ++i) list->item(i)->setCheckState(on ? Qt::Checked : Qt::Unchecked);
+                for (int i = 0; i < list->count(); ++i) // what a search shows
+                    if (!on || !list->item(i)->isHidden()) list->item(i)->setCheckState(on ? Qt::Checked : Qt::Unchecked);
             });
             l->addWidget(all);
             return std::make_pair(w, l);
@@ -1436,8 +1438,9 @@ private:
         makeList(projModels, projList);
         auto [projPage, projLay] = withAll(projList);
         if (projModels.isEmpty()) projLay->insertWidget(0, new QLabel(QStringLiteral("This project has no models yet (Model Projects/*.bpmdl).")));
-        QListWidget *addonList = nullptr;
-        QList<QPair<QString, QString>> addonFound;
+        QListWidget *addonList = nullptr, *gameList = nullptr;
+        QList<QPair<QString, QString>> addonFound, gameFound;
+        QString gameSrc;
         QTabWidget *tabs = nullptr;
         if (addons) {
             tabs = new QTabWidget;
@@ -1473,6 +1476,96 @@ private:
             const QString remembered = QSettings().value("spawnlist/addonFolder").toString();
             load(QFileInfo(remembered).isDir() ? remembered : QString());
             tabs->addTab(addonPage, QStringLiteral("From Addons"));
+            // stock models from the Source games installed through Steam
+            gameList = new QListWidget;
+            gameList->setUniformItemSizes(true);
+            auto [gamePage, gameLay] = withAll(gameList);
+            auto *grow = new QHBoxLayout;
+            auto *gameBox = new QComboBox;
+            for (const auto &g : sourceGames()) gameBox->addItem(g.first, g.second);
+            gameBox->addItem(QStringLiteral("Other Game Folder…"), QStringLiteral(":folder"));
+            gameBox->addItem(QStringLiteral("Other .vpk File…"), QStringLiteral(":vpk"));
+            auto *gsearch = new QLineEdit;
+            gsearch->setPlaceholderText(QStringLiteral("Search, e.g. oildrum"));
+            gsearch->setClearButtonEnabled(true);
+            grow->addWidget(gameBox, 1);
+            grow->addWidget(gsearch, 1);
+            gameLay->insertLayout(0, grow);
+            auto *gnote = new QLabel(QStringLiteral("Stock models from your games. Garry's Mod and Half-Life 2 models work for every player; "
+                                                    "models from other games only show up for players who have that game mounted. "
+                                                    "GMod draws the spawn icons of stock models itself."));
+            gnote->setWordWrap(true);
+            gnote->setEnabled(false);
+            gameLay->insertWidget(1, gnote);
+            auto filterGames = [gameList = gameList, gsearch] {
+                const QStringList words = gsearch->text().toLower().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+                gameList->setUpdatesEnabled(false);
+                for (int i = 0; i < gameList->count(); ++i) {
+                    bool ok = true;
+                    for (const QString &w : words) ok = ok && gameList->item(i)->text().contains(w);
+                    gameList->item(i)->setHidden(!ok);
+                }
+                gameList->setUpdatesEnabled(true);
+            };
+            auto loadGame = [&, gameList = gameList, gnote, filterGames](const QString &path) {
+                gameFound.clear();
+                gameSrc = path;
+                if (!path.isEmpty()) {
+                    QApplication::setOverrideCursor(Qt::WaitCursor);
+                    const char *list = bonk_content_list(rustPath(path).constData(), "models/");
+                    const QString text = list ? QString::fromUtf8(list) : QString();
+                    QApplication::restoreOverrideCursor();
+                    if (!list) gnote->setText(QString::fromUtf8(bonk_last_error()));
+                    for (const QStringView l : QStringView(text).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+                        const QStringView rel = l.left(l.indexOf(QLatin1Char('\t')));
+                        if (rel.endsWith(QStringLiteral(".mdl"))) gameFound << qMakePair(QStringLiteral("models/") + rel.toString(), tildePath(path));
+                    }
+                }
+                makeList(gameFound, gameList);
+                filterGames();
+            };
+            QObject::connect(gsearch, &QLineEdit::textChanged, &d, filterGames);
+            auto pickGame = [&, gameBox, loadGame](int i) {
+                QString path = gameBox->itemData(i).toString();
+                const QString start = QSettings().value("spawnlist/game", QDir::homePath()).toString();
+                if (path == QStringLiteral(":folder")) path = QFileDialog::getExistingDirectory(&d, QStringLiteral("Game folder (the one with gameinfo.txt), or a folder with models/ in it"), start);
+                else if (path == QStringLiteral(":vpk")) path = QFileDialog::getOpenFileName(&d, QStringLiteral("Valve pak"), start, QStringLiteral("Valve paks (*.vpk)"));
+                if (path.isEmpty()) return;
+                if (const QString g = gameFolderIn(path); !g.isEmpty()) path = g;
+                QSettings().setValue("spawnlist/game", path);
+                if (gameBox->findData(path) < 0) {
+                    QSignalBlocker b(gameBox);
+                    gameBox->insertItem(gameBox->count() - 2, QFileInfo(path).fileName(), path);
+                    gameBox->setCurrentIndex(gameBox->findData(path));
+                }
+                loadGame(path);
+            };
+            QObject::connect(gameBox, &QComboBox::activated, &d, pickGame);
+            tabs->addTab(gamePage, QStringLiteral("From Games"));
+            {
+                // the game used last time (or Garry's Mod), listed when its tab is first shown
+                QString last = QSettings().value("spawnlist/game").toString();
+                if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_GAME")) last = qEnvironmentVariable("BONK_SPAWNLIST_GAME");
+                int at = last.isEmpty() ? -1 : gameBox->findData(last);
+                if (at < 0 && QFileInfo(last).exists() && !last.isEmpty()) {
+                    gameBox->insertItem(gameBox->count() - 2, QFileInfo(last).fileName(), last);
+                    at = gameBox->findData(last);
+                }
+                if (at < 0 && gameBox->count() > 2) at = 0;
+                QSignalBlocker b(gameBox);
+                gameBox->setCurrentIndex(std::max(at, 0));
+                const int gameTab = tabs->count() - 1;
+                auto loaded = std::make_shared<bool>(false);
+                QObject::connect(tabs, &QTabWidget::currentChanged, &d, [=](int t) {
+                    if (t != gameTab || *loaded) return;
+                    *loaded = true;
+                    if (at >= 0 && !gameBox->itemData(gameBox->currentIndex()).toString().startsWith(QLatin1Char(':'))) loadGame(gameBox->currentData().toString());
+                });
+                if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_GAME")) { // developer aid: that game, on its tab, searched
+                    tabs->setCurrentIndex(gameTab);
+                    gsearch->setText(qEnvironmentVariable("BONK_SPAWNLIST_GAME_SEARCH"));
+                }
+            }
             if (qEnvironmentVariableIsSet("BONK_SPAWNLIST_ADDONS")) { // developer aid: that folder, on its tab
                 load(qEnvironmentVariable("BONK_SPAWNLIST_ADDONS"));
                 tabs->setCurrentIndex(1);
@@ -1497,6 +1590,16 @@ private:
             for (int i = 0; i < 5; ++i) QApplication::processEvents();
             d.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".addmodels.png"));
             for (int i = 0; addonList && i < addonList->count(); ++i) addonList->item(i)->setCheckState(Qt::Checked);
+        } else if (qEnvironmentVariableIsSet("BONK_SCREENSHOT") && qEnvironmentVariableIsSet("BONK_SPAWNLIST_GAME")) {
+            d.show();
+            for (int i = 0; i < 5; ++i) QApplication::processEvents();
+            for (int i = 0, n = 0; gameList && i < gameList->count() && n < 3; ++i) // the first few a search shows
+                if (!gameList->item(i)->isHidden()) {
+                    gameList->item(i)->setCheckState(Qt::Checked);
+                    ++n;
+                }
+            for (int i = 0; i < 3; ++i) QApplication::processEvents();
+            d.grab().save(qEnvironmentVariable("BONK_SCREENSHOT") + QStringLiteral(".addgamemodels.png"));
         } else if (d.exec() != QDialog::Accepted) {
             return;
         }
@@ -1512,6 +1615,25 @@ private:
         };
         take(projList, projModels);
         take(addonList, addonFound);
+        // stock models: copied out of the game first, so their icons can be drawn
+        QStringList want;
+        for (int i = 0; gameList && i < gameList->count() && i < gameFound.size(); ++i)
+            if (gameList->item(i)->checkState() == Qt::Checked) want << gameFound[i].first;
+        if (!want.isEmpty()) {
+            const QString dest = gameModelsDir(gameSrc);
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            const int n = bonk_content_extract_models(rustPath(gameSrc).constData(), want.join(QLatin1Char('\n')).toUtf8().constData(), rustPath(dest).constData());
+            QApplication::restoreOverrideCursor();
+            if (n < 0) QMessageBox::warning(this, windowTitle(), QStringLiteral("Couldn't copy the models out of the game:\n%1").arg(QString::fromUtf8(bonk_last_error())));
+            for (const QString &m : want) {
+                SpawnItem it;
+                it.model = m;
+                it.source = dest + QLatin1Char('/') + m;
+                if (!QFileInfo::exists(it.source)) continue;
+                fit(it);
+                c->items << it;
+            }
+        }
         changed();
         showCategory();
     }

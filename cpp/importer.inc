@@ -1,30 +1,92 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Steventechno and the Bonk! contributors
 
-// Importing from Source: material sources (folders and Workshop .gma files),
-// the "where are the materials" dialog and the visgroup picker used by
+// Importing from Source: material sources (folders, Workshop .gma files,
+// .vpk archives and installed Source games), the "where are the materials"
+// dialog, the material picker and the visgroup picker used by
 // File → Import VMF… and File → Import Source Textures…
 // Included into host.cpp inside its namespace.
 
+/// The Source games installed through Steam: (name, game folder), Garry's Mod
+/// first. Looked up once per run (again with refresh).
+QList<QPair<QString, QString>> sourceGames(bool refresh = false) {
+    static QList<QPair<QString, QString>> games;
+    static bool looked = false;
+    if (looked && !refresh) return games;
+    looked = true;
+    games.clear();
+    SteamFind sf;
+    sf.detect();
+    QStringList libs = sf.libraries;
+    // a GMod folder chosen in Settings, outside the libraries Steam lists
+    if (!sf.gmodDir.isEmpty()) libs << QDir::cleanPath(sf.gmodDir + QStringLiteral("/../../.."));
+    for (const QString &l : QString::fromUtf8(bonk_source_games(rustPath(libs.join(QLatin1Char('\n'))).constData())).split(QLatin1Char('\n'), Qt::SkipEmptyParts))
+        if (l.contains(QLatin1Char('\t'))) games << qMakePair(l.section(QLatin1Char('\t'), 0, 0), l.section(QLatin1Char('\t'), 1));
+    return games;
+}
+
+/// Where stock models picked from a game are copied (with their textures) so
+/// their spawn icons can be drawn: one folder per game.
+QString gameModelsRoot() { return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/bonk/game-models"); }
+QString gameModelsDir(const QString &source) {
+    QString n = QFileInfo(source).fileName().toLower();
+    if (n.endsWith(QStringLiteral("_dir.vpk"))) n.chop(8);
+    else if (n.endsWith(QStringLiteral(".vpk"))) n.chop(4);
+    n.replace(QRegularExpression(QStringLiteral("[^a-z0-9_.-]+")), QStringLiteral("_"));
+    return gameModelsRoot() + QLatin1Char('/') + (n.isEmpty() ? QStringLiteral("game") : n);
+}
+bool isStockModel(const QString &source) { return !source.isEmpty() && QDir::cleanPath(source).startsWith(gameModelsRoot() + QLatin1Char('/')); }
+
+/// The game folder (the one with gameinfo.txt) for a folder that is one, or
+/// holds one (a game's install folder: "Half-Life 2" → "Half-Life 2/hl2").
+QString gameFolderIn(const QString &dir, QString *title = nullptr) {
+    auto titleOf = [](const QString &d) { return QString::fromUtf8(bonk_game_title(rustPath(d).constData())); };
+    QString t = titleOf(dir);
+    QString found = t.isEmpty() ? QString() : dir;
+    if (found.isEmpty() && QFileInfo(dir).isDir()) {
+        QStringList subs = QDir(dir).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        // the main game first when an install has several (hl2 before episodic, ep2…)
+        std::stable_sort(subs.begin(), subs.end(), [](const QString &a, const QString &b) {
+            auto main = [](const QString &n) { return n.compare(QStringLiteral("garrysmod"), Qt::CaseInsensitive) && n.compare(QStringLiteral("hl2"), Qt::CaseInsensitive); };
+            return main(a) < main(b);
+        });
+        for (const QString &sub : subs) {
+            if (sub.compare(QStringLiteral("materials"), Qt::CaseInsensitive) == 0) return QString(); // an addon or mod's content folder
+            const QString d = dir + QLatin1Char('/') + sub;
+            if (!(t = titleOf(d)).isEmpty()) {
+                found = d;
+                break;
+            }
+        }
+    }
+    if (title) *title = t;
+    return found;
+}
+
 /// Where imported materials come from: a folder (an addon, a mod's materials
-/// folder) or a Workshop .gma. Paths are relative to materials/, lowercase,
-/// with "/" separators, e.g. "brick/brickwall001a.vmt".
+/// folder), a Workshop .gma, a .vpk, or a Source game (everything its
+/// gameinfo.txt mounts). Paths are relative to materials/, lowercase, with "/"
+/// separators, e.g. "brick/brickwall001a.vmt".
 class MatSource {
 public:
-    QString path, error;
-    bool isGma = false;
+    QString path, error, title;
+    bool isGma = false, isVpk = false, isGame = false;
 
     bool open(const QString &p) {
         path = p;
         error.clear();
+        title.clear();
         index.clear();
-        isGma = false;
+        isGma = isVpk = isGame = false;
         QFileInfo fi(p);
         if (fi.isFile() && p.endsWith(QStringLiteral(".gma"), Qt::CaseInsensitive)) return openGma(p);
+        if (fi.isFile() && p.endsWith(QStringLiteral(".vpk"), Qt::CaseInsensitive)) return openContent(p, false);
         if (!fi.isDir()) {
-            error = p.isEmpty() ? QString() : QStringLiteral("That isn't a folder or a .gma file.");
+            error = p.isEmpty() ? QString() : QStringLiteral("That isn't a folder, a .gma or a .vpk file.");
             return false;
         }
+        const QString game = gameFolderIn(p, &title);
+        if (!game.isEmpty()) return openContent(game, true);
         QString root = p;
         for (const QString &d : QDir(p).entryList(QDir::Dirs | QDir::NoDotAndDotDot))
             if (d.compare(QStringLiteral("materials"), Qt::CaseInsensitive) == 0) root = QDir(p).absoluteFilePath(d);
@@ -44,11 +106,9 @@ public:
     QByteArray read(const QString &rel, qint64 max = -1) const {
         auto it = index.constFind(rel.toLower());
         if (it == index.constEnd()) return QByteArray();
-        QFile f(it->file);
-        if (!f.open(QIODevice::ReadOnly)) return QByteArray();
-        if (it->size < 0) return max < 0 ? f.readAll() : f.read(max);
-        f.seek(it->offset);
-        return f.read(max < 0 ? it->size : std::min(max, it->size));
+        QByteArray out = readPart(it->file, it->offset, it->size, max);
+        if (!it->file2.isEmpty() && (max < 0 || out.size() < max)) out += readPart(it->file2, it->offset2, it->size2, max < 0 ? -1 : max - out.size());
+        return out;
     }
 
     /// Every material in the source (without ".vmt").
@@ -64,14 +124,51 @@ public:
         for (auto it = index.constBegin(); it != index.constEnd(); ++it) n += it.key().endsWith(QStringLiteral(".vmt"));
         return n;
     }
-    QString describe() const { return isGma ? QFileInfo(path).fileName() : tildePath(path); }
+    QString describe() const { return isGame ? title : (isGma || isVpk) ? QFileInfo(path).fileName() : tildePath(path); }
 
 private:
     struct Entry {
         QString file;
         qint64 offset, size; // size < 0: a plain file
+        QString file2;       // a VPK file split between its directory and an archive: the second piece
+        qint64 offset2 = 0, size2 = 0;
     };
     QHash<QString, Entry> index;
+
+    static QByteArray readPart(const QString &file, qint64 offset, qint64 size, qint64 max) {
+        QFile f(file);
+        if (!f.open(QIODevice::ReadOnly)) return QByteArray();
+        if (size < 0) return max < 0 ? f.readAll() : f.read(max);
+        f.seek(offset);
+        return f.read(max < 0 ? size : std::min(max, size));
+    }
+
+    /// A .vpk, or a game folder: the Rust side indexes it (every VPK and loose
+    /// folder the game mounts), this keeps where each material file is.
+    bool openContent(const QString &p, bool game) {
+        const char *list = bonk_content_list(rustPath(p).constData(), "materials/");
+        if (!list) {
+            error = QString::fromUtf8(bonk_last_error());
+            return false;
+        }
+        const QString text = QString::fromUtf8(list);
+        for (const QStringView line : QStringView(text).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+            const auto f = line.split(QLatin1Char('\t'));
+            if (f.size() < 4) continue;
+            Entry e{f[1].toString(), f[2].toLongLong(), f[3].toLongLong()};
+            if (f.size() >= 7) {
+                e.file2 = f[4].toString();
+                e.offset2 = f[5].toLongLong();
+                e.size2 = f[6].toLongLong();
+            }
+            index.insert(f[0].toString(), e);
+        }
+        path = p;
+        isGame = game;
+        isVpk = !game;
+        if (vmtCount() == 0) error = game ? QStringLiteral("No materials in that game.") : QStringLiteral("No materials in that .vpk.");
+        return error.isEmpty();
+    }
 
     /// GMA: "GMAD", version, steam id, time, [required content], name,
     /// description, author, addon version, then the file table and the data.
@@ -226,7 +323,176 @@ struct SourceVmt {
     }
 };
 
-/// "Where are this model's materials?": a folder or .gma, and how much to bring in.
+/// A texture preview for a material in a source: its $basetexture, decoded.
+/// Null when it has none or it can't be read.
+QImage sourcePreview(const MatSource &src, const QString &key, QString *info = nullptr) {
+    const SourceVmt vmt = SourceVmt::load(src, key);
+    const QString base = vmt.ok ? SourceVmt::clean(vmt.params.value(QStringLiteral("$basetexture"))) : QString();
+    if (info) *info = vmt.ok ? QStringLiteral("%1 material").arg(vmt.shader) : QStringLiteral("couldn't read its VMT");
+    if (base.isEmpty()) return QImage();
+    const QByteArray data = src.read(base + QStringLiteral(".vtf"));
+    int w = 0, h = 0;
+    const uchar *px = data.isEmpty() ? nullptr : bonk_vtf_decode(reinterpret_cast<const uchar *>(data.constData()), size_t(data.size()), &w, &h);
+    if (!px) {
+        if (info) *info += QStringLiteral(", no texture (%1.vtf)").arg(base);
+        return QImage();
+    }
+    if (info) *info += QStringLiteral(", %1 × %2").arg(w).arg(h);
+    return QImage(px, w, h, w * 4, QImage::Format_RGBA8888).copy();
+}
+
+/// Tick the materials to bring in from a big source (a whole game): a search
+/// box, a folder filter and a preview of the one under the cursor.
+class MaterialPickerDialog : public QDialog {
+public:
+    MaterialPickerDialog(QWidget *parent, const MatSource &src, const QStringList &already) : QDialog(parent), src(src) {
+        setWindowTitle(QStringLiteral("Choose Materials: %1").arg(src.describe()));
+        auto *v = new QVBoxLayout(this);
+        auto *top = new QHBoxLayout;
+        search = new QLineEdit;
+        search->setPlaceholderText(QStringLiteral("Search, e.g. brick wall"));
+        search->setClearButtonEnabled(true);
+        folder = new QComboBox;
+        top->addWidget(search, 1);
+        top->addWidget(folder);
+        v->addLayout(top);
+        auto *mid = new QHBoxLayout;
+        list = new QListWidget;
+        list->setUniformItemSizes(true);
+        mid->addWidget(list, 1);
+        auto *side = new QVBoxLayout;
+        preview = new QLabel;
+        preview->setFixedSize(gCompact ? 160 : 224, gCompact ? 160 : 224);
+        preview->setAlignment(Qt::AlignCenter);
+        preview->setStyleSheet(QStringLiteral("background:#202024;border:1px solid #3a3a40;"));
+        info = new QLabel;
+        info->setWordWrap(true);
+        info->setFixedWidth(preview->width());
+        info->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        side->addWidget(preview);
+        side->addWidget(info);
+        side->addStretch(1);
+        mid->addLayout(side);
+        v->addLayout(mid, 1);
+        auto *row = new QHBoxLayout;
+        auto *tickShown = new QPushButton(QStringLiteral("Tick Shown"));
+        auto *untick = new QPushButton(QStringLiteral("Untick All"));
+        count = new QLabel;
+        row->addWidget(tickShown);
+        row->addWidget(untick);
+        row->addWidget(count, 1);
+        v->addLayout(row);
+        auto *bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        bb->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Use These"));
+        v->addWidget(bb);
+
+        // the list: every material but the tool textures (nodraw, clip…)
+        const QSet<QString> was(already.begin(), already.end());
+        QSet<QString> folders;
+        list->setUpdatesEnabled(false);
+        for (const QString &m : src.materials()) {
+            if (m.startsWith(QStringLiteral("tools/"))) continue;
+            auto *it = new QListWidgetItem(m, list);
+            it->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
+            it->setCheckState(was.contains(m) ? Qt::Checked : Qt::Unchecked);
+            folders.insert(m.contains(QLatin1Char('/')) ? m.section(QLatin1Char('/'), 0, 0) : QString());
+        }
+        list->setUpdatesEnabled(true);
+        QStringList fl(folders.begin(), folders.end());
+        fl.removeAll(QString());
+        fl.sort();
+        folder->addItem(QStringLiteral("All folders"), QString());
+        for (const QString &f : fl) folder->addItem(f, f);
+        chosen = was.size();
+
+        QObject::connect(search, &QLineEdit::textChanged, this, [this] { filter(); });
+        QObject::connect(folder, &QComboBox::currentIndexChanged, this, [this] { filter(); });
+        QObject::connect(list, &QListWidget::currentItemChanged, this, [this](QListWidgetItem *it) { showPreview(it); });
+        QObject::connect(list, &QListWidget::itemChanged, this, [this] { recount(); });
+        QObject::connect(tickShown, &QPushButton::clicked, this, [this] { setAll(true); });
+        QObject::connect(untick, &QPushButton::clicked, this, [this] { setAll(false); });
+        QObject::connect(bb, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        QObject::connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        filter();
+        resize(gCompact ? 640 : 820, gCompact ? 480 : 600);
+    }
+
+    QStringList picked() const {
+        QStringList out;
+        for (int i = 0; i < list->count(); ++i)
+            if (list->item(i)->checkState() == Qt::Checked) out << list->item(i)->text();
+        return out;
+    }
+
+    /// Developer aid: type a search and tick what it shows.
+    void devPick(const QString &text) {
+        search->setText(text);
+        setAll(true);
+        if (list->count()) {
+            for (int i = 0; i < list->count(); ++i)
+                if (!list->item(i)->isHidden()) {
+                    list->setCurrentRow(i);
+                    break;
+                }
+        }
+    }
+
+private:
+    const MatSource &src;
+    QLineEdit *search;
+    QComboBox *folder;
+    QListWidget *list;
+    QLabel *preview, *info, *count;
+    int chosen = 0, shown = 0;
+
+    void filter() {
+        const QStringList words = search->text().toLower().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        const QString f = folder->currentData().toString();
+        shown = 0;
+        list->setUpdatesEnabled(false);
+        for (int i = 0; i < list->count(); ++i) {
+            QListWidgetItem *it = list->item(i);
+            const QString t = it->text();
+            bool ok = f.isEmpty() || t.startsWith(f + QLatin1Char('/'));
+            for (const QString &w : words)
+                if (ok && !t.contains(w)) ok = false;
+            it->setHidden(!ok);
+            shown += ok;
+        }
+        list->setUpdatesEnabled(true);
+        recount();
+    }
+    void setAll(bool on) {
+        if (on && shown > 2000 &&
+            QMessageBox::question(this, windowTitle(), QStringLiteral("Tick all %1 materials shown?").arg(QLocale().toString(shown))) != QMessageBox::Yes)
+            return;
+        list->blockSignals(true);
+        for (int i = 0; i < list->count(); ++i)
+            if (!on || !list->item(i)->isHidden()) list->item(i)->setCheckState(on ? Qt::Checked : Qt::Unchecked);
+        list->blockSignals(false);
+        recount();
+    }
+    void recount() {
+        chosen = 0;
+        for (int i = 0; i < list->count(); ++i) chosen += list->item(i)->checkState() == Qt::Checked;
+        count->setText(QStringLiteral("%1 shown, <b>%2 ticked</b>").arg(QLocale().toString(shown), QLocale().toString(chosen)));
+    }
+    void showPreview(QListWidgetItem *it) {
+        if (!it) {
+            preview->clear();
+            info->clear();
+            return;
+        }
+        QString text;
+        const QImage img = sourcePreview(src, it->text(), &text);
+        if (img.isNull()) preview->setText(QStringLiteral("No preview"));
+        else preview->setPixmap(QPixmap::fromImage(img.scaled(preview->size() - QSize(4, 4), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+        info->setText(QStringLiteral("<b>%1</b><br>%2").arg(it->text().toHtmlEscaped(), text.toHtmlEscaped()));
+    }
+};
+
+/// "Where are this model's materials?": a folder, .gma, .vpk or installed
+/// Source game, and how much to bring in.
 class MaterialSourceDialog : public QDialog {
 public:
     MatSource src;
@@ -239,22 +505,37 @@ public:
         v->addWidget(lead);
         auto *row = new QHBoxLayout;
         pathEdit = new QLineEdit(QSettings().value("import/lastSource").toString());
-        pathEdit->setPlaceholderText(QStringLiteral("…/materials, an addon folder, or a .gma"));
+        pathEdit->setPlaceholderText(QStringLiteral("A Steam game, …/materials, an addon folder, a .gma or a .vpk"));
+        auto *gameBtn = new QToolButton;
+        gameBtn->setText(QStringLiteral("Steam Game"));
+        gameBtn->setToolTip(QStringLiteral("The Source games installed through Steam: their stock materials, read from the game's .vpk files"));
+        gameBtn->setPopupMode(QToolButton::InstantPopup);
+        auto *games = new QMenu(gameBtn);
+        gameBtn->setMenu(games);
         auto *folderBtn = new QPushButton(QStringLiteral("Folder…"));
-        auto *gmaBtn = new QPushButton(QStringLiteral(".gma…"));
+        auto *fileBtn = new QPushButton(QStringLiteral("File…"));
+        fileBtn->setToolTip(QStringLiteral("A Workshop addon (.gma) or a Valve pak (.vpk; for a split one, any of its parts)"));
         row->addWidget(pathEdit, 1);
+        row->addWidget(gameBtn);
         row->addWidget(folderBtn);
-        row->addWidget(gmaBtn);
+        row->addWidget(fileBtn);
         v->addLayout(row);
         status = new QLabel;
         status->setWordWrap(true);
         v->addWidget(status);
         onlyUsed = new QRadioButton;
         everything = new QRadioButton;
+        choose = new QRadioButton;
+        auto *chooseBtn = new QPushButton(QStringLiteral("Choose…"));
         v->addWidget(onlyUsed);
         v->addWidget(everything);
+        auto *cr = new QHBoxLayout;
+        cr->addWidget(choose);
+        cr->addWidget(chooseBtn);
+        cr->addStretch(1);
+        v->addLayout(cr);
         v->addWidget(hintLabel(QStringLiteral("Textures go into the project's assets/Textures in the same folders as the originals, "
-                                              "with each material's settings as its Material Properties.")));
+                                              "with each material's settings as its Material Properties. Games are only read, never changed.")));
         auto *bb = new QDialogButtonBox;
         importBtn = bb->addButton(QStringLiteral("Import Textures"), QDialogButtonBox::AcceptRole);
         bb->addButton(QStringLiteral("Skip"), QDialogButtonBox::RejectRole);
@@ -264,29 +545,63 @@ public:
             accept();
         });
         QObject::connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
-        QObject::connect(pathEdit, &QLineEdit::editingFinished, this, [this] { check(); });
+        QObject::connect(pathEdit, &QLineEdit::editingFinished, this, [this] {
+            if (pathEdit->text().trimmed() != src.path) check();
+        });
+        QObject::connect(games, &QMenu::aboutToShow, this, [this, games] {
+            games->clear();
+            const auto found = sourceGames();
+            for (const auto &g : found)
+                games->addAction(g.first, this, [this, g] {
+                    pathEdit->setText(g.second);
+                    check();
+                })->setToolTip(tildePath(g.second));
+            if (found.isEmpty()) games->addAction(QStringLiteral("No Source games found in Steam"))->setEnabled(false);
+            games->addSeparator();
+            games->addAction(QStringLiteral("Look Again"), this, [] { sourceGames(true); });
+        });
         QObject::connect(folderBtn, &QPushButton::clicked, this, [this] {
-            const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Materials folder (or the addon folder above it)"), startDir());
+            const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Materials folder, the addon folder above it, or a game's folder"), startDir());
             if (!d.isEmpty()) { pathEdit->setText(d); check(); }
         });
-        QObject::connect(gmaBtn, &QPushButton::clicked, this, [this] {
-            const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Workshop addon"), startDir(), QStringLiteral("Garry's Mod addons (*.gma)"));
+        QObject::connect(fileBtn, &QPushButton::clicked, this, [this] {
+            const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Workshop addon or Valve pak"), startDir(),
+                                                           QStringLiteral("Addons and paks (*.gma *.vpk);;Garry's Mod addons (*.gma);;Valve paks (*.vpk)"));
             if (!f.isEmpty()) { pathEdit->setText(f); check(); }
         });
+        QObject::connect(chooseBtn, &QPushButton::clicked, this, [this] { pickMaterials(); });
         onlyUsed->setChecked(!used.isEmpty());
         everything->setChecked(used.isEmpty());
         QObject::connect(onlyUsed, &QRadioButton::toggled, this, [this] { syncButton(); });
+        QObject::connect(choose, &QRadioButton::toggled, this, [this](bool on) {
+            if (on && picked.isEmpty() && isVisible() && !checking) pickMaterials();
+            syncButton();
+        });
         check();
-        resize(gCompact ? 520 : 620, sizeHint().height());
+        resize(gCompact ? 560 : 680, sizeHint().height());
     }
 
     bool importEverything() const { return everything->isChecked(); }
+    /// The materials to bring in: the ones chosen by hand, or those the model uses.
+    QStringList keys() const { return choose->isChecked() ? picked : used; }
+
+    /// Developer aid: pick a source and tick the materials a search finds.
+    void devChoose(const QString &path, const QString &search) {
+        pathEdit->setText(path);
+        check();
+        MaterialPickerDialog d(this, src, picked);
+        d.devPick(search);
+        picked = d.picked();
+        choose->setChecked(true);
+        updateChooseText();
+        syncButton();
+    }
 
 private:
-    QStringList used;
+    QStringList used, picked;
     QLineEdit *pathEdit;
     QLabel *status;
-    QRadioButton *onlyUsed, *everything;
+    QRadioButton *onlyUsed, *everything, *choose;
     QPushButton *importBtn;
 
     QString startDir() const {
@@ -294,9 +609,25 @@ private:
         return t.isEmpty() ? QDir::homePath() : QFileInfo(t).isDir() ? t : QFileInfo(t).absolutePath();
     }
 
+    void pickMaterials() {
+        if (!lastOk) return;
+        MaterialPickerDialog d(this, src, picked);
+        if (d.exec() == QDialog::Accepted) picked = d.picked();
+        choose->setChecked(!picked.isEmpty() || choose->isChecked());
+        updateChooseText();
+        syncButton();
+    }
+    void updateChooseText() { choose->setText(QStringLiteral("Only the ones I choose (%1)").arg(picked.size())); }
+
     void check() {
         const QString p = pathEdit->text().trimmed();
+        checking = true;
+        struct Done { bool *b; ~Done() { *b = false; } } done{&checking};
+        QApplication::setOverrideCursor(Qt::WaitCursor); // a whole game takes a moment
         const bool ok = src.open(p);
+        QApplication::restoreOverrideCursor();
+        if (ok && src.path != p) pathEdit->setText(src.path); // a game's install folder → its game folder
+        picked.clear();
         int found = 0;
         QStringList miss;
         for (const QString &u : used) {
@@ -305,7 +636,7 @@ private:
         }
         if (p.isEmpty()) status->setText(QStringLiteral("Choose where the materials are."));
         else if (!ok) status->setText(QStringLiteral("<span style='color:#e0603a'>%1</span>").arg(src.error.toHtmlEscaped()));
-        else if (used.isEmpty()) status->setText(QStringLiteral("✔ %1 material%2 in %3.").arg(src.vmtCount()).arg(src.vmtCount() == 1 ? QString() : QStringLiteral("s"), src.describe().toHtmlEscaped()));
+        else if (used.isEmpty()) status->setText(QStringLiteral("✔ %1 material%2 in %3.").arg(QLocale().toString(src.vmtCount())).arg(src.vmtCount() == 1 ? QString() : QStringLiteral("s"), src.describe().toHtmlEscaped()));
         else {
             QString t = QStringLiteral("✔ Found <b>%1 of %2</b> materials this model uses.").arg(found).arg(used.size());
             if (!miss.isEmpty()) {
@@ -316,16 +647,22 @@ private:
             status->setText(t);
         }
         onlyUsed->setText(QStringLiteral("Only what this model uses (%1)").arg(ok ? found : 0));
-        everything->setText(QStringLiteral("Everything in it (%1)").arg(ok ? src.vmtCount() : 0));
+        everything->setText(QStringLiteral("Everything in it (%1)").arg(ok ? QLocale().toString(src.vmtCount()) : QStringLiteral("0")));
+        updateChooseText();
         onlyUsed->setEnabled(ok && !used.isEmpty());
         everything->setEnabled(ok);
-        if (used.isEmpty()) everything->setChecked(true);
+        choose->setEnabled(ok);
+        // a whole game is too much to take everything from by default
+        if (used.isEmpty() || (!onlyUsed->isEnabled() && onlyUsed->isChecked())) (src.vmtCount() > 500 ? choose : everything)->setChecked(true);
+        else if (choose->isChecked()) onlyUsed->setChecked(true);
         lastOk = ok;
         lastFound = found;
         syncButton();
     }
-    void syncButton() { importBtn->setEnabled(lastOk && (everything->isChecked() ? src.vmtCount() > 0 : lastFound > 0)); }
-    bool lastOk = false;
+    void syncButton() {
+        importBtn->setEnabled(lastOk && (everything->isChecked() ? src.vmtCount() > 0 : choose->isChecked() ? !picked.isEmpty() : lastFound > 0));
+    }
+    bool lastOk = false, checking = false;
     int lastFound = 0;
 };
 
