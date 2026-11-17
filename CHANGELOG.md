@@ -2,7 +2,7 @@
 
 All notable changes to Bonk! Model Prop-inator!, newest first.
 
-## Unreleased
+## 1.0 Beta 8
 
 - **Stock Source content, straight from your games:** File → Import Source Textures… has a
   **Steam Game** menu listing the Source games installed in any of your Steam libraries (native,
@@ -17,6 +17,7 @@ All notable changes to Bonk! Model Prop-inator!, newest first.
   `.vpk`), with a search box. They're drawn with their own textures (copied out to
   `~/.local/share/bonk/game-models`); GMod keeps drawing their spawn icons itself, so the addon
   doesn't override them.
+- The Flatpak is built on the KDE 6.10 runtime (6.8 is end-of-life and no longer builds).
 
 ## 1.0 Beta 7
 

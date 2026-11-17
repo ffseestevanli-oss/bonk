@@ -10,7 +10,7 @@
   Garry's Mod's own studiomdl through Proton.
 </p>
 
-<p align="center"><b>Beta:</b> 1.0 Beta 5. Everything planned for 1.0 is in; tell us what breaks.</p>
+<p align="center"><b>Beta:</b> 1.0 Beta 8. Everything planned for 1.0 is in; tell us what breaks.</p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue"></a>
