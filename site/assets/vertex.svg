@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <!-- skewed quad being edited -->
+  <path d="M14 18 L50 12 L44 46 L10 50 Z" fill="#ffffff" fill-opacity="0.12" stroke="#ffffff" stroke-width="3.5" stroke-linejoin="round"/>
+  <!-- vertex handles -->
+  <g fill="#ffffff">
+    <rect x="9.5" y="13.5" width="9" height="9" rx="1.5"/>
+    <rect x="45.5" y="7.5" width="9" height="9" rx="1.5"/>
+    <rect x="39.5" y="41.5" width="9" height="9" rx="1.5"/>
+    <rect x="5.5" y="45.5" width="9" height="9" rx="1.5"/>
+  </g>
+</svg>

@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bonk! Model Prop-inator! · Garry's Mod props on Linux</title>
+  <meta name="description" content="Bonk is a Hammer-style brush modeler that builds Garry's Mod props (MDL + VMT + VTF) natively on Linux and the Steam Deck. Grab, size and copy with one key, drop in PNG or JPG textures, compile in one click.">
+  <meta property="og:title" content="Bonk! Model Prop-inator!">
+  <meta property="og:description" content="Your Garry's Mod modeling tool for Linux. Hammer-style brushes in, compiled props out.">
+  <meta property="og:type" content="website">
+  <meta name="theme-color" content="#1b1e24">
+  <link rel="icon" href="assets/bonk.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="Bonk home">
+      <img src="assets/bonk.svg" alt="" width="36" height="36">
+      <span class="pixel">Bonk!</span>
+    </a>
+    <nav aria-label="Sections">
+      <a href="#tools">Tools</a>
+      <a href="#textures">Textures</a>
+      <a href="#hammer">vs Hammer</a>
+      <a href="#more">Features</a>
+      <a class="btn btn-small" href="#download">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============ HERO ============ -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="tux" aria-hidden="true">🐧</span> Native on Linux &amp; Steam Deck</p>
+        <h1>Build Garry's Mod props<br>the Hammer way. <span class="hl">No Windows.</span></h1>
+        <p class="lead">
+          Bonk! Model Prop-inator! is a brush modeler that turns blocks, wedges and cylinders into real
+          GMod props: MDL, VMT and VTF, compiled with Garry's Mod's own studiomdl and dropped straight
+          into your addons folder.
+        </p>
+        <div class="cta">
+          <a class="btn btn-big" href="#download">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 3v11.2l4.1-4.1 1.4 1.4L12 17l-5.5-5.5 1.4-1.4 4.1 4.1V3h2zM4 19h16v2H4z"/></svg>
+            Download for Linux
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/ffseestevanli-oss/bonk">View on GitHub</a>
+        </div>
+        <p class="fine"><span data-release-name>1.0 Beta</span> · AppImage &amp; Flatpak · free and open source (GPL-3.0)</p>
+      </div>
+
+      <!-- Four-view editor illustration -->
+      <figure class="editor" aria-label="Illustration of Bonk's four-view editor">
+        <div class="editor-bar"><i></i><i></i><i></i><span>Bonk! — crate.bpmdl</span></div>
+        <div class="views">
+          <div class="view view-3d">
+            <svg viewBox="0 0 200 130" aria-hidden="true">
+              <defs>
+                <pattern id="floor" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" fill="none" stroke="#2a3140" stroke-width="1"/></pattern>
+              </defs>
+              <polygon points="0,130 200,130 160,70 40,70" fill="url(#floor)"/>
+              <g class="crate3d" stroke="#11141a" stroke-width="2" stroke-linejoin="round">
+                <polygon fill="#ffb067" points="100,30 140,48 100,66 60,48"/>
+                <polygon fill="#e8833a" points="60,48 100,66 100,104 60,86"/>
+                <polygon fill="#c4621f" points="100,66 140,48 140,86 100,104"/>
+                <path d="M60,48 100,104 M100,66 60,86 M100,66 140,86 M140,48 100,104" stroke="#8a4614" stroke-width="1.5" opacity=".6"/>
+              </g>
+              <text x="6" y="12" class="vlabel">3D</text>
+            </svg>
+          </div>
+          <div class="view">
+            <svg viewBox="0 0 200 130" aria-hidden="true">
+              <rect width="200" height="130" fill="url(#grid2d)"/>
+              <rect x="70" y="35" width="60" height="60" class="brush2d"/>
+              <text x="6" y="12" class="vlabel">Top (X/Y)</text>
+            </svg>
+          </div>
+          <div class="view">
+            <svg viewBox="0 0 200 130" aria-hidden="true">
+              <rect width="200" height="130" fill="url(#grid2d)"/>
+              <rect x="70" y="45" width="60" height="50" class="brush2d"/>
+              <text x="6" y="12" class="vlabel">Front (Y/Z)</text>
+            </svg>
+          </div>
+          <div class="view">
+            <svg viewBox="0 0 200 130" aria-hidden="true">
+              <rect width="200" height="130" fill="url(#grid2d)"/>
+              <rect x="70" y="45" width="60" height="50" class="brush2d"/>
+              <text x="6" y="12" class="vlabel">Side (X/Z)</text>
+            </svg>
+          </div>
+        </div>
+        <figcaption>Four views, convex brushes, Hammer-style keys.</figcaption>
+      </figure>
+    </div>
+
+    <!-- shared 2D grid pattern -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <pattern id="grid2d" width="10" height="10" patternUnits="userSpaceOnUse">
+          <path d="M10 0H0V10" fill="none" stroke="#232a36" stroke-width="1"/>
+        </pattern>
+      </defs>
+    </svg>
+  </section>
+
+  <!-- ============ LINUX STRIP ============ -->
+  <section class="strip">
+    <div class="wrap strip-inner">
+      <p><strong>Made on Linux, for Linux.</strong> Bazzite, SteamOS, Fedora, Arch, Ubuntu, openSUSE: any desktop works. Bonk finds Steam, Garry's Mod and Proton on its own, Flatpak Steam included.</p>
+      <ul class="distros" aria-label="Tested on">
+        <li>Steam Deck</li><li>Bazzite</li><li>Fedora</li><li>Arch</li><li>Ubuntu</li><li>openSUSE</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ HEADLINE TOOLS ============ -->
+  <section id="tools" class="section">
+    <div class="wrap">
+      <p class="eyebrow">The headline tools</p>
+      <h2>Hold a key. Move the mouse. Done.</h2>
+      <p class="sub">
+        Bonk's hold-key editing works from anywhere in a view: no hunting for handles. Moves lock to
+        one axis so things stay lined up (hold Alt to free them), and the corner of the view always
+        says what the held key is doing.
+      </p>
+
+      <div class="tool-grid">
+        <article class="tool">
+          <div class="demo demo-grab" aria-hidden="true">
+            <svg viewBox="0 0 240 150">
+              <rect width="240" height="150" fill="url(#grid2d)"/>
+              <line x1="0" y1="75" x2="240" y2="75" class="axis-x"/>
+              <rect x="40" y="50" width="50" height="50" class="ghost"/>
+              <rect x="40" y="50" width="50" height="50" class="brush2d mover"/>
+              <text x="8" y="142" class="holdhint">G · grab · X axis</text>
+            </svg>
+            <span class="kbd-badge">G</span>
+          </div>
+          <h3><kbd>G</kbd> Grab</h3>
+          <p>Hold G and drag to move the selection, in any 2D view or along the floor in 3D. Bring the
+            mouse back to where you started and it snaps exactly home, even off the grid.</p>
+        </article>
+
+        <article class="tool">
+          <div class="demo demo-size" aria-hidden="true">
+            <svg viewBox="0 0 240 150">
+              <rect width="240" height="150" fill="url(#grid2d)"/>
+              <g class="sizer">
+                <rect x="95" y="50" width="50" height="50" class="brush2d"/>
+              </g>
+              <text x="8" y="142" class="holdhint">S · size</text>
+            </svg>
+            <span class="kbd-badge">S</span>
+          </div>
+          <h3><kbd>S</kbd> Size</h3>
+          <p>Hold S to stretch a brush or a whole group from anywhere in the view. In Vertex select,
+            S scales just the vertices you picked about their center.</p>
+        </article>
+
+        <article class="tool">
+          <div class="demo demo-copy" aria-hidden="true">
+            <svg viewBox="0 0 240 150">
+              <rect width="240" height="150" fill="url(#grid2d)"/>
+              <rect x="40" y="50" width="50" height="50" class="brush2d"/>
+              <rect x="40" y="50" width="50" height="50" class="brush2d copy"/>
+              <text x="8" y="142" class="holdhint">Shift · carry a copy</text>
+            </svg>
+            <span class="kbd-badge">Shift</span>
+          </div>
+          <h3><kbd>Shift</kbd> Copy</h3>
+          <p>Hold Shift and drag to carry off a copy, just like Hammer's clone drag. Ctrl+C / Ctrl+V
+            work across models, projects and Bonk windows, and the textures come along.</p>
+        </article>
+      </div>
+
+      <p class="also">Also on a key: <kbd>R</kbd> rotate · <kbd>H</kbd> hide · <kbd>,</kbd> <kbd>.</kbd> mirror ·
+        <kbd>J</kbd> join brushes · right-drag Quick Draw for walls and floors · <kbd>`</kbd> walk mode</p>
+    </div>
+  </section>
+
+  <!-- ============ TEXTURES ============ -->
+  <section id="textures" class="section section-alt">
+    <div class="wrap two-col">
+      <div>
+        <p class="eyebrow">JPG &amp; PNG import</p>
+        <h2>Drop in a picture. Get a Source texture.</h2>
+        <p class="sub">
+          Drag PNG or JPG files (or whole folders) onto the Texture Picker and Bonk writes the VTFs
+          itself. No VTFEdit, no vtex, no extra tools.
+        </p>
+        <ul class="checks">
+          <li><b>Proper compression:</b> DXT1 for opaque images, DXT5 when there's alpha, uncompressed normal maps, full mip chain and thumbnail.</li>
+          <li><b>Sized for Source:</b> any power-of-two size up to 4096 is left alone; odd sizes get a one-click resize, and your original is kept.</li>
+          <li><b>Folders become groups</b> in the picker, so a texture pack stays organized.</li>
+          <li><b>Material Properties</b> become the VMT: shaders, surface type, transparency, phong, normal / detail maps, and scrolling, pulsing or animated materials that play in the 3D view.</li>
+          <li><b>Hammer-style alignment:</b> shift, scale, rotate, justify, wrap and Texture Lock, painted with Face Select &amp; Paint.</li>
+        </ul>
+      </div>
+
+      <div class="pipeline" aria-label="PNG and JPG files become VTF and VMT files">
+        <div class="file f-png"><span>wood.png</span></div>
+        <div class="file f-jpg"><span>metal.jpg</span></div>
+        <div class="arrow" aria-hidden="true">
+          <img src="assets/bonk.svg" alt="" width="56" height="56">
+        </div>
+        <div class="file f-vtf"><span>wood.vtf</span><small>DXT1 + mips</small></div>
+        <div class="file f-vmt"><span>wood.vmt</span><small>VertexLitGeneric</small></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ HAMMER COMPARISON ============ -->
+  <section id="hammer" class="section">
+    <div class="wrap">
+      <p class="eyebrow">Bonk vs Hammer</p>
+      <h2>Feels like Hammer. Made for props.</h2>
+      <p class="sub">
+        If you've built in Hammer, you already know Bonk: four views, brushes, the same alignment
+        tools and Hammer-style keys. The difference is what comes out the other end. Hammer makes
+        maps; turning brushes into a prop usually means Propper or an external modeler and a hand-written
+        QC. Bonk goes straight from brushes to a compiled, ready-to-upload prop.
+      </p>
+
+      <div class="table-wrap">
+        <table class="compare">
+          <thead>
+            <tr><th scope="col"></th><th scope="col" class="col-bonk">Bonk!</th><th scope="col">Hammer (Source SDK)</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Runs natively on Linux &amp; Steam Deck</th><td class="yes">Yes</td><td class="no">Windows only (Wine / Proton workarounds)</td></tr>
+            <tr><th scope="row">Four-view brush editing</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+            <tr><th scope="row">Texture shift, scale, rotate, justify, Texture Lock</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+            <tr><th scope="row">Output</th><td class="yes">Compiled prop: MDL + VMT + VTF</td><td class="meh">Map (BSP); props need Propper or another modeler</td></tr>
+            <tr><th scope="row">One-click compile to an addon folder</th><td class="yes">Yes, with GMod's own studiomdl</td><td class="no">No</td></tr>
+            <tr><th scope="row">PNG / JPG → VTF built in</th><td class="yes">Yes</td><td class="no">No, needs VTFEdit or vtex</td></tr>
+            <tr><th scope="row">Material (VMT) editor</th><td class="yes">Yes, with live preview</td><td class="no">No, edit VMTs by hand</td></tr>
+            <tr><th scope="row">Collision model</th><td class="yes">Draw your own or generate it, with a live budget</td><td class="no">Not applicable to maps</td></tr>
+            <tr><th scope="row">Hold-key Grab / Size / Copy from anywhere</th><td class="yes">Yes</td><td class="meh">Drag handles; Shift-drag clones</td></tr>
+            <tr><th scope="row">Walk the model as the player</th><td class="yes">Yes, on its collision</td><td class="no">Compile and load the map in game</td></tr>
+            <tr><th scope="row">Spawnlists &amp; Workshop publishing</th><td class="yes">Yes</td><td class="no">No</td></tr>
+            <tr><th scope="row">Opens Hammer .vmf files</th><td class="yes">Yes, with alignment, groups and visgroups</td><td class="yes">Its own format</td></tr>
+            <tr><th scope="row">Builds whole maps</th><td class="no">No, props only</td><td class="yes">Yes</td></tr>
+            <tr><th scope="row">License</th><td class="yes">Free, open source (GPL-3.0)</td><td class="meh">Free with the SDK, closed source</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="fine">Already have a prop sketched in Hammer? <b>File → Import VMF…</b> brings its brushes in with their texture
+        alignment, and its materials from a folder or a Workshop .gma.</p>
+    </div>
+  </section>
+
+  <!-- ============ MORE FEATURES ============ -->
+  <section id="more" class="section section-alt">
+    <div class="wrap">
+      <p class="eyebrow">Everything else</p>
+      <h2>Everything a prop needs, in one window.</h2>
+      <div class="feature-grid">
+        <article class="feature">
+          <img src="assets/block.svg" alt="" width="40" height="40">
+          <h3>Shapes &amp; Quick Draw</h3>
+          <p>Blocks, cylinders, wedges, spikes and orbs with a sides slider. Right-drag to sketch walls and floors.</p>
+        </article>
+        <article class="feature">
+          <img src="assets/vertex.svg" alt="" width="40" height="40">
+          <h3>Vertex editing &amp; Bisect</h3>
+          <p>Move, rotate and scale vertices on several brushes at once. Clip brushes with Bisect. Brushes stay convex.</p>
+        </article>
+        <article class="feature">
+          <img src="assets/collision-solid.svg" alt="" width="40" height="40">
+          <h3>Collision models</h3>
+          <p>Shape a collision layer yourself, or generate a complete or simplified one, with mass presets and a Budget bar.</p>
+        </article>
+        <article class="feature">
+          <img src="assets/mannequin.svg" alt="" width="40" height="40">
+          <h3>Measurement Buddies</h3>
+          <p>A player-sized mannequin and a jeep-sized car to check scale. They're never compiled.</p>
+        </article>
+        <article class="feature">
+          <img src="assets/texture.svg" alt="" width="40" height="40">
+          <h3>Skins, bodygroups &amp; LODs</h3>
+          <p>Material swaps, hidden brushes per skin, bodygroups, LODs and a model preview.</p>
+        </article>
+        <article class="feature">
+          <img src="assets/car.svg" alt="" width="40" height="40">
+          <h3>Walk mode</h3>
+          <p>Press <kbd>`</kbd> to walk your model at GMod's player size: jump, crouch and climb steps on its collision.</p>
+        </article>
+        <article class="feature">
+          <img src="assets/select.svg" alt="" width="40" height="40">
+          <h3>Spawnlists &amp; Workshop</h3>
+          <p>Spawn menu categories and framed spawn icons with badges, plus publishing and updating Workshop addons.</p>
+        </article>
+        <article class="feature">
+          <span class="feature-icon pixel" aria-hidden="true">F1</span>
+          <h3>Simple, then Advanced</h3>
+          <p>Bonk starts simple. Flip on Advanced mode for every expert tool. The built-in guide (F1) covers every key.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ HOW IT WORKS ============ -->
+  <section class="section">
+    <div class="wrap">
+      <p class="eyebrow">From nothing to spawn menu</p>
+      <h2>Four steps to a prop.</h2>
+      <ol class="steps">
+        <li><b>New Project.</b> One folder per addon, with shared textures.</li>
+        <li><b>Draw &amp; paint.</b> Block tool (2), drop in PNGs, paint faces (6). Or import a VMF (Ctrl+I).</li>
+        <li><b>Collision.</b> Add a collision layer, or let Bonk generate one when you compile.</li>
+        <li><b>Compile &amp; export.</b> F9, then Ctrl+Shift+E drops the addon into Garry's Mod.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ============ DOWNLOAD ============ -->
+  <section id="download" class="section section-download">
+    <div class="wrap">
+      <p class="eyebrow"><span aria-hidden="true">🐧</span> Linux first</p>
+      <h2>Get Bonk for Linux.</h2>
+      <p class="sub">Latest: <a data-release-link href="https://github.com/ffseestevanli-oss/bonk/releases"><span data-release-name>see all releases</span></a>. Every release is built by GitHub Actions from the tagged source.</p>
+
+      <div class="dl-grid">
+        <article class="dl dl-main">
+          <h3>AppImage</h3>
+          <p>One file, any distro. Make it executable and run it. Comes with the standalone <b>Spawnlist Creator</b> as a second AppImage.</p>
+          <a class="btn" data-asset="AppImage" href="https://github.com/ffseestevanli-oss/bonk/releases">Download AppImage</a>
+          <code>chmod +x Bonk*.AppImage &amp;&amp; ./Bonk*.AppImage</code>
+        </article>
+        <article class="dl">
+          <h3>Flatpak</h3>
+          <p>Both Bonk and the Spawnlist Creator in one bundle. Works with Flatpak Steam.</p>
+          <a class="btn btn-ghost" data-asset="flatpak" href="https://github.com/ffseestevanli-oss/bonk/releases">Download Flatpak</a>
+          <code>flatpak install --user Bonk.flatpak</code>
+        </article>
+        <article class="dl">
+          <h3>Build from source</h3>
+          <p>Double-click <b>Build Bonk.sh</b>. It installs what's missing (in a container on Bazzite, SteamOS and other immutable systems) and adds a launcher.</p>
+          <a class="btn btn-ghost" href="https://github.com/ffseestevanli-oss/bonk#building">Build instructions</a>
+          <code>./"Build Bonk.sh"</code>
+        </article>
+      </div>
+
+      <div class="req">
+        <h3>To compile models you need</h3>
+        <p>Steam with <b>Garry's Mod</b> installed (Bonk uses its studiomdl) and a <b>Proton</b> version from Steam. Bonk finds both automatically.</p>
+      </div>
+
+      <p class="windows">On Windows? There's a functional Windows port too: it runs Garry's Mod's tools directly, no Proton needed.
+        <a href="https://github.com/ffseestevanli-oss/bonk/blob/main/packaging/windows/README.md">Get the Windows build →</a></p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div class="brand">
+      <img src="assets/bonk.svg" alt="" width="28" height="28">
+      <span class="pixel">Bonk!</span>
+    </div>
+    <p><em>Steventechno tools: replacing Windows tools, one at a time.</em></p>
+    <p class="links">
+      <a href="https://github.com/ffseestevanli-oss/bonk">GitHub</a>
+      <a href="https://github.com/ffseestevanli-oss/bonk/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/ffseestevanli-oss/bonk/issues/new/choose">Report a bug</a>
+      <a href="https://github.com/ffseestevanli-oss/bonk/blob/main/LICENSE">GPL-3.0-or-later</a>
+    </p>
+    <p class="fine">Bonk is a fan-made tool and isn't affiliated with Valve or Facepunch. Garry's Mod, Hammer, Source and Steam are trademarks of their owners.</p>
+  </div>
+</footer>
+
+<script src="main.js" defer></script>
+</body>
+</html>
