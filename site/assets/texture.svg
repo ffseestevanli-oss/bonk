@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <!-- a texture swatch with a checker pattern -->
+  <g transform="rotate(-12 32 32)">
+    <rect x="12" y="12" width="40" height="40" rx="3" fill="#ffffff" fill-opacity="0.12" stroke="#ffffff" stroke-width="3.5"/>
+    <g fill="#ffffff" fill-opacity="0.75">
+      <rect x="15" y="15" width="11.3" height="11.3"/>
+      <rect x="37.7" y="15" width="11.3" height="11.3"/>
+      <rect x="26.3" y="26.3" width="11.4" height="11.4"/>
+      <rect x="15" y="37.7" width="11.3" height="11.3"/>
+      <rect x="37.7" y="37.7" width="11.3" height="11.3"/>
+    </g>
+  </g>
+</svg>
