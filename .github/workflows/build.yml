@@ -2,7 +2,13 @@ name: Build and test
 
 on:
   push:
+    paths-ignore: # website-only changes don't need a full build
+      - 'site/**'
+      - '.github/workflows/pages.yml'
   pull_request:
+    paths-ignore:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
   workflow_dispatch: # "Run workflow" on the Actions tab: builds the AppImage and Flatpak too
 
 jobs:

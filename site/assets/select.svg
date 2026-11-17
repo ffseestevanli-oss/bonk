@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <g fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round">
+    <!-- pointer -->
+    <path d="M22 12 L22 46 L30 38.5 L36 52 L42 49.5 L36 36 L47 36 Z" fill="#ffffff" fill-opacity="0.12"/>
+    <!-- selection sparkle -->
+    <path d="M11 13 L11 21 M7 17 L15 17"/>
+  </g>
+</svg>
