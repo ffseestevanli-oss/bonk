@@ -36,8 +36,8 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy">
-        <p class="eyebrow"><span class="tux" aria-hidden="true">🐧</span> Native on Linux &amp; Steam Deck</p>
-        <h1>Build Garry's Mod props<br>the Hammer way. <span class="hl">No Windows.</span></h1>
+        <p class="eyebrow"><span class="tux" aria-hidden="true">🐧</span> Native on Linux &amp; Steam Deck · also on Windows</p>
+        <h1>Build Garry's Mod props<br>the Hammer way. <span class="hl">No Windows Required.</span></h1>
         <p class="lead">
           Bonk! Model Prop-inator! is a brush modeler that turns blocks, wedges and cylinders into real
           GMod props: MDL, VMT and VTF, compiled with Garry's Mod's own studiomdl and dropped straight
@@ -48,53 +48,19 @@
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 3v11.2l4.1-4.1 1.4 1.4L12 17l-5.5-5.5 1.4-1.4 4.1 4.1V3h2zM4 19h16v2H4z"/></svg>
             Download for Linux
           </a>
-          <a class="btn btn-ghost" href="https://github.com/ffseestevanli-oss/bonk">View on GitHub</a>
+          <a class="btn btn-ghost" href="#windows">Download for Windows</a>
         </div>
-        <p class="fine"><span data-release-name>1.0 Beta</span> · AppImage &amp; Flatpak · free and open source (GPL-3.0)</p>
+        <p class="fine"><span data-release-name>1.0 Beta</span> · AppImage, Flatpak &amp; Windows · free and open source (GPL-3.0) · <a href="https://github.com/ffseestevanli-oss/bonk">GitHub</a></p>
       </div>
 
-      <!-- Four-view editor illustration -->
-      <figure class="editor" aria-label="Illustration of Bonk's four-view editor">
-        <div class="editor-bar"><i></i><i></i><i></i><span>Bonk! — crate.bpmdl</span></div>
-        <div class="views">
-          <div class="view view-3d">
-            <svg viewBox="0 0 200 130" aria-hidden="true">
-              <defs>
-                <pattern id="floor" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" fill="none" stroke="#2a3140" stroke-width="1"/></pattern>
-              </defs>
-              <polygon points="0,130 200,130 160,70 40,70" fill="url(#floor)"/>
-              <g class="crate3d" stroke="#11141a" stroke-width="2" stroke-linejoin="round">
-                <polygon fill="#ffb067" points="100,30 140,48 100,66 60,48"/>
-                <polygon fill="#e8833a" points="60,48 100,66 100,104 60,86"/>
-                <polygon fill="#c4621f" points="100,66 140,48 140,86 100,104"/>
-                <path d="M60,48 100,104 M100,66 60,86 M100,66 140,86 M140,48 100,104" stroke="#8a4614" stroke-width="1.5" opacity=".6"/>
-              </g>
-              <text x="6" y="12" class="vlabel">3D</text>
-            </svg>
-          </div>
-          <div class="view">
-            <svg viewBox="0 0 200 130" aria-hidden="true">
-              <rect width="200" height="130" fill="url(#grid2d)"/>
-              <rect x="70" y="35" width="60" height="60" class="brush2d"/>
-              <text x="6" y="12" class="vlabel">Top (X/Y)</text>
-            </svg>
-          </div>
-          <div class="view">
-            <svg viewBox="0 0 200 130" aria-hidden="true">
-              <rect width="200" height="130" fill="url(#grid2d)"/>
-              <rect x="70" y="45" width="60" height="50" class="brush2d"/>
-              <text x="6" y="12" class="vlabel">Front (Y/Z)</text>
-            </svg>
-          </div>
-          <div class="view">
-            <svg viewBox="0 0 200 130" aria-hidden="true">
-              <rect width="200" height="130" fill="url(#grid2d)"/>
-              <rect x="70" y="45" width="60" height="50" class="brush2d"/>
-              <text x="6" y="12" class="vlabel">Side (X/Z)</text>
-            </svg>
-          </div>
-        </div>
-        <figcaption>Four views, convex brushes, Hammer-style keys.</figcaption>
+      <!-- A real screenshot of Bonk -->
+      <figure class="shot">
+        <picture>
+          <source srcset="assets/bonk-screenshot.webp" type="image/webp">
+          <img src="assets/bonk-screenshot.jpg" width="1800" height="823"
+               alt="Bonk editing a house prop: a textured 3D camera view, top, front and side views with colored brush outlines, the pink tool panel on the left and the Texture Picker on the right">
+        </picture>
+        <figcaption>A house from a real prop pack, in Bonk. Four views, convex brushes, Hammer-style keys.</figcaption>
       </figure>
     </div>
 
@@ -233,6 +199,7 @@
           </thead>
           <tbody>
             <tr><th scope="row">Runs natively on Linux &amp; Steam Deck</th><td class="yes">Yes</td><td class="no">Windows only (Wine / Proton workarounds)</td></tr>
+            <tr><th scope="row">Runs on Windows</th><td class="yes">Yes, no Proton needed there</td><td class="yes">Yes</td></tr>
             <tr><th scope="row">Four-view brush editing</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
             <tr><th scope="row">Texture shift, scale, rotate, justify, Texture Lock</th><td class="yes">Yes</td><td class="yes">Yes</td></tr>
             <tr><th scope="row">Output</th><td class="yes">Compiled prop: MDL + VMT + VTF</td><td class="meh">Map (BSP); props need Propper or another modeler</td></tr>
@@ -321,24 +288,34 @@
   <!-- ============ DOWNLOAD ============ -->
   <section id="download" class="section section-download">
     <div class="wrap">
-      <p class="eyebrow"><span aria-hidden="true">🐧</span> Linux first</p>
-      <h2>Get Bonk for Linux.</h2>
+      <p class="eyebrow"><span aria-hidden="true">🐧</span> Linux first, Windows too</p>
+      <h2>Get Bonk.</h2>
       <p class="sub">Latest: <a data-release-link href="https://github.com/ffseestevanli-oss/bonk/releases"><span data-release-name>see all releases</span></a>. Every release is built by GitHub Actions from the tagged source.</p>
 
       <div class="dl-grid">
         <article class="dl dl-main">
+          <span class="dl-tag">Linux</span>
           <h3>AppImage</h3>
           <p>One file, any distro. Make it executable and run it. Comes with the standalone <b>Spawnlist Creator</b> as a second AppImage.</p>
           <a class="btn" data-asset="AppImage" href="https://github.com/ffseestevanli-oss/bonk/releases">Download AppImage</a>
           <code>chmod +x Bonk*.AppImage &amp;&amp; ./Bonk*.AppImage</code>
         </article>
         <article class="dl">
+          <span class="dl-tag">Linux</span>
           <h3>Flatpak</h3>
           <p>Both Bonk and the Spawnlist Creator in one bundle. Works with Flatpak Steam.</p>
           <a class="btn btn-ghost" data-asset="flatpak" href="https://github.com/ffseestevanli-oss/bonk/releases">Download Flatpak</a>
           <code>flatpak install --user Bonk.flatpak</code>
         </article>
+        <article class="dl dl-win" id="windows">
+          <span class="dl-tag">Windows</span>
+          <h3>Windows (x86_64)</h3>
+          <p>A zip with everything inside. Unzip it anywhere and run <b>Bonk\bonk.exe</b>. On Windows Bonk runs Garry's Mod's studiomdl, gmad and gmpublish directly, no Proton needed, and finds Steam on its own.</p>
+          <a class="btn btn-ghost" data-asset="zip" data-fallback="https://github.com/ffseestevanli-oss/bonk/blob/main/packaging/windows/README.md#download" href="https://github.com/ffseestevanli-oss/bonk/blob/main/packaging/windows/README.md#download">Download for Windows</a>
+          <code>Bonk-windows-x86_64.zip</code>
+        </article>
         <article class="dl">
+          <span class="dl-tag">Linux</span>
           <h3>Build from source</h3>
           <p>Double-click <b>Build Bonk.sh</b>. It installs what's missing (in a container on Bazzite, SteamOS and other immutable systems) and adds a launcher.</p>
           <a class="btn btn-ghost" href="https://github.com/ffseestevanli-oss/bonk#building">Build instructions</a>
@@ -348,11 +325,8 @@
 
       <div class="req">
         <h3>To compile models you need</h3>
-        <p>Steam with <b>Garry's Mod</b> installed (Bonk uses its studiomdl) and a <b>Proton</b> version from Steam. Bonk finds both automatically.</p>
+        <p>Steam with <b>Garry's Mod</b> installed (Bonk uses its studiomdl), and on Linux a <b>Proton</b> version from Steam. Bonk finds them automatically.</p>
       </div>
-
-      <p class="windows">On Windows? There's a functional Windows port too: it runs Garry's Mod's tools directly, no Proton needed.
-        <a href="https://github.com/ffseestevanli-oss/bonk/blob/main/packaging/windows/README.md">Get the Windows build →</a></p>
     </div>
   </section>
 

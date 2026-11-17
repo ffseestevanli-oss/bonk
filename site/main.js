@@ -21,7 +21,7 @@
         // Prefer the main app over the standalone Spawnlist Creator.
         var matches = rel.assets.filter(function (a) { return a.name.toLowerCase().endsWith("." + ext); });
         var main = matches.find(function (a) { return !/spawnlist/i.test(a.name); }) || matches[0];
-        el.href = main ? main.browser_download_url : rel.html_url;
+        el.href = main ? main.browser_download_url : (el.getAttribute("data-fallback") || rel.html_url);
       });
     })
     .catch(function () { /* keep the static fallbacks */ });
