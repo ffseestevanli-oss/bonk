@@ -381,7 +381,10 @@ impl Renderer {
         (g.GenTextures)(1, &mut id);
         (g.ActiveTexture)(gl::TEXTURE0);
         (g.BindTexture)(gl::TEXTURE_2D, id);
-        (g.PixelStorei)(gl::UNPACK_ALIGNMENT, 1);
+        // RGBA rows are always 4-byte aligned, so GL's default of 4 is right. Never leave it at
+        // 1: the context is shared with Qt's QPainter, whose glyph cache uploads 8-bit rows
+        // padded to 4 bytes, and new glyphs (the bold collision banner) come out sheared.
+        (g.PixelStorei)(gl::UNPACK_ALIGNMENT, 4);
         (g.TexImage2D)(gl::TEXTURE_2D, 0, gl::RGBA8, w as i32, h as i32, 0, gl::RGBA, gl::UNSIGNED_BYTE, px.as_ptr() as *const c_void);
         (g.GenerateMipmap)(gl::TEXTURE_2D);
         (g.TexParameteri)(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR_MIPMAP_LINEAR);
