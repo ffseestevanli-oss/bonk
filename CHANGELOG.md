@@ -18,6 +18,8 @@ All notable changes to Bonk! Model Prop-inator!, newest first.
   `~/.local/share/bonk/game-models`); GMod keeps drawing their spawn icons itself, so the addon
   doesn't override them.
 - The Flatpak is built on the KDE 6.10 runtime (6.8 is end-of-life and no longer builds).
+- Fixed: the "You are editing the collision model" banner (and other new text in the 3D view)
+  came out garbled once a textured model had been drawn.
 
 ## 1.0 Beta 7
 
